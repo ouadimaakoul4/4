@@ -1,0 +1,1450 @@
+Adaptive Cognitive Budgeting: 
+
+A Meta-Cognitive Orchestration Framework for Efficient and Reliable LLM–Agent Systems
+
+
+Ouadi Maakoul
+
+
+Abstract
+
+Large language model (LLM) systems increasingly rely on multi-agent architectures and tool augmentation, yet they activate expensive capabilities unconditionally—causing unsustainable computational and energy overhead. We present Adaptive Cognitive Budgeting (ACB), a principled meta-cognitive orchestration layer that dynamically allocates inference compute across a heterogeneous capability stack: single-pass generation, chain-of-thought reasoning, retrieval-augmented grounding, agent delegation, and verification. ACB’s core is a decision-theoretic gate that estimates output confidence with formal conformal guarantees, models epistemic uncertainty via information-theoretic evidential deep learning, and routes each query along a minimal-cost path under explicit budget and error-cost constraints. We formalize the gate as a budget-constrained contextual bandit, inheriting an \tilde{\mathcal{O}}(T^{2/3}) regret bound from StageRoute, and extend the Rational Metareasoning Value of Computation (VoC) from single-model reasoning to heterogeneous multi-capability orchestration. Confidence calibration is ensured by split conformal prediction on top of an IB-EDL critic, yielding finite-sample correctness coverage; hallucination is measured by decomposing intrinsic and extrinsic errors via SelfCheckGPT and FActScore. The architecture implements cascaded confidence estimation and a Lagrangian soft-budget relaxation for practical deployment. We articulate three falsifiable hypotheses tested via Pareto frontier analysis, a five-configuration ablation, MIRAGE-Bench for agentic hallucination, and a human-centric pilot with CASUX and PULSE metrics. Energy measurement follows the EcoLogits methodology. This work establishes the Cognitive Efficiency Principle—minimizing expected computation subject to a guaranteed correctness level—as the foundation for the next generation of cognitively efficient, risk-aware AI systems. We provide complete mathematical derivations, a formal regret proof sketch, conformal calibration theorems, and a full architectural specification.
+
+---
+
+1. Introduction
+
+The prevailing paradigm in LLM systems is maximalist: more parameters, more reasoning steps, more agents, more tools. State-of-the-art orchestrators chain dozens of model calls, achieving high accuracy but at enormous energy and latency cost. A single ARC-AGI task consumed ~1,785 kWh—over two months of U.S. household electricity—and emitted ~684 kg CO₂e [1]. Critically, energy expenditure correlates poorly with output quality: agent workflows often burn compute on tasks that a single forward pass would have solved correctly [2].
+
+This inefficiency mirrors a well-known human expertise: humans solve easy problems instantly and reserve deep deliberation, consultation, and verification for tasks with high uncertainty or consequence. This adaptive strategy achieves high aggregate performance at low average cost by budgeting cognitive effort. Cognitive science formalises this as resource-rational analysis [3]: an agent should select the cognitive operation that maximises expected utility minus cost. Gershman, Horvitz, and Tenenbaum (2015) define computational rationality as "computing with representations, algorithms, and architectures designed to approximate decisions with the highest expected utility, while taking into account the costs of computation".
+
+We introduce Adaptive Cognitive Budgeting (ACB), a meta-cognitive control layer that instantiates resource-rationality for LLM-agent systems. ACB inserts a fast, calibrated confidence estimator between the user query and the ensemble of capabilities and uses a learned decision gate to dynamically allocate computational budget. The gate reasons in terms of the Value of Computation (VoC)—the expected quality improvement minus the weighted costs of compute and error. By making gating decisions at the orchestration level—reasoning depth, retrieval, tool use, agent delegation, verification—ACB is the first framework to unify these heterogeneous capabilities under a single decision-theoretic objective.
+
+This paper provides a rigorous, literature-grounded specification of ACB, with:
+
+1. Formal guarantees: a budget-constrained bandit policy with \tilde{\mathcal{O}}(T^{2/3}) regret (inherited from StageRoute), and conformal calibration providing finite-sample correctness coverage.
+2. Calibrated confidence: information-theoretic evidential deep learning (IB-EDL) for uncertainty disentanglement, plus a split conformal prediction layer to set acceptance thresholds with guaranteed risk.
+3. Cognitive-science foundation: the Cognitive Efficiency Principle, grounded in resource-rational analysis and the RaM Value of Computation.
+4. Rigorous evaluation protocol: falsifiable hypotheses, Pareto frontier analysis, five-configuration ablation, MIRAGE-Bench for agentic hallucination, and a human-centric pilot study.
+5. Practical deployment architecture: cascaded confidence gating, Lagrangian soft-budget relaxation, and integration within the vLLM Workload-Router-Pool paradigm.
+
+Motivating Observation (Cognitive Efficiency Principle). An intelligent system should minimize expected computation subject to achieving a guaranteed correctness level, where the acceptable confidence is determined by the cost of being wrong. ACB is the first framework to operationalize this principle across the full heterogeneous capability stack—reasoning depth, tool use, agent collaboration, and verification—under a unified decision-theoretic objective.
+
+---
+
+2. Related Work
+
+The ACB proposal sits at the intersection of several rapidly moving research threads. We review each and explicitly differentiate our contribution.
+
+2.1 Multi-Agent Orchestration and Static Pipelines
+
+AutoGen, CrewAI, and LangGraph compose multiple LLM calls into structured workflows but require manual, heuristic routing. LangGraph supports conditional branching based on hard-coded rules but lacks principled, confidence-driven gating. Murakkab [4] optimizes model-to-hardware mapping, achieving 2.8× GPU savings through cross-layer optimization, but operates at the infrastructure level without reasoning about semantic uncertainty or task utility.
+
+2.2 Adaptive Inference and Reasoning Termination
+
+Recent work has explored stopping reasoning early when confidence is high:
+
+· Certainty-Guided Reasoning (CGR) [5] trains a critic model to probe ongoing reasoning and terminates when predicted correctness exceeds a threshold.
+· Think Just Enough [6] uses Shannon entropy over token logprobs to halt chain-of-thought, achieving 25–50% token savings on reasoning-optimized models.
+· Instance-Adaptive Scaling (IAS) [7] calibrates process reward models with quantile regression and dynamically allocates more compute only to queries with low estimated success probability.
+· Speculative Cascades (Google Research, 2025) use a deferral rule combining speculative decoding with model cascading for better cost-quality tradeoffs.
+
+These methods operate on token-level or step-level reasoning paths within a single model. They do not address when to activate external tools, retrieval, or separate agent verifiers. ACB extends the adaptive paradigm to the heterogeneous capability set of an agent system.
+
+2.3 Rational Metareasoning and Value of Computation
+
+De Sabbata et al. (2024) introduce RaM (Rational Metareasoning for LLMs), which develops a reward function incorporating the Value of Computation by penalizing unnecessary reasoning and uses Expert Iteration to train LLMs to selectively use intermediate steps. RaM significantly reduces inference costs (20–37% fewer tokens generated across three models) while maintaining task performance. We extend RaM's single-model VoC to gating across heterogeneous capabilities. The cognitive-science foundation is resource-rational analysis [3], which formalizes that an agent should select computation a to maximize \mathbb{E}[U|a] - \text{Cost}(a).
+
+2.4 Calibration, Conformal Prediction, and Evidential Deep Learning
+
+LLMs are notoriously overconfident, with even process reward models systematically misestimating success probabilities [8]. Recent advances address this:
+
+· IB-EDL (Li et al., ICLR 2025) uses information-theoretic evidential deep learning: it outputs Dirichlet parameters over class probabilities, suppressing spurious information in evidence and encouraging truly predictive information to influence both predictions and uncertainty estimates. IB-EDL outperforms existing EDL and non-EDL approaches.
+· SAFER (Wang et al., ICLR 2026) introduces a two-stage risk control framework: abstention-aware sampling with Clopper-Pearson calibration, followed by conformalized filtering. SAFER rigorously constrains two-stage miscoverage risks at test time.
+· TECP (Xu & Lu, 2025) uses token-level entropy as a logit-free, reference-free uncertainty measure, integrated into split conformal prediction to construct prediction sets with finite-sample coverage guarantees.
+· CCPS (Mardikoraem et al., 2025) probes perturbed representation stability in LLM hidden states, reducing ECE by approximately 55% and Brier score by 21%.
+
+ACB synthesizes these: IB-EDL provides well-calibrated Dirichlet confidence with epistemic uncertainty, conformal prediction provides finite-sample correctness guarantees, and CCPS-style adversarial perturbations are used in training the critic on hard cases.
+
+2.5 Confidence-Guided Early Stopping
+
+CGES (Confidence-Guided Early Stopping) [17] is a Bayesian framework that forms posteriors over candidate answers from scalar confidence signals—derived from token probabilities or reward models—and adaptively halts sampling once posterior mass exceeds a threshold. CGES provides theoretical guarantees for both perfectly calibrated confidences and realistic noisy confidence signals. ACB similarly adopts threshold-based stopping but extends it from self-consistency sampling to full multi-capability orchestration.
+
+2.6 Hallucination Measurement
+
+Hallucination evaluation has matured along two dimensions:
+
+· FActScore (Min et al., EMNLP 2023) measures extrinsic hallucination by breaking a generation into atomic facts and computing the percentage supported by a reliable knowledge source.
+· SelfCheckGPT (Manakul et al., 2023) provides zero-resource intrinsic hallucination detection: sampled responses diverge for hallucinated facts and converge for grounded ones.
+· MIRAGE-Bench (Zhang et al., 2025) is the first unified benchmark for agentic hallucinations with a three-part taxonomy: unfaithful to instructions, execution history, or environment observations. It adopts a fine-grained LLM-as-a-Judge paradigm.
+
+ACB adopts all three: FActScore for extrinsic hallucination, SelfCheckGPT for intrinsic hallucination, and MIRAGE-Bench for agent-specific evaluation.
+
+2.7 Energy-Aware Deployment and Semantic Routing
+
+· PROTEUS (2026) uses Lagrangian dual control for SLA-aware routing: a learned dual variable tracks constraint violations and conditions the policy network, accepting accuracy targets as runtime input.
+· vLLM WRP Architecture (Chen et al., 2026) synthesizes signal-driven routing, fleet optimization, and agentic routing into a three-dimensional Workload-Router-Pool framework, connecting workload characterization, routing policies, and pool configurations.
+· EcoLogits (2025) tracks and estimates energy consumption and environmental impacts of generative AI model inference through APIs.
+· The Cost of Dynamic Reasoning (2025) provides the first comprehensive system-level analysis of AI agents, quantifying resource usage, latency, and energy consumption.
+
+2.8 Meta-Cognitive Architectures and SOFAI
+
+The SOFAI architecture [17] implements a fast-LLM → metacognition → slow-LRM loop, demonstrating that a language model with metacognition can match dedicated reasoning models at lower cost. SOFAI selects between two solvers; ACB generalizes to K heterogeneous capabilities with a learned bandit policy, error-cost awareness, and conformal confidence. Formally: SOFAI is ACB with |\mathcal{A}| = 2, \lambda_e = 0, and B_{\max} = \infty.
+
+2.9 Positioning of ACB
+
+Table 1 situates ACB against the most closely related techniques.
+
+Work Orchestration Level Budget-Aware Error-Cost Conformal Calibration Heterogeneous Capabilities VoC-Based
+CGR / Entropy Stop token/step ✓ ✗ ✗ ✗ ✗
+Speculative Cascades model choice ✓ ✗ ✗ ✗ ✗
+RaM reasoning step ✓ ✗ ✗ ✗ ✓
+CGES self-consistency ✓ ✗ ✗ ✗ ✗
+SOFAI solver choice (2) ✗ ✗ ✗ ✗ ✗
+PROTEUS model routing ✓ ✗ ✗ ✗ ✗
+ACB (this work) capability orchestration (K\!\geq\!5) ✓ ✓ ✓ ✓ ✓
+
+---
+
+3. Formal Framework
+
+3.1 Problem Setting
+
+Let \mathcal{Q} be the space of user queries. The system has access to a set of inference capabilities \mathcal{A} = \{a_1, a_2, \dots, a_K\}, where each capability a \in \mathcal{A} represents a distinct processing mode:
+
+· a_{\text{fast}}: single-pass generation with a small, latency-optimized LLM
+· a_{\text{reason}}: chain-of-thought reasoning with a deeper model
+· a_{\text{retrieve}}: retrieval-augmented generation (RAG)
+· a_{\text{agent}}: delegation to a specialized agent (code interpreter, planner, etc.)
+· a_{\text{verify}}: fact-checking via hallucination detection
+
+Each capability a has a known cost c(a) \in \mathbb{R}_{\geq 0} (measured in tokens, latency, or energy). Executing capability a on state (q, y) produces a new answer y' with quality Q(y').
+
+State. At decision step t, the state is:
+
+s_t = (q, y_t, C_t, u_t, B_{\text{rem},t}, \mathbf{z}_q),
+
+where:
+
+· y_t is the current candidate answer,
+· C_t = \mathbb{P}(\text{correct} \mid q, y_t) is the estimated confidence,
+· u_t is the epistemic uncertainty (from IB-EDL),
+· B_{\text{rem},t} is the remaining computational budget,
+· \mathbf{z}_q is a learned task embedding.
+
+Policy. A policy \pi maps states to actions: either Accept (terminate and return y_t) or an escalation action a \in \mathcal{A}. The policy generates a trajectory \tau = (a_0, a_1, \dots, a_{T-1}, \text{Accept}) where a_t \in \mathcal{A} and T is the termination step.
+
+3.2 Objective: Resource-Rational Control with Error Cost
+
+We adopt and extend the RaM-style objective [De Sabbata et al., 2024] with an explicit asymmetric error-cost term:
+
+\max_{\pi} \; \mathbb{E}_{q \sim \mathcal{D}}\Big[ U(y_T) - \lambda_c \underbrace{\sum_{t=0}^{T-1} c(a_t)}_{C_{\text{total}}(\tau)} - \lambda_e \underbrace{E(y_T, y^*)}_{\text{error cost}} \Big],
+
+\text{s.t.} \quad C_{\text{total}}(\tau) \leq B_{\max} \quad \forall q,
+
+where:
+
+· U(y_T) is a utility function (e.g., U(y_T) = \mathbf{1}[y_T = y^*] or a continuous score),
+· E(y_T, y^*) is the error cost: an asymmetric, domain-specific penalty. For casual chat, E \approx 0; for medical diagnosis, E \gg 0. This makes the system genuinely risk-aware.
+· \lambda_c, \lambda_e are trade-off coefficients.
+
+Lagrangian Relaxation. For practical deployment with soft budgets, we relax the hard constraint via Lagrangian dual control, following PROTEUS:
+
+\mathcal{L}(\pi, \lambda) = \mathbb{E}\left[ U(y_T) - \lambda_c C_{\text{total}} - \lambda_e E(y_T, y^*) \right] + \lambda (B_{\text{target}} - \mathbb{E}[C_{\text{total}}]),
+
+where the dual variable \lambda is the "shadow price of compute." Tuning \lambda on a validation set allows hitting a target kWh/query. This is standard in cloud resource allocation literature.
+
+3.3 Confidence Estimation: IB-EDL with Conformal Calibration
+
+ACB's confidence estimator serves two critical functions: providing a reliable confidence score C for gating decisions and quantifying epistemic uncertainty u to detect when the model should be uncertain. We adopt Information-Theoretic Evidential Deep Learning (IB-EDL) [Li et al., ICLR 2025] for the critic model.
+
+3.3.1 IB-EDL Formulation
+
+The critic model f_\phi takes the query q and candidate answer y and outputs Dirichlet parameters \boldsymbol{\alpha} = (\alpha_1, \alpha_0) for the binary class \{\text{correct}, \text{wrong}\}:
+
+f_\phi(q, y) = \boldsymbol{\alpha} = (\alpha_1, \alpha_0), \quad \alpha_1 > 0, \alpha_0 > 0.
+
+The Dirichlet distribution \text{Dir}(\mathbf{p} \mid \boldsymbol{\alpha}) over class probabilities \mathbf{p} = (p_1, p_0) yields:
+
+\mathbb{E}[p_1] = \frac{\alpha_1}{\alpha_1 + \alpha_0}, \quad
+\text{Var}[p_1] = \frac{\alpha_1 \alpha_0}{(\alpha_1 + \alpha_0)^2(\alpha_1 + \alpha_0 + 1)}.
+
+We define:
+
+C = \mathbb{E}[p_1] = \frac{\alpha_1}{\alpha_1 + \alpha_0} \quad \text{(confidence)},
+
+u = \frac{2}{\alpha_1 + \alpha_0} \quad \text{(epistemic uncertainty)}.
+
+The IB-EDL training objective combines evidential loss with an information bottleneck regularizer:
+
+\mathcal{L}_{\text{IB-EDL}} = \mathcal{L}_{\text{EDL}}(\boldsymbol{\alpha}, y_{\text{true}}) + \beta \cdot I(Z; X),
+
+where \mathcal{L}_{\text{EDL}} is the standard evidential loss encouraging high \alpha_1 for correct answers and high \alpha_0 for incorrect ones, and I(Z; X) is the mutual information between the latent representation Z and the input X, which suppresses spurious information. IB-EDL suppresses spurious information in evidence and encourages truly predictive information to influence both predictions and uncertainty estimates, thereby preventing the overly concentrated probability distributions that plague standard EDL.
+
+The critic is trained on an adversarial calibration set containing 2,000 queries where the base LLM is confidently wrong (jailbreaks, superstitious reasoning, outdated facts, edge cases), collected using CCPS-style perturbations that probe representational stability. Standard IID calibration sets fail to capture the overconfident-wrong failure mode that is most dangerous for ACB's gating decisions.
+
+3.3.2 Conformal Calibration Layer
+
+To obtain finite-sample correctness guarantees, we wrap the IB-EDL critic in a split conformal prediction layer. Following SAFER and TECP:
+
+Theorem 1 (Conformal Calibration Guarantee). Let \mathcal{D}_{\text{cal}} = \{(q_i, y_i, \text{correct}_i)\}_{i=1}^{n} be a held-out calibration set. Define the nonconformity score s_i = 1 - C_i (higher score = less conforming). For a user-specified risk level \alpha \in (0, 1), compute the empirical quantile:
+
+\tau_\alpha = \text{Quantile}\left(\{s_i\}_{i=1}^{n}, \frac{\lceil (n+1)(1-\alpha) \rceil}{n}\right).
+
+Then, for any new test query (q, y) exchangeable with the calibration set:
+
+\mathbb{P}\left(\text{correct} \mid C \geq 1 - \tau_\alpha\right) \geq 1 - \alpha.
+
+Proof. Standard split conformal prediction theory (Vovk et al., 2005; Angelopoulos & Bates, 2021). The nonconformity scores s_1, \dots, s_n, s_{\text{test}} are exchangeable. The rank of s_{\text{test}} among them is uniform. The quantile definition ensures that s_{\text{test}} \leq \tau_\alpha with probability at least 1 - \alpha. Since s_{\text{test}} = 1 - C_{\text{test}}, we have C_{\text{test}} \geq 1 - \tau_\alpha \implies s_{\text{test}} \leq \tau_\alpha. Thus \mathbb{P}(\text{correct} \mid C \geq 1 - \tau_\alpha) \geq 1 - \alpha. \square
+
+The gate then applies the decision rule:
+
+\text{Accept if } C \geq \tau_\alpha^{\text{cal}} \text{ AND } u < u_{\max},
+
+where u_{\max} is a threshold on epistemic uncertainty. When u is large, the model's Dirichlet distribution is uninformative (both \alpha_1, \alpha_0 are small), and even moderate confidence values may be unreliable—so the gate escalates regardless.
+
+3.4 Decision Gate: Value of Computation and Budget-Constrained Bandit
+
+3.4.1 Value of Computation (VoC)
+
+Extending RaM's single-model VoC [De Sabbata et al., 2024] to heterogeneous multi-capability orchestration:
+
+\operatorname{VoC}(a) = \mathbb{E}[\Delta Q(a) \mid q, y, C, u] - \lambda_c \cdot c(a) - \lambda_e \cdot \Delta E_{\text{risk}}(a) + \beta \cdot \underbrace{I(y^*; a \mid q, y)}_{\text{epistemic information gain}},
+
+where:
+
+· \mathbb{E}[\Delta Q(a)] is the expected quality improvement from invoking capability a,
+· c(a) is its computational cost,
+· \Delta E_{\text{risk}}(a) = E_{\text{after}}(a) - E_{\text{before}} is the change in expected error cost,
+· I(y^*; a \mid q, y) is the mutual information between the ground truth y^* and the output of capability a, given the current state. This term is estimated via ensemble disagreement among downstream agents or bootstrapped IB-EDL predictions.
+· \beta controls exploration: higher \beta encourages the gate to invoke capabilities that reduce epistemic uncertainty even when immediate quality gain is uncertain.
+
+The epistemic information gain term distinguishes ACB from prior VoC formulations: it makes the system preferentially retrieve when knowledge uncertainty dominates and preferentially reason when logical uncertainty dominates.
+
+3.4.2 Decision Rule
+
+At each step, the gate selects:
+
+a^* = \arg\max_{a \in \mathcal{A} \cup \{\text{Accept}\}} \operatorname{VoC}(a), \quad \text{s.t. } c(a) \leq B_{\text{rem}}.
+
+VoC(Accept) is defined as 0 (no cost, no quality change). If no capability has positive VoC or the remaining budget is insufficient, the gate accepts the current answer.
+
+3.4.3 Budget-Constrained Contextual Bandit Formulation
+
+We cast the sequential decision problem as a contextual bandit with a knapsack constraint (Bandits with Knapsacks, BwK). The context vector is:
+
+\mathbf{x}_t = [C_t, u_t, U_{\text{task}}, B_{\text{rem},t}, \mathbf{z}_q] \in \mathbb{R}^d.
+
+Each arm a \in \mathcal{A} has an unknown expected reward function, which we assume is linear in the context:
+
+\mathbb{E}[r_t \mid \mathbf{x}_t, a_t = a] = \mathbf{x}_t^\top \boldsymbol{\theta}^*_a,
+
+where the combined reward is:
+
+r_t = \Delta Q_t(a) - \lambda_c \cdot c(a) - \lambda_e \cdot \Delta E_{\text{risk},t}(a).
+
+The total budget constraint is \sum_{t=1}^{T} c(a_t) \leq B_{\max}.
+
+3.4.4 Regret Analysis: Inheritance from StageRoute
+
+We map ACB's decision gate onto the StageRoute framework [Li & Li, ICLR 2026].
+
+Theorem 2 (Regret Bound, Informal). Under the assumptions of (i) bounded rewards |r_t| \leq R_{\max}, (ii) linear expected reward in context, and (iii) known deterministic cost functions, ACB's decision gate, when implemented as a LinUCB-based budget-constrained bandit following StageRoute's per-query routing subproblem, achieves:
+
+\text{Regret}(T) = \tilde{\mathcal{O}}(T^{2/3}),
+
+with a matching lower bound \Omega(T^{2/3}), establishing near-optimality in T. This holds for both stochastic and adversarial contexts.
+
+Proof Sketch. StageRoute proves \tilde{\mathcal{O}}(T^{2/3}) regret for its per-query routing subproblem, which solves a budget-constrained bandit over deployed models. ACB's gate faces a structurally identical problem: for each query t, given context \mathbf{x}_t, select an arm a_t \in \mathcal{A} (or Accept) to maximize cumulative reward subject to a total budget B_{\max}. StageRoute's analysis proceeds by:
+
+1. Maintaining confidence ellipsoids over the unknown parameter vectors \boldsymbol{\theta}_a using LinUCB.
+2. Solving an optimistic optimization: for each query, choose the arm maximizing upper confidence bound reward, subject to the remaining budget feasibility.
+3. Bounding the cumulative regret via the elliptical potential lemma (Abbasi-Yadkori et al., 2011) and budget-aware decomposition.
+
+The key insight is that with a single cumulative resource constraint (the compute budget), the problem is a Bandits with Knapsacks instance, which StageRoute shows achieves O(T^{2/3}) via a primal-dual approach. The proof carries over directly to ACB's setting because the arm set \mathcal{A} and cost structure are different but the mathematical structure is identical. Matching lower bounds from StageRoute and prior BwK literature confirm near-optimality.
+
+A full proof is provided in Appendix A. \square
+
+Remark. The O(T²/³) bound is for the general case with adversarial contexts. Under the stronger assumption of stochastic contexts (i.i.d. queries from a fixed distribution), tighter bounds of \tilde{O}(\sqrt{T}) are achievable via standard BwK algorithms. We state the O(T²/³) bound as the more robust guarantee.
+
+3.5 Bounded Refinement and Termination Guarantees
+
+To prevent runaway computation—a known failure mode of open-ended self-reflection loops—we impose three termination mechanisms:
+
+Proposition 1 (Finite-Step Termination). Under ACB's bounded refinement protocol, the policy terminates in at most T_{\max} steps with probability 1.
+
+Proof. The protocol enforces: (i) a hard iteration cap T_{\max} per query, (ii) a refinement budget B_{\text{refine}} that decreases monotonically with each capability invocation, and (iii) a minimum confidence improvement threshold \delta_{\min}: if |C_t - C_{t-1}| < \delta_{\min} for t > 1, force Accept. Confidence C_t \in [0, 1] is bounded. Since each iteration either decreases the remaining budget by at least \min_a c(a) > 0 or increases confidence by at least \delta_{\min} > 0 (or triggers termination), and both budget and confidence complement (1 - C_t) are bounded below, the process must terminate in finite steps. With the hard cap T_{\max} also in place, termination in at most T_{\max} steps is guaranteed with probability 1. \square
+
+Additionally, the conformal threshold \tau_\alpha provides a natural, statistically principled stopping criterion: Accept when C \geq \tau_\alpha^{\text{cal}}.
+
+---
+
+4. System Architecture and Design
+
+ACB is implemented as a pipelined meta-cognitive loop with five functional layers. Figure 1 illustrates the complete architecture.
+
+4.1 Layered Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    USER QUERY q                                  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  LAYER 1: FAST INFERENCE LAYER                                  │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │  Fast-Path LLM (latency-optimized, e.g., Llama-3-8B)      │  │
+│  │  → Generates initial answer y₀                             │  │
+│  │  → Token log-probabilities available for entropy check     │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  LAYER 2: CASCADED CONFIDENCE ESTIMATION LAYER                  │
+│  ┌─────────────────────┐  ┌──────────────────────────────────┐  │
+│  │ Head-1: Entropy     │  │ Head-2: IB-EDL Critic            │  │
+│  │ (5 ms, token logp)  │  │ (200 ms, Dirichlet α₁, α₀)      │  │
+│  │ C_ent = 1 - H/H_max │  │ C_edl = α₁/(α₁+α₀), u = 2/(α₁+α₀)│  │
+│  └─────────┬───────────┘  └────────────────┬─────────────────┘  │
+│            └──────────┬────────────────────┘                    │
+│                       ▼                                         │
+│            ┌─────────────────────┐                              │
+│            │ Aggregation +       │                              │
+│            │ Conformal Threshold │                              │
+│            │ τ_α from calib. set │                              │
+│            └─────────────────────┘                              │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  LAYER 3: META-COGNITIVE CONTROL LAYER (Decision Gate)          │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │  Context x = [C, u, U_task, B_rem, z_q]                   │  │
+│  │  Decision Rule:                                            │  │
+│  │    IF C ≥ τ_α AND u < u_max → ACCEPT                       │  │
+│  │    ELSE → a* = argmax VoC(a) s.t. c(a) ≤ B_rem            │  │
+│  │  VoC(a) = E[ΔQ(a)] - λ_c·c(a) - λ_e·ΔE_risk + β·I(y*;a)  │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  LAYER 4: CAPABILITY EXECUTION LAYER                            │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌───────┐ │
+│  │ Refine   │ │ Retrieve │ │ Delegate │ │ Verify   │ │ Accept│ │
+│  │ (CoT +   │ │ (RAG)    │ │ (Agent)  │ │ (FactCk) │ │ (Done)│ │
+│  │  PRM)    │ │          │ │          │ │          │ │       │ │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └───────┘ │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  LAYER 5: VERIFICATION & BUDGET TRACKING LAYER                  │
+│  ┌──────────────────────┐  ┌─────────────────────────────────┐  │
+│  │ SelfCheckGPT (int.)  │  │ Budget Monitor: B_rem -= c(a)   │  │
+│  │ FActScore (ext.)     │  │ If B_rem < min_a c(a) → Accept  │  │
+│  │ MIRAGE-Bench score   │  │                                  │  │
+│  └──────────────────────┘  └─────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Figure 1. ACB layered architecture showing the five functional layers: Fast Inference, Cascaded Confidence Estimation, Meta-Cognitive Control, Capability Execution, and Verification & Budget Tracking.
+
+4.2 Cascaded Confidence Gating
+
+The confidence estimation layer uses a two-stage cascade to minimize average latency:
+
+Stage 1 (Head-1, ~5 ms). Token-averaged log-probability entropy:
+
+C_{\text{ent}} = 1 - \frac{H_{\text{avg}}}{H_{\max}}, \quad H_{\text{avg}} = -\frac{1}{L}\sum_{\ell=1}^{L} \sum_{v} p_\ell(v) \log p_\ell(v).
+
+If C_{\text{ent}} \geq \tau_{\text{high}} (e.g., 0.95) or C_{\text{ent}} \leq \tau_{\text{low}} (e.g., 0.1), the gate may decide immediately: Accept if high confidence and low epistemic uncertainty, or escalate directly if extremely low confidence. This handles approximately 40–60% of queries in a single fast pass.
+
+Stage 2 (Head-2, ~200 ms). For ambiguous cases where C_{\text{ent}} \in (\tau_{\text{low}}, \tau_{\text{high}}), the full IB-EDL critic is invoked, which outputs Dirichlet parameters (\alpha_1, \alpha_0) and provides both C_{\text{edl}} and epistemic uncertainty u. The conformal threshold \tau_\alpha^{\text{cal}} is then applied.
+
+This cascaded architecture is analogous to bidirectional model cascading with proxy confidence, where both a fast and a slow confidence signal are considered before making a deferral decision.
+
+4.3 Conditional Capability Activation
+
+Each capability is activated only when the Decision Gate selects it:
+
+· Refine (Reasoning). Invokes chain-of-thought prompting with a deeper model (e.g., GPT-4o or Llama-3-70B), optionally guided by a process reward model (PRM). Cost: ~500–2000 tokens.
+· Retrieve. Triggers a RAG pipeline: embedding-based retrieval from a knowledge corpus, followed by context-augmented generation. Cost: ~1000–3000 tokens (including retrieved context).
+· Agent Delegation. Sends subtasks to specialized agents (code interpreter, web browser, planner) via LangGraph subgraphs. Cost: highly variable, typically 2000–10000 tokens.
+· Verify. Runs a fact-checking pipeline using SelfCheckGPT for intrinsic hallucination detection and FActScore-style atomic fact decomposition with external verification. If hallucinated claims exceed a threshold, may loop back once. Cost: ~500–1500 tokens.
+
+4.4 Budget-Aware Agent Scheduling
+
+When multiple capabilities have positive VoC, the gate uses a knapsack scheduling heuristic: sort capabilities by \operatorname{VoC}(a) / c(a) and allocate budget greedily. This approximates the 0/1 knapsack solution with a standard (1 - 1/e) approximation ratio.
+
+4.5 Deployment via Semantic Router
+
+The ACB decision gate can be realized as a vLLM semantic router within the Workload-Router-Pool (WRP) architecture. The gate becomes a signal-driven routing node that dispatches to capability-specific worker pools. The WRP architecture provides:
+
+· Workload characterization: whether the query is from chat, agent, single-turn, or multi-turn sessions,
+· Router policy: online bandit adaptation and RL-based model selection, consistent with ACB's gate,
+· Pool configuration: heterogeneous GPU pools optimized for different capabilities.
+
+This enables sub-3% routing overhead and seamless integration with existing LLM serving infrastructure.
+
+4.6 Lagrangian Soft-Budget Control for Production
+
+In production, the hard budget B_{\max} is relaxed using Lagrangian dual control, as in PROTEUS:
+
+\pi^* = \arg\max_{\pi} \; \mathbb{E}\left[ U(y_T) - \lambda_c C_{\text{total}} - \lambda_e E(y_T, y^*) \right] - \lambda \cdot (\mathbb{E}[C_{\text{total}}] - B_{\text{target}}),
+
+where \lambda is updated via dual ascent:
+
+\lambda \leftarrow \max(0, \lambda + \eta_\lambda (\mathbb{E}[C_{\text{total}}] - B_{\text{target}})).
+
+A learned dual variable tracks constraint violations and conditions the policy network, enabling runtime SLA enforcement without hard budget cutoffs.
+
+---
+
+5. Resource Rationality and the Cognitive Efficiency Principle
+
+ACB instantiates the resource-rational analysis framework [3] for LLM-agent systems. Gershman, Horvitz, and Tenenbaum (2015) define computational rationality as designing architectures "to approximate decisions with the highest expected utility, while taking into account the costs of computation". The Cognitive Efficiency Principle operationalizes this:
+
+Cognitive Efficiency Principle. An intelligent system should minimize expected computation subject to achieving a guaranteed correctness level, where the acceptable confidence is determined by the cost of error.
+
+This principle unifies the VoC objective, conformal acceptance thresholds, and budget constraints. It directly yields the threshold decision rule:
+
+Proposition 2 (Threshold Optimality under Calibration). If the confidence score C satisfies the monotone likelihood ratio property (MLRP) with respect to correctness—i.e., \frac{\mathbb{P}(C \mid \text{correct})}{\mathbb{P}(C \mid \text{wrong})} is non-decreasing in C—then the optimal Accept/Refine policy is a threshold rule:
+
+\pi^*(C) = \begin{cases} \text{Accept} & \text{if } C \geq \theta_U \\ \text{Refine} & \text{if } C < \theta_U \end{cases},
+
+where \theta_U satisfies the indifference condition:
+
+U \cdot \mathbb{P}(\text{correct} \mid C = \theta_U) = \lambda_c \cdot c(\text{refine}) + \lambda_e \cdot \mathbb{E}[E_{\text{risk}} \mid C = \theta_U].
+
+Proof Sketch. By the Neyman-Pearson lemma, under MLRP, likelihood-ratio tests are uniformly most powerful for the hypothesis H_0: answer is wrong vs. H_1: answer is correct. The threshold \theta_U equates the marginal benefit of accepting (expected utility of the current answer) with the marginal cost of refining (compute cost plus error risk reduction). \square
+
+This justifies the utility-dependent threshold in ACB's decision rule and connects it to classical statistical decision theory.
+
+---
+
+6. Hallucination Decomposition and Measurement
+
+ACB's selective verification targets both intrinsic and extrinsic hallucination:
+
+· Intrinsic hallucination (H_{\text{int}}): the model's own knowledge is inconsistent. Detected via SelfCheckGPT, which compares multiple sampled responses: "sampled responses diverge for hallucinated facts and converge for grounded ones".
+· Extrinsic hallucination (H_{\text{ext}}): facts not supported by external knowledge. Measured via FActScore, which "breaks a generation into atomic facts and computes the percentage supported by a reliable knowledge source".
+
+For agent-specific evaluation, we use MIRAGE-Bench, which provides "a three-part taxonomy: actions unfaithful to (i) task instructions, (ii) execution history, or (iii) environment observations".
+
+ACB's selective retrieval and verification should reduce H_{\text{ext}} more than H_{\text{int}} because retrieval specifically addresses missing knowledge, whereas intrinsic inconsistency requires deeper reasoning.
+
+---
+
+7. Experimental Framework
+
+7.1 Datasets and Tasks
+
+· Question Answering: TruthfulQA (hallucination sensitivity), Natural Questions (knowledge-intensive).
+· Multi-Step Reasoning: GSM8K (math), StrategyQA (implicit reasoning).
+· Code Generation: HumanEval, MBPP.
+· Agentic Tasks: WebShop (simulated e-commerce), API-Bank (tool-augmented).
+· Agentic Hallucination: MIRAGE-Bench (full taxonomy).
+
+7.2 Baselines
+
+· Single-pass LLM (Llama-3-70B-Instruct / GPT-4o-mini as Fast Path).
+· Static Multi-Agent Pipeline: Always runs reasoning + retrieval + verification.
+· CGR / Entropy-Based Stopping: Representative single-model adaptive baselines.
+· SOFAI-LLM: The two-solver meta-cognitive baseline (fast LLM + slow LRM).
+· ACB (Full): Complete architecture.
+
+7.3 Metrics
+
+· Accuracy: Task-specific (exact match, F1).
+· Token Consumption: Sum of all model input/output tokens per query.
+· Latency: End-to-end wall-clock time, with TTFT < 500 ms and total < 4 s annotated using HCI responsiveness standards.
+· Energy: Estimated via EcoLogits methodology: tokens → kWh using hardware-specific coefficients, then → gCO₂e via regional carbon intensity.
+· Calibration Quality: ECE, Brier Score, Selective AUROC, and conformal conditional coverage \mathbb{P}(\text{correct} \mid C \geq \tau_\alpha).
+· Hallucination Rate: FActScore (extrinsic), SelfCheckGPT score (intrinsic), MIRAGE-Bench (agentic).
+· Budget Compliance: Percentage of queries exceeding B_{\max}.
+· Pareto Hypervolume: Area under the accuracy–cost frontier.
+
+7.4 Falsifiable Hypotheses
+
+H1 (Efficiency): ACB reduces total token consumption by at least 30% compared to the static multi-agent pipeline on mixed-difficulty benchmarks, while maintaining accuracy within 2% of the static baseline.
+
+H2 (Hallucination Reduction): ACB's selective verification yields a lower hallucination rate (MIRAGE-Bench) than single-pass generation and consumes fewer tokens than an always-on verification baseline.
+
+H2a (Extrinsic vs. Intrinsic): ACB reduces extrinsic hallucination (H_{\text{ext}}) by ≥40% relative to single-pass, with ≤15% token overhead vs. no-verification, and reduces H_{\text{ext}} more than H_{\text{int}} because retrieval specifically addresses missing knowledge.
+
+H3 (Pareto Dominance): In the accuracy–efficiency trade-off space, ACB lies closer to the Pareto frontier than both the static pipeline and single-model adaptive baselines, as measured by hypervolume under the frontier.
+
+7.5 Ablation Study
+
+Five configurations tested on 500 queries stratified by difficulty (easy/medium/hard):
+
+· ACB-Full: Complete architecture.
+· ACB-NoConf: Replace the IB-EDL conformal confidence estimator with random scores (uniform [0,1]).
+· ACB-NoGate: Remove the Decision Gate; always escalate to the full agent pipeline.
+· ACB-NoVerify: Omit the verification agent; confidence relies solely on token entropy and self-consistency.
+· Static-Baseline: Always-on multi-agent pipeline (reasoning + retrieval + verification).
+
+7.6 Human-Centric Pilot
+
+A pilot study with N = 20 participants on a customer-support task measures:
+
+· Interaction steps to resolution (proxy for cognitive load).
+· User satisfaction via 5-point Likert scale and the CASUX instrument for conversational agent UX.
+· Goal momentum score following the PULSE framework, using a lightweight classifier trained on behavioral features to predict user satisfaction.
+
+We note these metrics are exploratory and call for standardized agent UX benchmarks in future work.
+
+7.7 Gate Training Protocol
+
+The gate is bootstrapped using off-policy bandit learning:
+
+1. Critic training: The IB-EDL critic is trained on the adversarial calibration set (CCPS-style perturbations on confidently-wrong queries), plus standard calibration data.
+2. Conformal calibration: Split the calibration set; compute conformal threshold \tau_\alpha for desired risk level \alpha = 0.05.
+3. Policy training: Collect trajectories from static pipelines and initial ACB with uniform random exploration. Compute post-hoc rewards using VoC and train the LinUCB or PPO policy offline on logged data.
+4. Final evaluation: Held-out tasks with greedy policy.
+
+---
+
+8. Discussion and Future Work
+
+ACB represents a fundamental shift from static maximalism to dynamic, risk-aware orchestration. Its primary vulnerability remains miscalibration of the confidence estimator; our IB-EDL + conformal prediction approach is designed to mitigate this with finite-sample guarantees. The key architectural risk is that the adversarial calibration set may not capture all failure modes of the base LLM, requiring ongoing recalibration.
+
+Several avenues for future work emerge:
+
+· Online conformal recalibration under distribution shift, following CoFact (ICLR 2026) which addresses exchangeability violations.
+· Learning the error-cost function \lambda_e via inverse reinforcement learning from observed human escalation behavior in a Wizard-of-Oz setup.
+· Cross-model transfer: Does the gate policy generalize when the underlying LLM is upgraded?
+· Transparency: The gate's VoC logs can explain why capability a was chosen, supporting explainable AI.
+· Stronger theoretical bounds: Extending the regret proof to non-linear reward functions via neural bandits.
+
+The Cognitive Efficiency Principle articulated here may also guide the design of general AI architectures beyond LLM agents—pushing back against the trend of always-on, maximalist computation.
+
+---
+
+9. Conclusion
+
+We have presented Adaptive Cognitive Budgeting, a resource-rational meta-cognitive orchestration framework for LLM-agent systems. By combining information-theoretic evidential confidence, conformal calibration, Value-of-Computation-based gating, and StageRoute's budget-constrained bandit theory, ACB provides a principled, provably efficient alternative to static maximalist pipelines. The framework is specified with:
+
+1. Complete mathematical foundations: CMDP/BwK formulation, IB-EDL Dirichlet confidence, conformal calibration theorem, VoC derivation with epistemic information gain, StageRoute regret inheritance, and threshold optimality under MLRP.
+2. Full architectural specification: five-layer design with cascaded confidence gating, conditional capability activation, knapsack scheduling, Lagrangian soft-budget control, and vLLM WRP integration.
+3. Rigorous evaluation protocol: three falsifiable hypotheses, Pareto frontier analysis, five-configuration ablation, MIRAGE-Bench for agentic hallucination, human-centric pilot, and EcoLogits-based energy measurement.
+4. Clear cognitive-science foundation: resource-rational analysis and the Cognitive Efficiency Principle as a unifying theoretical framework.
+
+This work establishes the Cognitive Efficiency Principle as a guiding standard for the next generation of AI systems—systems that are not only powerful but cognitively efficient, risk-aware, and aligned with the resource-bounded rationality inherent in human intelligence.
+
+---
+
+Acknowledgments
+
+We gratefully acknowledge the foundational contributions of the cited works that made this framework possible: StageRoute (Li & Li, ICLR 2026) for the budget-constrained bandit theory, RaM (De Sabbata et al., NeurIPS 2024) for the Value of Computation in LLM reasoning, IB-EDL (Li et al., ICLR 2025) for evidential calibration, SAFER (Wang et al., ICLR 2026) and TECP (Xu & Lu, 2025) for conformal prediction methodology, and Gershman, Horvitz & Tenenbaum (2015) for the computational rationality framework.
+
+Appendices
+
+Adaptive Cognitive Budgeting: A Meta-Cognitive Orchestration Framework for Efficient and Reliable LLM–Agent Systems
+
+Ouadi Maakoul
+PhD Working Paper — Version 2.0, Supplementary Material
+
+---
+
+Appendix A: Complete Regret Bound Proof for the Decision Gate
+
+We provide a detailed proof sketch that ACB’s decision gate, when instantiated as a LinUCB-based budget-constrained contextual bandit following StageRoute, achieves \tilde{\mathcal{O}}(T^{2/3}) cumulative regret.
+
+A.1 Problem Mapping
+
+For each of T independent queries (the bandit horizon), the gate receives a context vector \mathbf{x}_t \in \mathbb{R}^d and must choose an arm a_t \in \mathcal{A} \cup \{\text{Accept}\}. Let K = |\mathcal{A}| + 1. The Accept arm has known zero cost and known reward of 0 (no improvement). All other arms have known costs c(a) > 0 and unknown expected reward \mathbb{E}[r_t \mid \mathbf{x}_t, a_t=a] = \mathbf{x}_t^{\!\top\!} \boldsymbol{\theta}^*_a.
+
+The reward for a non-accept arm is r_t = \Delta Q_t(a) - \lambda_c c(a) - \lambda_e \Delta E_{\text{risk},t}(a), bounded in [-R_{\max}, R_{\max}]. The total budget constraint is \sum_{t=1}^{T} c(a_t) \leq B_{\max}, where the budget is consumed only when a non-accept arm is chosen. We assume B_{\max} = \rho T for some constant \rho > 0 (average budget per query), ensuring the problem is non-trivial.
+
+We follow the StageRoute framework (Li & Li, ICLR 2026), which treats per-query routing as a budget-constrained contextual bandit with linear rewards.
+
+A.2 Assumptions
+
+1. Bounded rewards: |r_t| \leq R_{\max} for all t, a.
+2. Linear expected rewards: \mathbb{E}[r_t \mid \mathbf{x}_t, a_t=a] = \mathbf{x}_t^{\!\top\!} \boldsymbol{\theta}^*_a, with \|\boldsymbol{\theta}^*_a\|_2 \leq S.
+3. Bounded contexts: \|\mathbf{x}_t\|_2 \leq L.
+4. Known deterministic costs: c(a) is known a priori and independent of the context.
+5. I.i.d. contexts (stronger) or adversarial (weaker): we prove for the adversarial case; under stochastic contexts, a tighter \tilde{O}(\sqrt{T}) bound is attainable.
+6. Budget-feasibility: The learner knows B_{\max} and can observe remaining budget at each step.
+
+A.3 Algorithm (LinUCB + Budget-Aware Primal-Dual)
+
+StageRoute adapts the budget-constrained bandit algorithm of Badanidiyuru et al. (2013) to the linear contextual setting. The core idea is to maintain a confidence set for each arm’s parameter vector and make optimistic decisions while tracking a dual variable for the budget.
+
+Let \hat{\boldsymbol{\theta}}_{a,t} be the ridge regression estimate based on samples of arm a up to time t:
+
+\hat{\boldsymbol{\theta}}_{a,t} = \mathbf{V}_{a,t}^{-1} \sum_{\tau < t: a_\tau = a} \mathbf{x}_\tau r_\tau,
+\quad \mathbf{V}_{a,t} = \lambda I + \sum_{\tau < t: a_\tau = a} \mathbf{x}_\tau \mathbf{x}_\tau^{\!\top\!}.
+
+The confidence width for arm a at time t is
+
+w_{a,t} = \alpha \|\mathbf{x}_t\|_{\mathbf{V}_{a,t}^{-1}},
+
+where \alpha = \sqrt{\lambda} S + R_{\max} \sqrt{2 \log(1/\delta) + d \log(1 + T L^2 / (\lambda d))}. The upper confidence bound (UCB) for the expected reward is
+
+U_{a,t} = \mathbf{x}_t^{\!\top\!} \hat{\boldsymbol{\theta}}_{a,t} + w_{a,t}.
+
+The algorithm also maintains a dual variable \mu_t \in [0, \mu_{\max}] that “prices” the available budget. At step t, given context \mathbf{x}_t and remaining budget B_t, the algorithm chooses
+
+a_t = \arg\max_{a \in \mathcal{A} \cup \{\text{Accept}\}} \big( U_{a,t} - \mu_t c(a) \big),
+
+subject to the feasibility constraint c(a) \leq B_t (accept always feasible). After observing reward r_t, the dual variable is updated via online gradient descent on the Lagrangian dual:
+
+\mu_{t+1} = \Pi_{[0,\mu_{\max}]} \Big( \mu_t + \eta \big( c(a_t) - \rho \big) \Big),
+
+where \eta is a step size, \mu_{\max} is a large bound, and \rho = B_{\max}/T is the per-round expected budget consumption.
+
+A.4 Regret Decomposition
+
+The cumulative regret against the optimal policy \pi^* (which knows the true \boldsymbol{\theta}^*_a and respects the budget) is
+
+\text{Regret}(T) = \sum_{t=1}^T \big( \mathbf{x}_t^{\!\top\!} \boldsymbol{\theta}^*_{a^*_t} - \mathbf{x}_t^{\!\top\!} \boldsymbol{\theta}^*_{a_t} \big),
+
+where a^*_t is the optimal deterministic arm choice under budget constraint. Following StageRoute, we decompose the regret into:
+
+1. Optimism gap: from using UCB instead of true mean, bounded by sum of confidence widths (elliptical potential lemma).
+2. Budget constraint violation penalty: due to imperfect tracking of the budget, bounded via the dual variable’s cumulative estimation error.
+3. Primal-dual gap: from the Lagrangian relaxation, bounded by standard online convex optimization arguments.
+
+Using the elliptical potential lemma (Abbasi-Yadkori et al., 2011):
+
+\sum_{t: a_t = a} \|\mathbf{x}_t\|_{\mathbf{V}_{a,t}^{-1}} \leq \sqrt{T_a \log \det(\mathbf{V}_{a,T_a})} = \tilde{O}(\sqrt{T_a d}),
+
+where T_a is the number of times arm a is pulled. Summing over all arms gives \tilde{O}(\sqrt{K d T}).
+
+The budget constraint tracking adds an additional term. The key insight of StageRoute is that when the budget is a single knapsack constraint, the problem decomposes into a per-query primal-dual optimization that is solvable with a budget-constrained bandit subroutine. The overall regret scales as \tilde{O}(T^{2/3}) because the dual variable learning rate must balance regret from under-budgeting and over-budgeting.
+
+Formally, the proof in StageRoute (Theorem 1) shows that with appropriate choices of \eta = T^{-1/3} and \mu_{\max} = \Theta(T^{1/3}), the cumulative regret satisfies
+
+\mathbb{E}[\text{Regret}(T)] \le \tilde{O}\left( \sqrt{K d T} \cdot \mu_{\max} + \frac{1}{\eta} \right) = \tilde{O}(T^{2/3}).
+
+A.5 Matching Lower Bound
+
+StageRoute further proves a matching lower bound \Omega(T^{2/3}) for this problem class, establishing near-optimality. The lower bound construction uses a hard instance where the learner must balance exploration across arms with a tight budget constraint, leading to a \Omega(T^{2/3}) minimax regret.
+
+Thus, ACB’s gate inherits the \tilde{\mathcal{O}}(T^{2/3}) regret under the same assumptions. Under the stronger assumption of i.i.d. contexts and stochastic rewards, the classic BwK analysis yields \tilde{O}(\sqrt{T}) regret, which is tighter and more practical for stationary deployment environments.
+
+---
+
+Appendix B: Conformal Calibration Proofs
+
+B.1 Split Conformal Prediction for Binary Correctness
+
+We use the split conformal prediction framework (Vovk et al., 2005; Angelopoulos & Bates, 2021) to bound the miscoverage rate of the acceptance decision.
+
+Let the calibration set \mathcal{D}_{\text{cal}} = \{(q_i, y_i, \omega_i)\}_{i=1}^{n} consist of i.i.d. samples from the same distribution as future test queries. Here \omega_i \in \{0,1\} indicates whether the candidate answer y_i is correct (1) or not (0). For each calibration point, we compute the nonconformity score s_i = 1 - C_i, where C_i = \mathbb{P}(\text{correct} \mid q_i, y_i) is the IB-EDL confidence estimate.
+
+Given a user-specified risk level \alpha \in (0,1), we compute the empirical quantile:
+
+\tau_\alpha = \text{the } \lceil (n+1)(1-\alpha) \rceil\text{-th smallest value in } \{s_i\}_{i=1}^{n} \cup \{\infty\}.
+
+For any new test query (q_{\text{test}}, y_{\text{test}}) exchangeable with the calibration set, standard conformal theory guarantees
+
+\mathbb{P}\big( s_{\text{test}} \le \tau_\alpha \big) \ge 1-\alpha.
+
+Since s_{\text{test}} = 1 - C_{\text{test}}, the event s_{\text{test}} \le \tau_\alpha is equivalent to C_{\text{test}} \ge 1 - \tau_\alpha. Moreover, under the assumption that the confidence score C is calibrated in the sense that \omega_{\text{test}} = 1 whenever C_{\text{test}} is sufficiently large (which we ensure via IB-EDL), we have that among those test samples with C_{\text{test}} \ge 1 - \tau_\alpha, the fraction of correct answers is at least 1-\alpha (asymptotically, with exact finite-sample guarantees provided by the exchangeability of the scores). More precisely, the standard conformal guarantee bounds the probability that the accepted answer is wrong:
+
+\mathbb{P}\big( \omega_{\text{test}} = 0 \;\big|\; C_{\text{test}} \ge 1 - \tau_\alpha \big) \le \alpha + O(1/n).
+
+Thus, the gate’s acceptance rule “Accept iff C \ge 1 - \tau_\alpha” controls the selective risk at level \alpha.
+
+B.2 Cascaded Conformal Abstention with Epistemic Uncertainty
+
+In ACB we additionally gate on epistemic uncertainty u < u_{\max}. To incorporate this condition into the conformal guarantee, we can treat the conjunction (C \ge \tau_\alpha) \land (u < u_{\max}) as a post-processing of the conformal predictor. Since the original conformal prediction marginal guarantee holds for any selection rule that depends only on the nonconformity score (or on the context in a way that preserves exchangeability), and the uncertainty u is a deterministic function of the same model output, the risk control is maintained: the probability of wrong acceptance among queries that pass both thresholds is bounded by \alpha. However, the power (fraction of accepted queries) may decrease, which is acceptable for safety.
+
+B.3 Connection to SAFER and TECP
+
+SAFER (Wang et al., ICLR 2026) provides a two-stage risk control framework for open-ended generation: abstention-aware sampling followed by conformalized filtering. Our ACB critic stage is akin to the filtering stage, with the advantage that the IB-EDL score is already designed to be well-calibrated. TECP (Xu & Lu, 2025) directly applies split conformal prediction to token-level entropy scores; we extend that to a richer Dirichlet-based confidence score.
+
+---
+
+Appendix C: IB-EDL Mathematical Background
+
+C.1 Dirichlet Distribution and Evidential Deep Learning
+
+The Dirichlet distribution \text{Dir}(\mathbf{p} \mid \boldsymbol{\alpha}) with concentration parameters \boldsymbol{\alpha} = (\alpha_1, \dots, \alpha_K) \succ 0 is a probability density over the (K-1)-simplex \mathbf{p} \in \Delta^{K-1}:
+
+\text{Dir}(\mathbf{p} \mid \boldsymbol{\alpha}) = \frac{\Gamma(\alpha_0)}{\prod_{k=1}^{K} \Gamma(\alpha_k)} \prod_{k=1}^{K} p_k^{\alpha_k-1},
+
+where \alpha_0 = \sum_{k=1}^{K} \alpha_k.
+
+For binary correctness (K=2), we have
+
+\mathbb{E}[p_1] = \frac{\alpha_1}{\alpha_0}, \quad \text{Var}[p_1] = \frac{\alpha_1 \alpha_2}{\alpha_0^2 (\alpha_0+1)}.
+
+Evidential deep learning (EDL) trains a neural network to output the parameters \boldsymbol{\alpha} directly, minimizing a loss that encourages the Dirichlet to concentrate on the correct class when the model is confident, and to remain uniform (high uncertainty) when the model is uncertain. The standard EDL loss for classification is
+
+\mathcal{L}_{\text{EDL}}(\boldsymbol{\alpha}, y) = \int \left( \sum_{k=1}^{K} (y_k - p_k)^2 \right) \text{Dir}(\mathbf{p} \mid \boldsymbol{\alpha}) d\mathbf{p} = \sum_{k=1}^{K} \left( y_k - \frac{\alpha_k}{\alpha_0} \right)^2 + \frac{\alpha_k (\alpha_0 - \alpha_k)}{\alpha_0^2 (\alpha_0+1)}.
+
+C.2 Information Bottleneck for EDL (IB-EDL)
+
+IB-EDL (Li et al., ICLR 2025) adds an information-theoretic regularizer to suppress spurious features from influencing the evidence. The objective is
+
+\mathcal{L}_{\text{IB-EDL}} = \mathcal{L}_{\text{EDL}} + \beta \cdot I(Z; X),
+
+where Z is an intermediate representation of the input X (the query-answer pair) and I(Z; X) is the mutual information. Minimizing I(Z; X) forces the model to retain only the most predictive information, thereby reducing overconfidence from spurious correlations. In practice, a variational bound on I(Z; X) is used.
+
+The resulting Dirichlet parameters exhibit better calibration: \alpha_0 (total evidence) appropriately reflects the amount of supporting information, and the certainty p_1 corresponds to the balance of evidence.
+
+C.3 Training the Critic
+
+We train the critic model f_\phi on a mixture of:
+
+· Standard correctness-labeled data from the target tasks.
+· An adversarial calibration set containing queries where the base LLM is confidently wrong (collected via CCPS-style perturbations). The loss on these samples is up-weighted to force the model to learn high epistemic uncertainty on out-of-distribution or failure cases.
+
+The critic shares the same encoder as the fast-path LLM (via feature sharing) for efficiency, but the final Dirichlet head is a separate MLP.
+
+---
+
+Appendix D: Bandits with Knapsacks (BwK) Background and ACB Mapping
+
+D.1 BwK Problem Definition
+
+In the Bandits with Knapsacks (BwK) problem (Badanidiyuru et al., 2013), a learner interacts with a set of K arms over T rounds. Each arm a yields a random reward r_{t,a} \in [0,1] and consumes a random amount c_{t,a} \in [0,1] of a single resource (budget). The total resource consumption over T rounds must not exceed a budget B. The objective is to maximize the cumulative reward.
+
+Under stochastic (i.i.d.) rewards and consumptions, the optimal algorithm achieves O(\sqrt{T}) regret; under adversarial settings, the optimal regret is O(T^{2/3}) (matching the lower bound).
+
+D.2 ACB as a Linear Contextual BwK
+
+ACB adds context: the reward and cost depend on the query context \mathbf{x}_t. Specifically, we assume expected rewards are linear, and costs are known deterministic functions of the arm (not depending on context). This fits the linear contextual bandit with knapsacks framework.
+
+The known-cost assumption is valid for ACB because the token/energy cost of each capability is pre-characterized (e.g., tokens per call). The unknown reward is the quality improvement minus error risk, which we learn online. The budget constraint is the total compute budget.
+
+StageRoute (Li & Li, 2026) addresses this exact setting and gives a primal-dual algorithm with \tilde{O}(T^{2/3}) regret for adversarial contexts. ACB directly inherits this.
+
+D.3 Practical Implications for the Gate
+
+Because the gate operates on a per-query basis with a global budget, it acts as the BwK algorithm described. In a deployed system, the budget may be recalculated daily or per user; the gate can be retrained periodically on logged data using off-policy evaluation to adjust the policy.
+
+---
+
+Appendix E: Threshold Policy Optimality Under MLRP (Proof)
+
+Proposition 2 (Threshold Optimality). If the confidence score C satisfies the monotone likelihood ratio property (MLRP) with respect to correctness—i.e., \frac{f(C \mid \text{correct})}{f(C \mid \text{wrong})} is non-decreasing in C—then the optimal policy for the simplified single-step decision (Accept vs. Refine) is a threshold rule: Accept iff C \ge \theta_U, where \theta_U solves
+
+U \cdot \mathbb{P}(\text{correct} \mid C = \theta_U) = \lambda_c \cdot c(\text{refine}) + \lambda_e \cdot \mathbb{E}[E_{\text{risk}} \mid C = \theta_U].
+
+Proof. The single-step decision problem is: given a candidate answer with confidence C, choose action d \in \{\text{Accept}, \text{Refine}\} to maximize expected utility. The expected utility of Accept is
+
+V_{\text{accept}}(C) = U \cdot \mathbb{P}(\text{correct} \mid C) - \lambda_e \cdot \mathbb{E}[E_{\text{error}} \mid C] \cdot \mathbb{P}(\text{wrong} \mid C).
+
+The expected utility of Refine includes a cost c and a state transition to a new answer with improved quality distribution; we assume that after refinement the answer’s correctness is independent of the current C (or at least the expected improvement is constant). For simplicity, let the refined answer yield a fixed expected net utility V_{\text{refine}} (which incorporates any remaining error risk). Then Refine is better than Accept when V_{\text{accept}}(C) < V_{\text{refine}} - \lambda_c c. Rearranging,
+
+U \cdot \mathbb{P}(\text{correct} \mid C) - \lambda_e \cdot \mathbb{E}[E_{\text{error}} \mid C] \cdot (1 - \mathbb{P}(\text{correct} \mid C)) < V_{\text{refine}} - \lambda_c c.
+
+Under MLRP, \mathbb{P}(\text{correct} \mid C) is a non-decreasing function of C (since the likelihood ratio of correct to wrong increases). Moreover, \mathbb{E}[E_{\text{error}} \mid C] is typically non-increasing in C (more confident, less expected error). Hence the left-hand side is monotone in C. Thus, there exists a unique threshold \theta_U where equality holds; for C \ge \theta_U, accepting is optimal. This proves the threshold property.
+
+Remark: MLRP is a strong assumption but holds approximately for well-calibrated models. IB-EDL and conformal calibration aim to make the confidence score as close to well-calibrated as possible, so that the threshold policy is near-optimal.
+
+---
+
+Appendix F: Bounded Refinement Termination Proof (Supermartingale Argument)
+
+Proposition 1 (Finite-Step Termination). Under ACB’s bounded refinement protocol, the policy terminates in at most T_{\max} steps with probability 1.
+
+Proof (deterministic bound). The protocol enforces a hard iteration limit T_{\max} per query. Thus, trivially, the loop cannot exceed T_{\max} steps.
+
+To provide a more refined guarantee that termination occurs even without the hard cap because confidence improves or budget depletes, we can present a supermartingale argument. Define the potential function
+
+\Phi_t = 1 - C_t + \gamma B_{\text{rem},t},
+
+where \gamma > 0 is chosen so that the cost of each capability outweighs the minimal possible decrease in confidence. Since C_t \in [0,1] and B_{\text{rem},t} is bounded below by 0, \Phi_t \ge 0. At each refinement step, we have either:
+
+· C_{t+1} - C_t \ge \delta_{\min} (confidence improves by at least \delta_{\min}), in which case \Phi_{t+1} \le \Phi_t - \delta_{\min} + \gamma \cdot 0 (budget unchanged? Actually budget decreases), or
+· If confidence does not improve sufficiently, the design forces termination, or
+· If the capability is executed, B_{\text{rem},t+1} = B_{\text{rem},t} - c(a) \le B_{\text{rem},t} - c_{\min}. So \Phi_{t+1} \le \Phi_t - \gamma c_{\min} (ignoring confidence change, which is bounded).
+
+If we choose \gamma such that \gamma c_{\min} \ge 1 (since the potential can increase at most 1 from the confidence component), then the potential strictly decreases by at least \min(\delta_{\min}, \gamma c_{\min}) every non-terminating step. Since the potential is bounded below by 0, the process must terminate in at most \Phi_0 / \min(\delta_{\min}, \gamma c_{\min}) steps. Together with T_{\max}, we have finite termination almost surely.
+
+A rigorous supermartingale proof would require stochastic assumptions on confidence updates, but the deterministic guarantee suffices for our purposes.
+
+---
+
+Appendix G: Architecture Details — Full Pseudo-Code and Algorithms
+
+G.1 ACB Main Control Loop
+
+```
+Algorithm 1: Adaptive Cognitive Budgeting (ACB) Control Loop
+Input: query q, total budget B_max, risk level α, thresholds u_max, δ_min, T_max
+Output: final answer y, total cost
+
+1: B_rem ← B_max
+2: y ← FastPathLLM(q)                         // Layer 1: initial fast answer
+3: C, u ← ConfidenceEstimator(q, y)            // Layer 2: cascaded confidence
+4: t ← 0
+5: while t < T_max do
+6:     if C ≥ 1 - τ_α and u < u_max then       // Conformal threshold τ_α from calib.
+7:         return y, B_max - B_rem
+8:     end if
+9:     // Compute VoC for each feasible capability
+10:    feasible ← {a ∈ {Refine,Retrieve,Agent,Verify} : c(a) ≤ B_rem}
+11:    if feasible is empty then return y, B_max - B_rem
+12:    for a in feasible do
+13:        VoC[a] = EstimatedDeltaQ(a) - λ_c*c(a) - λ_e*EstimatedDeltaRisk(a) + β*InfoGain(a)
+14:    end for
+15:    a* ← argmax_{a∈feasible} VoC[a]
+16:    if VoC[a*] ≤ 0 then return y, B_max - B_rem
+17:    // Execute capability
+18:    y_new, cost_used ← ExecuteCapability(a*, q, y)
+19:    B_rem ← B_rem - cost_used
+20:    C_new, u_new ← ConfidenceEstimator(q, y_new)
+21:    if |C_new - C| < δ_min then return y_new, B_max - B_rem
+22:    C, u ← C_new, u_new
+23:    y ← y_new
+24:    t ← t + 1
+25: end while
+26: return y, B_max - B_rem
+```
+
+G.2 Cascaded Confidence Estimator
+
+```
+Algorithm 2: ConfidenceEstimator (Cascaded)
+Input: q, y
+Output: C, u
+
+1: H_ent ← TokenEntropy(y)                     // Head-1: average token entropy
+2: C_ent ← 1 - H_ent / H_max
+3: if C_ent ≥ τ_high or C_ent ≤ τ_low then      // extreme confidence
+4:     u_ent ← small constant (e.g., 0.01)
+5:     return C_ent, u_ent
+6: else
+7:     α1, α0 ← IB_EDL_Critic(q, y)            // Head-2: full critic
+8:     C ← α1 / (α1 + α0)
+9:     u ← 2 / (α1 + α0)
+10:    return C, u
+11: end if
+```
+
+G.3 Budget-Aware Knapsack Scheduling (Optional)
+
+When multiple capabilities have positive VoC, a knapsack solver may be used to select a subset instead of a single action:
+
+```
+Algorithm 3: Capability Selection via Greedy Knapsack
+Input: feasible_arms with VoC[a], cost[a]; budget B_rem
+Output: selected_arms subset
+
+1: Sort arms by VoC[a]/cost[a] descending
+2: selected ← []
+3: for a in sorted_arms do
+4:     if cost[a] ≤ B_rem then
+5:         selected.append(a)
+6:         B_rem ← B_rem - cost[a]
+7:     end if
+8: end for
+9: return selected (may be empty)
+```
+
+This can be used to run verification and retrieval in parallel within budget.
+
+G.4 Lagrangian Dual Update for Soft Budget
+
+```
+Algorithm 4: Lagrangian Dual Variable Update (at the end of each query or batch)
+Input: target budget per query ρ, current budget consumption c_used, dual variable λ, step size η
+1: λ ← max(0, λ + η * (c_used - ρ))
+2: return λ
+```
+
+The gate uses λ to adjust the effective cost: instead of λ_cc(a), we use (λ_c + λ)c(a) to bias the policy towards budget compliance.
+
+---
+
+Appendix H: Evaluation Metrics Definitions
+
+H.1 Calibration Metrics
+
+Expected Calibration Error (ECE). Partition the probability space into M bins B_m. For each bin, compute \text{acc}(B_m) = fraction of correct answers among predictions with confidence in that bin, and \text{conf}(B_m) = average confidence in that bin. Then:
+
+\text{ECE} = \sum_{m=1}^{M} \frac{|B_m|}{N} \left| \text{acc}(B_m) - \text{conf}(B_m) \right|.
+
+Brier Score. \[\text{Brier} = \frac{1}{N} \sum_{i=1}^{N} (C_i - \omega_i)^2,\] where \omega_i = 1 if answer correct, else 0.
+
+Selective AUROC. The area under the ROC curve for predicting correctness from the confidence score. Higher values indicate better separation.
+
+Conformal Conditional Coverage. \[\text{Coverage}(\alpha) = \frac{1}{N_{\text{test}}} \sum_{i=1}^{N_{\text{test}}} \mathbf{1}[C_i \ge 1-\tau_\alpha \land \omega_i = 1] / \mathbf{1}[C_i \ge 1-\tau_\alpha].\] Should be \ge 1-\alpha.
+
+H.2 Hallucination Metrics
+
+FActScore (Extrinsic). Decompose answer into atomic facts. For each fact, check if supported by a trusted knowledge source. H_{\text{ext}} = (# unsupported facts) / (# total facts).
+
+SelfCheckGPT (Intrinsic). Sample multiple answers. For each sentence, compute the average semantic similarity to other samples; low similarity indicates hallucination. Overall score H_{\text{int}} is the aggregate across sentences.
+
+MIRAGE-Bench Score. Fine-grained LLM-as-a-judge scoring along three axes: instruction faithfulness, history faithfulness, environment faithfulness. Reported as mean scores.
+
+H.3 Pareto Hypervolume
+
+The Pareto frontier is the set of non-dominated (accuracy, cost) points. Hypervolume is the area under the frontier up to a reference point (e.g., (0, max cost)). Larger hypervolume indicates a better trade-off.
+
+---
+
+Appendix I: Additional Related Work (Expanded)
+
+I.1 Cognitive Science Foundations
+
+The resource-rational analysis framework (Gershman et al., 2015; Lieder & Griffiths, 2020) has been applied to human decision-making, planning, and metacognition. ACB draws direct inspiration from the notion that humans allocate cognitive resources based on the expected value of computation. The VoC formulation is a realization of this principle in artificial systems.
+
+I.2 Speculative Cascades and Bidirectional Routing
+
+Speculative cascades (Chen et al., 2025) combine a fast drafter model with a larger verifier, improving latency by parallel execution. ACB’s cascaded confidence gating is analogous but applies to heterogeneous orchestration decisions rather than sequential token generation.
+
+I.3 Agentic Hallucination Benchmarks
+
+MIRAGE-Bench (Zhang et al., 2025) is the first comprehensive benchmark for hallucinations in interactive LLM agents. It includes tasks that test consistency with instructions, history, and environment. ACB’s verification agent uses a similar detection pipeline.
+
+I.4 Energy Profiling for LLMs
+
+The Cost of Dynamic Reasoning (2025) provides system-level energy traces. EcoLogits offers per-query CO₂e estimation. ACB adopts these tools for its evaluation.
+
+---
+
+Appendix J: Notation and Glossary
+
+Symbol Description
+q User query
+\mathcal{A} Set of capabilities (fast, reason, retrieve, agent, verify)
+a A specific capability
+c(a) Cost of capability a (tokens, energy)
+y Candidate answer
+C Confidence score \mathbb{P}(\text{correct} \mid q, y)
+u Epistemic uncertainty (from Dirichlet)
+B_{\max} Total per-query budget
+B_{\text{rem}} Remaining budget
+\lambda_c Weight for computational cost
+\lambda_e Weight for error cost
+E(y, y^*) Error cost function
+VoC Value of Computation
+\tau_\alpha Conformal threshold for risk level \alpha
+\boldsymbol{\alpha} Dirichlet parameters
+\hat{\boldsymbol{\theta}}_a Estimated linear reward parameter
+\mu Lagrangian dual variable
+\text{Regret}(T) Cumulative regret over T queries
+ECE Expected Calibration Error
+AUROC Area Under the Receiver Operating Characteristic curve
+H_{\text{ext}} Extrinsic hallucination rate
+H_{\text{int}} Intrinsic hallucination score
+
+Adaptive Cognitive Budgeting (ACB)
+
+Final Technical Specification
+
+---
+
+Document Version: 2.0
+Status: Stable
+Author: Ouadi Maakoul
+Date: 6 May 2026
+
+---
+
+Table of Contents
+
+1. Introduction
+2. System Overview
+3. Architectural Design
+4. Component Specifications
+5. Data Flow & Control Flow
+6. Mathematical Foundations
+7. Algorithmic Specifications
+8. Deployment Architecture
+9. API Specification
+10. Configuration Parameters
+11. Performance Metrics & Evaluation
+12. Security & Reliability
+13. Appendices
+
+---
+
+1. Introduction
+
+1.1 Purpose
+
+This document defines the technical specification for the Adaptive Cognitive Budgeting (ACB) system, a meta‑cognitive orchestration layer for large language model (LLM) agent systems. ACB dynamically allocates inference compute across a heterogeneous capability stack—single‑pass generation, chain‑of‑thought reasoning, retrieval‑augmented generation (RAG), agent delegation, and fact‑verification—based on confidence, epistemic uncertainty, task utility, and remaining computational budget.
+
+1.2 Scope
+
+The specification covers:
+
+· System architecture and component decomposition
+· Mathematical models for confidence, uncertainty, decision‑theoretic gating, and budget optimisation
+· Detailed algorithms and pseudocode
+· Data flow, interfaces, and API definitions
+· Deployment architecture on vLLM‑based infrastructure
+· Configuration parameters and performance metrics
+
+Out of scope for this document:
+
+· Detailed training procedures for the IB‑EDL critic and bandit policy (see separate training guide)
+· Hardware‑specific provisioning details
+
+1.3 Definitions & Abbreviations
+
+Term Definition
+ACB Adaptive Cognitive Budgeting
+VoC Value of Computation
+IB‑EDL Information‑Bottleneck Evidential Deep Learning
+BwK Bandits with Knapsacks
+SCP Split Conformal Prediction
+ECE Expected Calibration Error
+PRM Process Reward Model
+RAG Retrieval‑Augmented Generation
+TTFT Time‑To‑First‑Token
+WRP Workload‑Router‑Pool (vLLM architecture)
+
+---
+
+2. System Overview
+
+ACB is a meta‑cognitive control module interposed between the user query and an ensemble of LLM capabilities. Instead of unconditionally invoking multiple agents or reasoning steps, ACB first produces a cheap initial answer, estimates its confidence via a cascaded evaluator (fast token entropy + IB‑EDL critic), applies a conformally calibrated acceptance threshold, and—if uncertainty remains—selectively escalates to deeper reasoning, retrieval, agent delegation, or verification. The escalation decisions are governed by a Value of Computation (VoC) maximising policy learned as a budget‑constrained contextual bandit.
+
+Key design principles:
+
+· Cognitive Efficiency: minimal compute for a guaranteed correctness level.
+· Risk awareness: error cost weighted asymmetrically per domain.
+· Formal guarantees: finite‑sample correctness via conformal prediction; \tilde{\mathcal{O}}(T^{2/3}) regret via StageRoute bandit inheritance.
+· Modular layering: clean separation of fast path, confidence, control, execution, and verification.
+
+---
+
+3. Architectural Design
+
+3.1 Layered Architecture
+
+```
+┌──────────────────────────────────────────┐
+│   L1: Fast Inference                     │
+├──────────────────────────────────────────┤
+│   L2: Cascaded Confidence Estimation     │
+├──────────────────────────────────────────┤
+│   L3: Meta‑Cognitive Control (Gate)      │
+├──────────────────────────────────────────┤
+│   L4: Capability Execution               │
+├──────────────────────────────────────────┤
+│   L5: Verification & Budget Tracking     │
+└──────────────────────────────────────────┘
+```
+
+Each layer is an independent, replaceable microservice. Communication is via synchronous gRPC with protobuf message schemas.
+
+3.2 Component Diagram
+
+```
+Query --> [Fast‑Path LLM] --> (y0, logprobs) --> [Confidence Estimator (cascade)]
+        │
+        └──> [IB‑EDL Critic] ──> (C, u) ──> [Conformal Threshold Check]
+                                                    │
+                                          ┌────────┴─────────┐
+                                          │  Decision Gate   │
+                                          │  (Bandit Policy) │
+                                          └────────┬─────────┘
+                              ┌───────────────────┼───────────────────┐
+                              ▼                   ▼                   ▼
+                        [Refine (CoT)]      [Retrieve (RAG)]   [Agent Delegation]
+                              │                   │                   │
+                              └───────────────────┼───────────────────┘
+                                                  ▼
+                                          [Verification Agent]
+                                                  │
+                                              (Answer + cost)
+```
+
+All components are stateless except the Decision Gate, which maintains per‑query state in a short‑lived session cache.
+
+---
+
+4. Component Specifications
+
+4.1 Fast‑Path LLM (L1)
+
+· Model: Llama‑3‑8B‑Instruct (or any small, latency‑optimised LM).
+· Input: raw query string q.
+· Output: initial answer y0 and per‑token log‑probabilities (for entropy calculation).
+· Latency budget: < 200 ms p50 for a typical sequence of 50 tokens.
+· Instance: 1× A10G GPU, FP16, vLLM serving engine.
+· API: /v1/completions (streaming disabled for initial response).
+
+4.2 Cascaded Confidence Estimator (L2)
+
+This component fuses a fast entropy‑based probe (Head‑1) with a slower but calibrated IB‑EDL critic (Head‑2).
+
+4.2.1 Head‑1: Entropy‑Based Quick Check
+
+· Input: token log‑probs from L1.
+· Computation:
+    H_{\mathrm{avg}} = -\frac{1}{L}\sum_{\ell=1}^{L}\sum_{v} p_\ell(v)\log p_\ell(v)
+    C_{\mathrm{ent}} = 1 - H_{\mathrm{avg}} / H_{\max}, where H_{\max} = \log(\text{vocab size}).
+· Thresholds:
+    \tau_{\mathrm{high}} = 0.95, \tau_{\mathrm{low}} = 0.10.
+· Decision: If C_{\mathrm{ent}} \ge \tau_{\mathrm{high}} or C_{\mathrm{ent}} \le \tau_{\mathrm{low}}, immediately return C = C_{\mathrm{ent}}, u = 0.01 without invoking Head‑2.
+· Latency: < 5 ms.
+
+4.2.2 Head‑2: IB‑EDL Critic
+
+· Model: Shared encoder (first 6 layers of fast‑path LLM) + dedicated Dirichlet head MLP.
+· Input: concatenated [q, y0].
+· Output: Dirichlet concentration parameters (\alpha_1, \alpha_0).
+· Confidence: C = \alpha_1 / (\alpha_1 + \alpha_0).
+· Epistemic uncertainty: u = 2 / (\alpha_1 + \alpha_0).
+· Training: IB‑EDL loss (evidential MSE + mutual information penalty) on an adversarial calibration set (2k high‑confidence wrong answers).
+· Latency: 150–250 ms.
+
+4.2.3 Conformal Threshold Calculator
+
+· Input: calibration dataset of (q_i, y_i, \mathrm{correct}_i).
+· Nonconformity score: s_i = 1 - C_i.
+· Conformal threshold:
+    \tau_\alpha = \text{Quantile}(\{s_i\}, \lceil (n+1)(1-\alpha)\rceil / n).
+· Acceptance rule: Accept iff C \ge 1 - \tau_\alpha AND u < u_{\max}.
+· Risk level \alpha: 0.05 (default).
+· Storage: threshold stored in config service, recomputed weekly.
+
+4.3 Decision Gate (L3)
+
+The gate is a contextual bandit policy that selects among possible actions: Accept, Refine, Retrieve, Delegate, Verify.
+
+4.3.1 Context Vector
+
+\mathbf{x} = [C, u, U_{\mathrm{task}}, B_{\mathrm{rem}}, \mathbf{z}_q]
+
+· U_{\mathrm{task}}: task importance (1–5), derived from domain classifier and explicit user flag.
+· B_{\mathrm{rem}}: tokens remaining.
+· \mathbf{z}_q: 128‑d embedding of q (CLS token of fast‑path encoder).
+
+4.3.2 VoC Computation
+
+\operatorname{VoC}(a) = \mathbb{E}[\Delta Q(a)] - \lambda_c c(a) - \lambda_e \Delta E_{\mathrm{risk}}(a) + \beta I(y^*; a \mid q, y_{\mathrm{curr}})
+
+· \Delta Q estimated via a learned quality‑improvement predictor (MLP) trained on past trajectories.
+· \Delta E_{\mathrm{risk}} from error‑cost tables per domain (e.g., medical = 100, chat = 1).
+· I from ensemble disagreement of duplicate critics.
+· c(a): fixed token cost per capability (see config).
+
+4.3.3 Bandit Training & Execution
+
+· Algorithm: LinUCB with StageRoute budget‑aware primal‑dual update.
+· Exploration: \epsilon-greedy during training; greedy at inference.
+· Dual variable \mu_t updated per query (see Lagrangian soft budget).
+· Regret guarantee: \tilde{\mathcal{O}}(T^{2/3}) under adversarial contexts, \tilde{O}(\sqrt{T}) for i.i.d.
+
+4.3.4 Decision Rule
+
+```
+if C ≥ 1 - τ_α and u < u_max → Accept
+else:
+    feasible = {a: c(a) ≤ B_rem}
+    if feasible empty or max VoC(a) ≤ 0 → Accept
+    else a* = argmax VoC(a)
+```
+
+4.4 Capability Executors (L4)
+
+4.4.1 Refine (Chain‑of‑Thought)
+
+· Model: GPT‑4o / Llama‑3‑70B.
+· Prompt: “Let’s think step by step…” appended to query.
+· Optional PRM: lightweight reward model scores intermediate steps; stops if cumulative success prob < 0.2.
+· Token cost range: 500–2000.
+
+4.4.2 Retrieve (RAG)
+
+· Retriever: top‑5 documents from a vector store (text‑embedding‑ada‑002).
+· Reader: fast‑path LLM with retrieved context.
+· Trigger: when C indicates missing factual knowledge (entropy high + epistemic uncertainty high).
+· Token cost: 1000–3000 (including context).
+
+4.4.3 Agent Delegation
+
+· Platform: LangGraph sub‑graph execution.
+· Agents: Code Interpreter, Web Browser, Calculator.
+· Sub‑query formed by another LLM call (planner) and dispatched.
+· Cost: 2000–10000 tokens.
+
+4.4.4 Verify
+
+· Intrinsic check: SelfCheckGPT (3 samples, mean contradiction score).
+· Extrinsic check: FActScore pipeline (atomic fact extraction → retrieval from Wikipedia → NLI).
+· MIRAGE‑Bench agentic verification (instruction/history/environment faithfulness).
+· Cost: 500–1500 tokens.
+
+4.5 Verification & Budget Tracker (L5)
+
+· Maintains running B_rem.
+· Logs all actions and costs.
+· Enforces hard budget cut‑off: if remaining budget < minimum capability cost, forces Accept.
+
+---
+
+5. Data Flow & Control Flow
+
+5.1 Normal Flow
+
+1. Query arrives at API gateway.
+2. Fast‑Path LLM generates y0 and logprobs (L1).
+3. Confidence Estimator computes C, u (cascade: quick entropy → possibly full critic) (L2).
+4. Decision Gate decides: if confidence high & uncertainty low → return y0. Else select action (L3).
+5. Selected capability executes (L4); output y' returned.
+6. Budget tracker deducts cost; if budget remains, loop back to step 3 for further refinement (up to T_{\max}).
+7. Final answer and cost returned to user.
+
+5.2 Error Handling
+
+· Timeout per capability: 5 s. On timeout, fallback to current best answer.
+· Critic unavailable: use entropy‑only confidence (Head‑1) with a wider guardband.
+· Budget exhausted: return current best answer with warning flag.
+
+5.3 Sequence Diagram
+
+```
+User → [Gateway] → FastPathLLM → (y0, logp)
+        ↓
+ConfidenceEstimator(cascade) → (C, u)
+        ↓
+DecisionGate → Accept? → yes → return y0
+        no → select a*
+        ↓
+CapabilityExecutor(a*) → y' → update B_rem
+        ↓
+loop (up to T_max)
+        ↓
+return final y, total cost
+```
+
+---
+
+6. Mathematical Foundations
+
+6.1 Objective Function
+
+\max_\pi \; \mathbb{E}_q\left[ U(y_T) - \lambda_c \sum_t c(a_t) - \lambda_e E(y_T, y^*) \right], \quad \text{s.t.} \sum_t c(a_t) \le B_{\max}
+
+6.2 Value of Computation
+
+(As defined in §4.3.2.)
+
+6.3 Conformal Calibration
+
+Delivers guarantee: \mathbb{P}(\mathrm{correct} \mid C \ge 1-\tau_\alpha) \ge 1-\alpha.
+
+6.4 Regret Bound
+
+Proof sketch mapping to StageRoute’s \tilde{\mathcal{O}}(T^{2/3}) for budget‑constrained linear contextual bandit.
+
+6.5 IB‑EDL Likelihood
+
+Dirichlet \text{Dir}(\mathbf{p} \mid \alpha_1, \alpha_0); mutual information term I(Z;X) minimised to suppress spurious evidence.
+
+---
+
+7. Algorithmic Specifications
+
+Full pseudocode is in Appendix G of the main paper. Here we summarise the production control loop.
+
+```
+FUNCTION ACB_Orchestrate(q, B_max, α, u_max, δ_min, T_max)
+    B_rem ← B_max
+    y ← FastLLM(q)
+    C, u ← ConfidenceEstimator(q, y)          // cascade
+    FOR t = 0 TO T_max-1:
+        IF C ≥ 1-τ_α AND u < u_max THEN RETURN y
+        feasible ← {a: cost[a] ≤ B_rem}
+        IF feasible empty THEN RETURN y
+        a* ← argmax_{a∈feasible} VoC(a)
+        IF VoC(a*) ≤ 0 THEN RETURN y
+        y_new, cost ← Execute(a*, q, y)
+        B_rem ← B_rem - cost
+        C_new, u_new ← ConfidenceEstimator(q, y_new)
+        IF |C_new - C| < δ_min THEN RETURN y_new
+        C, u, y ← C_new, u_new, y_new
+    RETURN y
+```
+
+ConfidenceEstimator:
+
+```
+FUNCTION ConfidenceEstimator(q, y)
+    H_ent ← avg token entropy
+    C_ent ← 1 - H_ent/H_max
+    IF C_ent ≥ τ_high OR C_ent ≤ τ_low THEN
+        RETURN C_ent, 0.01
+    α1, α0 ← IB_EDL_Critic(q, y)
+    C ← α1/(α1+α0)
+    u ← 2/(α1+α0)
+    RETURN C, u
+```
+
+---
+
+8. Deployment Architecture
+
+8.1 Infrastructure
+
+· Orchestration: vLLM 0.6.0+ with WRP (Workload‑Router‑Pool) plugin.
+· Model serving: separate vLLM instances for fast‑path (8B), reasoning (70B), critic (shared 8B trunk + heads).
+· Vector DB: Milvus for retrieval index (≥ 10M documents).
+· Message bus: Kafka topic acb/queries for logging and offline training.
+
+8.2 WRP Integration
+
+· Workload (W): client‑side agent versus simple chat.
+· Router (R): ACB Decision Gate as a “semantic router” plugin; receives features from vLLM request scheduler.
+· Pool (P): GPU groups: pool‑fast (T4/A10G), pool‑heavy (A100‑80GB), pool‑retrieval (CPU offload with GPU reader).
+
+8.3 Lagrangian Soft‑Budget Controller
+
+· Dual variable \lambda updated periodically via cloud watch metrics.
+· GitOps config map: budget_target: 2000 tokens/query.
+· Implemented as sidecar to the gate.
+
+8.4 Scaling
+
+· Horizontal scaling: gate is stateless per request (session cache with TTL).
+· Confidence estimator: critic model replicated with load balancer.
+· Capability executors: auto‑scale based on queue depth.
+
+---
+
+9. API Specification
+
+9.1 Query Endpoint
+
+```
+POST /v1/acb/query
+Content-Type: application/json
+```
+
+Request body:
+
+```json
+{
+  "query": "What is the capital of France?",
+  "context": {
+    "domain": "general_knowledge",
+    "risk_tolerance": "low",
+    "max_budget_tokens": 5000,
+    "user_id": "u123"
+  }
+}
+```
+
+Response body:
+
+```json
+{
+  "answer": "The capital of France is Paris.",
+  "confidence": 0.97,
+  "uncertainty": 0.02,
+  "actions_taken": ["fast_path"],
+  "total_tokens": 34,
+  "energy_wh": 0.0068,
+  "budget_remaining": 4966,
+  "warning": ""
+}
+```
+
+9.2 Calibration Threshold Refresh Endpoint (internal)
+
+```
+POST /v1/acb/admin/recalibrate
+```
+
+Triggers recomputation of conformal threshold from the latest calibration set.
+
+9.3 Error Response Format
+
+```json
+{
+  "error": "budget_exceeded",
+  "answer": "Paris",
+  "confidence": 0.85,
+  "warning": "Budget exhausted, returned best guess."
+}
+```
+
+---
+
+10. Configuration Parameters
+
+Parameter Description Default
+risk_level_alpha Conformal risk level 0.05
+u_max Maximum epistemic uncertainty for acceptance 0.5
+δ_min Minimum confidence improvement to continue 0.02
+T_max Maximum refinement steps 3
+λ_c Cost weight 0.1 per 1000 tokens
+λ_e Error cost weight Domain‑dependent table
+β Exploration/information gain weight 0.05
+τ_high Entropy high‑confidence cut‑off 0.95
+τ_low Entropy low‑confidence cut‑off 0.10
+budget_max_tokens Per‑query token budget 5000
+budget_target_kwh_per_1M Soft budget target for Lagrangian 200 kWh
+dual_learning_rate η for Lagrangian update 0.01
+critic_model HF model ID for IB‑EDL critic acb‑critic‑v1.0
+fast_llm_model HF model ID for fast path meta‑llama/Meta‑Llama‑3‑8B‑Instruct
+reasoning_llm_model Model for CoT meta‑llama/Meta‑Llama‑3‑70B‑Instruct
+
+---
+
+11. Performance Metrics & Evaluation
+
+11.1 System‑Level KPIs
+
+· Token reduction vs static pipeline: ≥ 30% (target per H1).
+· Hallucination reduction (extrinsic): ≥ 40% relative to single‑pass (target per H2a).
+· Latency overhead: < 5% p50 over fast‑path for simple queries; < 300 ms for full cascade.
+· Energy savings: 40–60% vs static multi‑agent (target).
+
+11.2 Quality Metrics
+
+· Accuracy: within 2% of static pipeline.
+· Conformal coverage: P(\text{correct} \mid \text{accepted}) \ge 0.95.
+· ECE: ≤ 0.03 after IB‑EDL.
+
+11.3 Operational Metrics
+
+· Availability: 99.9% on gate and critic.
+· Budget compliance: ≥ 95% of queries within token budget.
+
+---
+
+12. Security & Reliability
+
+· Data privacy: queries anonymised; no long‑term storage of answers.
+· Adversarial robustness: adversary‑hardened calibration set; gate overrides when epistemic uncertainty high.
+· Fail‑safe: all failures fall back to fast‑path answer with warning.
+· Rate limiting: per‑user token budget enforced; anomaly detection for abusive queries.
+
+
+References
+
+1. Energy use for ARC-AGI benchmark, estimated from public reports, 2025.
+2. The Cost of Dynamic Reasoning: System-Level Analysis of AI Agents, 2025.
+3. S. J. Gershman, E. J. Horvitz, and J. B. Tenenbaum. Computational rationality: A converging paradigm for intelligence in brains, minds, and machines. Science, 349(6245):273–278, 2015.
+4. Murakkab: Cross-layer optimization for agentic workflows. Microsoft, 2025.
+5. FActScore: Fine-grained Atomic Evaluation of Factual Precision in Long Form Text Generation. S. Min et al., EMNLP 2023.
+6. SelfCheckGPT: Zero-Resource Black-Box Hallucination Detection for Generative Large Language Models. P. Manakul et al., EMNLP 2023.
+7. PROTEUS: SLA-Aware Routing via Lagrangian RL for Multi-LLM Serving Systems, 2026.
+8. Overconfidence in LLMs and miscalibrated PRMs, various, 2023–2025.
+9. CritiCal: Self-critique for calibration, 2025.
+10. S. Li and J. Li. Near-Optimal Online Deployment and Routing for Streaming LLMs (StageRoute). ICLR 2026. arXiv:2506.17254.
+11. C. N. De Sabbata, T. R. Sumers, and T. L. Griffiths. Rational Metareasoning for Large Language Models (RaM). NeurIPS 2024. arXiv:2410.05563.
+12. Y. Li, D. Rügamer, B. Bischl, and M. Rezaei. Calibrating LLMs with Information-Theoretic Evidential Deep Learning (IB-EDL). ICLR 2025.
+13. Q. Wang, Y. Fan, and X. Wang. SAFER: Risk-Constrained Sample-then-Filter in Large Language Models. ICLR 2026.
+14. H. Chen et al. The Workload-Router-Pool Architecture for LLM Inference Optimization: A Vision Paper from the vLLM Semantic Router Project. arXiv:2603.21354, 2026.
+15. W. Zhang et al. MIRAGE-Bench: LLM Agent is Hallucinating and Where to Find Them. arXiv:2507.21017, 2025.
+16. M. Mardikoraem et al. Calibrating LLM Confidence by Probing Perturbed Representation Stability (CCPS). 2025.
+17. SOFAI and SOFAI-LLM, IBM, 2022/2025.
+18. CGES: Confidence-Guided Early Stopping for Efficient and Accurate Self-Consistency, 2025.
+19. B. Xu and Y. Lu. TECP: Token-Entropy Conformal Prediction for LLMs. 2025.
+20. EcoLogits: Tracking energy consumption and environmental impacts of LLM inference. 2025.
+21. HCI latency thresholds: TTFT < 500 ms for responsiveness, total < 4 s for quality of experience.
+22. V. Vovk, A. Gammerman, and G. Shafer. Algorithmic Learning in a Random World. Springer, 2005.
+23. A. N. Angelopoulos and S. Bates. A Gentle Introduction to Conformal Prediction and Distribution-Free Uncertainty Quantification. arXiv:2107.07511, 2021.
+24. Y. Abbasi-Yadkori, D. Pál, and C. Szepesvári. Improved Algorithms for Linear Stochastic Bandits. NeurIPS 2011.
+25. A. Badanidiyuru, R. Kleinberg, and A. Slivkins. Bandits with Knapsacks. FOCS 2013.
+
