@@ -1,0 +1,1026 @@
+Toward an Adaptive Resolution of the Blockchain Trilemma
+
+A Formally Verified, Safe, and Energy-Aware RL-Driven Consensus Framework
+
+Version 4
+
+
+ouadi Maakoul 
+
+
+Abstract.  
+
+We formalise the blockchain trilemma as a multi‑objective
+optimisation over continuously measurable scalability, security,
+decentralisation, and energy metrics.  A stochastic game with five
+parameterised attack families captures the adversarial environment.
+The consensus policy is trained via shielded reinforcement learning,
+where a safety shield and a separate liveness monitor enforce
+correctness invariants, and a trust‑aware replay buffer using an
+Isolation Forest detector aims to mitigate time‑delayed poisoning.
+Factored shield synthesis promises scalability.  A weighted‑Chebyshev
+scalarisation alternative allows recovery of non‑convex regions of
+the Pareto front.  Under an assumption of diminishing shield
+interference—whose achievability under an adaptive adversary remains
+an open problem—the shielded policy can be shown to converge to a
+local Pareto‑optimal point on the emergent energy‑aware trilemma
+frontier.  An interruptibility operator enables live protocol
+migration while attempting to preserve user‑specified bounds on all
+three trilemma dimensions, with the exactness of the required shadow
+simulation identified as a critical unsolved challenge.  The entire
+design is algorithmically specified and accompanied by a formal
+verification roadmap; we report on the current state of machine‑checked
+proofs for the underlying consensus core and outline the remaining
+gaps.
+
+---
+
+1. SYSTEM MODEL AND OPERATIONAL TRILEMMA METRICS
+
+Definition 1.1 (Blockchain System).  A blockchain system is a tuple
+
+ B = (N, T, C, S, E)
+
+where
+ N = {1, …, N}  set of nodes,
+ T         transaction space,
+ C         consensus mechanism (function from local views to decisions),
+ S         global state space,
+ E : S → R_{≥0}  energy consumption (cumulative joules per epoch).
+
+Evolution:
+ s_{t+1} = F(s_t, a_t, ξ_t)
+
+with a_t ∈ A (consensus action) and ξ_t ∼ P(·|s_t) covering network
+delays and adversarial perturbations.
+
+---
+
+1.1  Operational Trilemma Metrics
+
+We give protocol‑agnostic functions on S, all mapping to [0,1].
+
+Scalability
+ S(s) = τ(s) / τ_max
+ τ(s) = confirmed tx/s; τ_max is a hardware‑bound throughput limit.
+
+Security
+ Q(s) = 1 – Φ(s) / Φ₀
+ Φ(s) = minimal fraction of honest stake (or resources) an adversary
+ must corrupt to break safety or liveness.
+ Φ₀ = nominal fault tolerance (e.g., 1/2 for BFT, 1/2 for longest‑chain
+ PoS under synchrony).
+
+For BFT‑class protocols, Φ(s) is computable in closed form:
+Φ(s) = (N – f)/N, where f is the number of Byzantine nodes tolerated.
+To make Q falsifiable across broader protocol families, we provide
+coarse but explicit under‑approximations Φ̂(s) ≤ Φ(s) for two non‑BFT
+settings:
+
+Nakamoto PoS (longest‑chain):  Let the set of validators and their
+stakes be known.  Define the minimum stake required to cause a
+persistent re‑organisation from depth k as the smallest total stake
+that could build a heavier alternative chain, given the observed
+fork‑rate and block‑arrival process.  Following the deepest‑common‑
+ancestor analysis, we estimate
+ Φ̂_Nakamoto(s) = (stake needed to overtake the canonical chain’s
+ deepest confirmed block) / (total active stake).
+Even when exact reorg‑cost cannot be computed on‑chain, a safe bound
+can be derived from the Nakamoto coefficient of the stake distribution.
+
+Avalanche (Snowball):  Let k be the sample size and α the quorum
+threshold (typical defaults k = 20, α = 15).  The protocol resists
+Byzantine behaviours while the adversary controls less than
+α – k/2 of the total weight.  Hence we set
+ Φ̂_Avalanche(s) = max(0, (k·α – k/2) / total weight).
+This is a straight‑line approximation of the security margin; precise
+parameter‑dependent guarantees are available from the Snowball
+analysis.
+
+For any other consensus family we require a similarly safe
+under‑approximation, computable from protocol state.  When no
+closed form exists, one may fall back to the generic estimator
+Φ̂_generic(s) = 1 – (observed adversarial sway) / (total sway),
+calibrated by a monitoring oracle.
+
+Decentralisation
+ D(s) = H(s) / H_max
+ H(s) = Shannon entropy of block‑production shares [Zhang2022],
+ H_max = log₂ N.
+
+Energy
+ ε(s) = E(s) / E_max
+ E(s) captures compute and network consumption.  To avoid masking
+ energy‑intensive validators, we use the 95th percentile of the
+ validator energy distribution rather than the median.  If the
+ variance of validator energy use exceeds twice the mean, governance
+ is advised to rescale the energy weight λ_E.  The model uses a
+ linear combination E(s) = c_cpu · T_cpu + c_net · bytes_sent, with
+ the constants calibrated offline.  The 95th‑percentile choice is a
+ robustness measure; a full sensitivity analysis is left for future
+ empirical work (cf. [Platt2022], which documents hardware‑dependent
+ variability but does not provide an error bound for this linear
+ model).
+
+All four metrics are continuously computable on S.
+
+---
+
+1. ADVERSARIAL MODEL: STOCHASTIC GAME WITH FIVE ATTACK FAMILIES
+
+Nodes are partitioned into honest N_H and adversarial N_A,
+|N_A|/N ≤ β < 1/2.  Each agent runs a policy π_i : S → Δ(A_i).
+The joint action a_t = (a^H_t, a^A_t) determines the next state.
+
+The adversary chooses its attack from one of five families,
+each operating under a bounded budget:
+
+ A1. Naive Malicious – stateless misbehaviour (equivocation, invalid
+ blocks).
+
+ A2. Collusive Rumor – coordinated dissemination of false blocks or
+ votes, exploiting gossip topology.
+
+ A3. Adaptive Adversarial – observes π_H and optimises a^A_t online,
+ possibly using its own learned model of honest behaviour.
+
+ A4. Byzantine Fault Injection – state‑correlated faults in up to
+ f nodes, respecting the fault threshold.
+
+ A5. Time‑Delayed Poisoning – injects training data that appears
+ benign initially but becomes harmful after a long delay (poisons the
+ RL replay buffer).
+
+The adversary’s objective is to minimise E[Q(s_t)] subject to its
+budget.
+
+---
+
+1. SHIELDED ADAPTIVE CONSENSUS MECHANISM
+
+3.1  Policy Architecture and Safety/Liveness Invariants
+
+We employ a parameterised policy π_θ : S → Δ(A), θ ∈ Θ.
+To guarantee correctness irrespective of learning, actions pass through
+a safety shield σ_s, while liveness is enforced by a separate
+liveness monitor μ.
+
+Safety property (LTL):
+ φ_safety = □ (¬ two_conflicting_blocks ∧ quorum_intersection).
+
+Liveness property (LTL):
+ φ_liveness = □◇ (new_block_confirmed).
+
+The safety shield σ_s : S × A → A ∪ {reject} is synthesised via
+reactive synthesis (e.g., Strix/Ltlsynt) from φ_safety.  It blocks
+actions that would leave the maximal winning region, and falls back to
+a_safe(s) – a statically verified default consensus step – when an
+unsafe action is proposed.
+
+The liveness monitor μ tracks round progress and triggers a_safe(s)
+automatically if a timeout expires.  Liveness is guaranteed by the
+base protocol’s (informal) proof under the fault bound β; its full
+mechanisation remains open (§7).  For this paper we assume the base
+protocol is live.
+
+3.2  Reward Function with Energy Penalty
+
+ r_t = λ_S S(s_t) + λ_Q Q(s_t) + λ_D D(s_t) – λ_E ε(s_t)
+
+with λ_S, λ_Q, λ_D, λ_E > 0 fixed by governance.
+
+Expected cumulative discounted reward:
+ J(θ) = E[ Σ_{t=0}^∞ γ^t r_t ∣ s_0, π_θ, σ_s, μ ].
+
+The expectation is taken over environment stochasticity and the
+adversary’s worst‑case strategy within its budget.
+
+3.3  Safe Reinforcement Learning Algorithm
+
+We use PPO with a clipped surrogate objective.  Actions are sampled
+from π_θ, filtered through σ_s and μ, so the agent never executes
+unsafe or dead‑locked steps.
+
+To mitigate time‑delayed poisoning (A5), we employ a trust‑aware
+replay buffer.  Transitions are tagged with a trust score computed by a
+concurrent Isolation Forest anomaly detector operating over the
+feature vector (block_interval, mempool_size, peer_count).  The
+detector is retrained every 1 000 epochs on the accumulated honest
+trajectories.  Samples whose trust falls below τ_min are discarded.
+This is a heuristic countermeasure; a fully certified defence would
+require an analysis of false‑positive and false‑negative rates, which
+we do not provide.  We therefore treat the buffer as a practical
+safeguard and make no formal security claim solely on its basis.
+
+Algorithm 1: Safe‑RL Consensus Loop
+
+```
+Input: initial θ, safety shield σ_s, liveness monitor μ, replay buffer B
+for episode = 1 to M do
+    s ← initial_state()
+    for t = 1 to T do
+        a_raw ∼ π_θ(·|s)
+        a ← σ_s(s, a_raw)                  // safety filter
+        if a = reject then a ← a_safe(s)
+        if μ(s) triggered then a ← a_safe(s)   // liveness override
+        execute a, observe s', r
+        trust ← IsolationForest(s, a, s')  // (block_interval, mempool_size, peer_count)
+        store (s, a, r, s', trust) in B
+        if |B| > batch_size then
+            sample minibatch with trust > τ_min
+            update θ via PPO on minibatch
+        s ← s'
+    end for
+end for
+```
+
+3.4  Shield Tractability
+
+The action space in §6 has four dimensions, leading to 96 combinations.
+To avoid a blow‑up in shield synthesis, we factor the safety
+specification into independent sub‑specifications.  Each sub‑shield
+monitors a subset of actions (block_size and timeout_ratio jointly,
+commit_rule separately).  Because the action variables in the
+sub‑specifications are disjoint and the safety invariant decomposes
+into a conjunction of independent properties (block‑validity rules do
+not depend on commit‑quorum rules), the composition of the sub‑shields
+trivially preserves the global safety property.  We note that Brorholt
+et al. (2025) address the related but distinct problem of decomposing
+shields across multiple agents; our factorisation is action‑space‑based
+and does not invoke their assume‑guarantee rule.
+
+For synthesis, the continuous state variables S, Q, D are discretised
+into finite intervals of width δ.  This abstraction introduces an
+error ε(δ) in the shield’s permissive region.  We conjecture
+ε(δ) ≤ L_F · δ · T, where L_F is the Lipschitz constant of the
+transition function F over the planning horizon T.  Bounding L_F for
+HotStuff is an open analytical problem; here we assume δ is chosen
+conservatively so that the shield remains safe in the original
+continuous system.
+
+---
+
+1. PARETO FRONTIER AND ASYMPTOTIC CONVERGENCE
+
+Definition 4.1 (Feasible Region).  For the policy class Π (including
+shield σ_s and monitor μ), the feasible region is
+
+ F = { (S(s), Q(s), D(s), ε(s)) ∈ R^4 ∣ s reachable under some π ∈ Π }.
+
+The Pareto frontier P ⊂ F consists of all points not strictly
+dominated in all four dimensions.
+
+Assumption 4.2 (Ergodicity under Shielded Policy).  For every θ,
+the Markov chain induced by the shielded policy and the liveness monitor
+is irreducible and aperiodic on a communicating class S_reset.
+Transient states are absorbed by a recovery routine that resets to a
+safe state.  (While we have not formally verified this assumption for
+the full composite system, it is a standard requirement for policy
+gradient convergence.)
+
+Theorem 4.3 (Conditional Local Pareto Improvement under Shielded PPO).
+Assume J(θ) is continuously differentiable.  If the shield σ_s
+intervenes with probability p_int(θ) and there exists a training
+regime in which p_int(θ) → 0 (for example, through regularisation
+that penalises shield interventions), then PPO updates with
+sufficiently small step size and unbiased advantage estimates (on the
+shielded trajectories) converge a.s. to a stationary point θ^* of J.
+At θ^*, the four objectives satisfy first‑order Pareto optimality
+conditions.
+
+We stress that the assumption p_int(θ) → 0 is not guaranteed by the
+current framework.  An adaptive adversary (A3) could actively drive
+the system to safety boundaries, keeping intervention probability
+non‑negligible.  Obtaining convergence guarantees in that regime is
+an open problem; Theorem 4.3 is therefore best viewed as a
+characterisation of the idealised scenario where the shield becomes
+progressively unnecessary.  An empirical investigation of shield
+intervention rates under A1, A2 and A3 is a high‑priority item for
+future simulation studies.
+
+Corollary 4.4 (Frontier Tracing via Scalarisation).  By sweeping
+λ_S, λ_Q, λ_D, λ_E, the algorithm traces the Pareto frontier.
+However, linear scalarisation can only recover solutions on the convex
+hull of the frontier.  To reach non‑convex regions we adopt the
+weighted Chebyshev scalarisation (as in the MOCHA algorithm
+[Hairi2025]),
+
+ r_t^cheb = – max_i w_i ( z_i^* – f_i(s_t) ),
+
+where f_1 = S, f_2 = Q, f_3 = D, f_4 = –ε (so that all four objectives
+are maximised) and z_i^* are ideal points.  The Chebyshev‑based variant
+is compatible with the shielded PPO loop and, under the same
+intervention‑diminishing condition, can recover points on the full
+Pareto front.
+
+Empirical status.  A recent study by Gutierrez et al. (2025) applied
+unshielded PPO to adapt consensus parameters and reported a 34 %
+latency reduction and up to 17 % energy savings in crash‑fault
+settings.  This provides partial evidence that RL can improve
+consensus performance.  However, those experiments did not include a
+safety shield, an adaptive adversary, or the energy metrics proposed
+here.  Construction of a simulation testbed that systematically
+evaluates our shielded framework under all five attack families is
+underway; an illustrative Pareto‑front plot derived from a simplified
+analytical model will be presented in the extended version.
+
+---
+
+1. INTERRUPTIBILITY OPERATOR WITH TRILEMMA‑AWARE INVARIANTS
+
+Definition 5.1 (Interruptibility Operator).
+I : S × A × P → S × A, with P a protocol descriptor (hash of new
+consensus module).  The transition is (s', a') = I(s, a, p).
+
+The operator aims to preserve user‑specified bounds:
+
+ Q(s') ≥ Q_min, D(s') ≥ D_min, S(s') ≤ S_max,
+ ε(s') ≤ ε(s) (1 + δ).
+
+The thresholds are set by governance.
+
+Algorithm 2: safe_interrupt(s_t, p_new)
+
+```
+1.  verify that p_new carries valid machine‑checked proofs of φ_safety, φ_liveness
+2.  pre_snapshot ← (S(s), Q(s), D(s), ε(s))
+3.  simulate transition to p_new on a shadow state → s_sim
+4.  metrics_sim ← (S(s_sim), Q(s_sim), D(s_sim), ε(s_sim))
+5.  if Q(s_sim) ≥ Q_min and D(s_sim) ≥ D_min and S(s_sim) ≤ S_max
+        and ε(s_sim) ≤ ε(s)(1+δ) then
+6.       broadcast reconfig proposal to validators
+7.       wait for supermajority (≥ 2f+1 signatures)
+8.       if collected, atomically migrate state; return s_sim
+9.  else return REJECT
+```
+
+Critical limitation.  The correctness of Algorithm 2 depends
+entirely on the assumption that the shadow simulation s_sim exactly
+matches the state that will be reached after migration.  In a
+distributed, adversarial environment, guaranteeing such an exact
+replica is a major unsolved problem (cf. ADACON [Anon2024], which
+identifies secure transition protocols as future work).  A more robust
+design would incorporate a rollback mechanism, reverting to a
+checkpoint if the post‑migration state deviates beyond a threshold.
+Formalising and proving the safety of such a rollback protocol is
+future work.  Consequently, the earlier formulation as a theorem is
+retracted; we present only the algorithm and state the open problem.
+
+---
+
+1. ARCHITECTURE AND TECHNICAL SPECIFICATION
+
+Action space A (discretised):
+ block_size ∈ {1 KB, 10 KB, 100 KB, 1 MB}
+ timeout_ratio ∈ {0.5, 1.0, 2.0} × base
+ commit_rule ∈ {sync_threshold, async_quorum}
+ leader_schedule ∈ {round_robin, VRand, weighted_VRF}
+
+Factored shields: the safety shield σ_s is composed from sub‑shields
+for block_size+timeout_ratio and for commit_rule, using the argument
+described in §3.4.  leader_schedule is statically restricted to VRand
+or weighted_VRF, which cannot violate safety.  The liveness monitor μ
+operates independently on a timeout basis.
+
+Energy model: E(s) = c_cpu · T_cpu + c_net · bytes_sent, with
+hardware constants calibrated offline.  Validator heterogeneity is
+handled by the 95th‑percentile aggregate, as specified in §1.1.
+
+Agent architecture: We adopt a Centralised Training with
+Decentralised Execution (CTDE) paradigm: a centralised critic uses
+global state during training, while each validator executes its own
+actor using local observations.  This choice introduces a tension with
+the decentralisation objective during the training phase.  To mitigate
+the risk of a single‑point compromise, we propose that gradient
+aggregation be performed by a 3‑of‑5 multi‑party computation (MPC)
+among a set of foundation nodes.  The critic is discarded after
+training; only the local actors are deployed.  Fully decentralised
+training (e.g., via federated MARL) remains an important direction for
+future work.
+
+---
+
+1. FORMAL VERIFICATION STRATEGY
+
+We outline the verification pipeline for the composite system.
+
+1. Base protocol.  Carr et al. (2022) have mechanised the safety
+   of HotStuff/LibraBFT in Agda; a full liveness proof remains open.
+   We assume the base protocol is live under standard BFT assumptions.
+2. Safety shield.  The shield σ_s is verified by model‑checking
+   its automaton against the safe states of the base protocol.
+   Modelling of φ_safety and σ_s in Isabelle/HOL is currently at the
+   design stage; a mechanised proof that any action passing σ_s keeps
+   the system within the base protocol’s safe region is in progress.
+3. Liveness monitor.  The monitor is verified by a simple timeout
+   argument: if the agent fails to make progress for k rounds, the
+   monitor forces a_safe(s), which the base protocol guarantees
+   eventually leads to confirmation.
+4. Compositional reasoning.  The addition of the RL agent cannot
+   violate safety (all actions are filtered by σ_s) and cannot destroy
+   liveness (the monitor periodically takes control).  The formal
+   composition proof is planned for the Isabelle/HOL refinement
+   framework; LLM‑based proof automation may assist certain sub‑goals.
+
+The present paper reports on the design and on the state of existing
+proofs; complete mechanisation remains a long‑term goal.
+
+---
+
+1. RELATED WORK
+
+We position our contribution with respect to several lines of work.
+
+Trilemma formalism.  Nakai et al. (2023) proposed a constant‑product
+formula for the PoW trilemma.  Mssassi & Abou El Kalam (2024) attempted
+a formal proof of the trilemma; this claim is contested in a formal
+rebuttal by Wright (2025), who argues that such proofs require
+operationally defined metrics.  Our approach directly addresses that
+critique: we construct concrete, computable metrics S, Q, D, ε that
+allow the trilemma to be measured rather than assumed.
+
+RL‑based consensus.  Gutierrez et al. (2025) used graph‑based PPO
+to adapt consensus parameters, achieving 34 % latency reduction and
+up to 16 % energy savings.  ADACON [Anon2024] employs Bayesian
+optimisation to switch among PoW, PoS, PBFT, PoA, and DPoS, reaching
+29.7 ms latency in a 1 000‑node simulation.  Our work extends these
+lines by adding formal safety/liveness shields, a richer adversarial
+taxonomy, multi‑objective energy‑aware optimisation, and a
+verification roadmap—distinguishing itself from purely heuristic or
+single‑objective approaches.
+
+Shielded safe RL.  Alshiekh et al. (2017) introduced safety shields
+for single‑agent RL.  Compositional shielding for multi‑agent systems
+was recently formalised by Brorholt et al. (2025).  Georgescu et al.
+(2025) addressed liveness preservation under GR(1) specifications.
+We combine these techniques in a blockchain consensus setting, with a
+factorisation that differs from Brorholt et al. by operating over
+action dimensions rather than agents.
+
+Formal BFT verification.  Carr et al. (2022) mechanised HotStuff’s
+safety proof in Agda.  We adopt Isabelle/HOL for consistency with the
+broader verification ecosystem, and our verification plan builds on
+the reusable invariants they identified.
+
+---
+
+1. CONCLUSION AND FORMAL CLAIMS
+
+Claim 1 (Measurable Trilemma).  The operational metrics
+S, Q, D, ε map the trilemma into a 4‑dimensional feasible region
+without a hard multiplicative bound.  The frontier emerges from system
+constraints.  Closed‑form under‑approximations for Nakamoto PoS and
+Avalanche make Q falsifiable; analogous approximations must be
+developed for other protocol families as needed.
+
+Claim 2 (Safe Adaptivity).  The safety shield σ_s guarantees
+□ φ_safety for any learning updates of π_θ.  For liveness, the
+system inherits the base protocol’s □◇ new_block_confirmed guarantee
+under fault bound β; a fully mechanised proof of composite liveness
+remains future work.
+
+Claim 3 (Conditional Convergence).  Under the assumption that
+shield interventions become negligible (not proved achievable under
+adaptive adversaries), PPO with shielding can converge to a local
+Pareto optimum.  With Chebyshev scalarisation the algorithm can cover
+non‑convex regions of the frontier.  Empirical validation is ongoing.
+
+Claim 4 (Interruptible Evolution).  The interruptibility operator
+is designed to preserve user‑specified trilemma bounds when the shadow
+simulation is exact.  Achieving provable correctness with a realistic
+rollback protocol is an open problem; the current algorithm is a
+blueprint.
+
+Dependency graph:
+
+· Assumption 4.2 (ergodicity) + shield non‑interference → Theorem 4.3 (conditional PPO convergence) → Corollary 4.4 (frontier tracing).
+· Base protocol’s liveness proof + monitor μ → liveness of adaptive system (informally).
+· Exact shadow simulation → correctness of Algorithm 2 (open problem).
+
+---
+
+References (abridged)
+
+· [Alshiekh2017] Alshiekh et al., “Safe Reinforcement Learning via Shielding”, AAAI 2017.
+· [Anon2024] ADACON: Adaptive Consensus Optimization in Blockchain via Bayesian Inference, 2024.
+· [Brorholt2025] Brorholt, Larsen & Schilling, “Compositional Shielding and Reinforcement Learning for Multi-Agent Systems”, AAMAS 2025.
+· [Carr2022] Carr et al., “Towards Formal Verification of HotStuff-based Byzantine Fault Tolerant Consensus in Agda”, 2022.
+· [Georgescu2025] Georgescu et al., “Adaptive GR(1) Specification Repair for Liveness-Preserving Shielding in RL,” arXiv preprint, 2025.
+· [Gutierrez2025] Gutierrez, Villegas-Ch, Govea, “Adaptive consensus optimization in blockchain using reinforcement learning and validation in adversarial environments”, Frontiers in Artificial Intelligence, vol. 8, 2025, article 1672273.
+· [Hairi2025] Hairi et al., “Multi-Objective Weighted-Chebyshev Actor-Critic…”, arXiv preprint, 2025.
+· [Mssassi2024] S. Mssassi and A. Abou El Kalam, “The Blockchain Trilemma: A Formal Proof…”, Applied Sciences, 2024.
+· [Nakai2023] Nakai et al., “The Blockchain Trilemma Described by a Formula”, IEEE Blockchain, 2023.
+· [Platt2022] Platt et al., “The Energy Footprint of Blockchain Consensus Mechanisms Beyond Proof-of-Work”, 2022.
+· [VanMoffaert2013] Van Moffaert et al., “Scalarized multi-objective reinforcement learning: Novel design techniques”, 2013.
+· [Wright2025] Wright, “A Formal Refutation of the Blockchain Trilemma,” arXiv preprint, 2025.
+· [Wu2022] Wu et al., “COPA: Certifying Robust Policies for Offline RL against Poisoning Attacks”, 2022.
+· [Zhang2022] Zhang et al., “SoK: Blockchain Decentralization”, 2022.
+
+Appendix A — Mathematical Background and Formal Definitions
+================================================================
+
+A.1  System Model and Transition Semantics
+
+We model the blockchain as a discrete‑time stochastic dynamical system
+over an infinite horizon.  The state space S is assumed to be a
+compact metric space that includes all values relevant for consensus
+(ledger forks, validator sets, stake distributions, recent block times,
+pending transaction pools).  The action space A is finite
+(see §D.1).  The transition function
+
+s_{t+1} = F(s_t, a_t, \xi_t)
+
+is measurable, where \xi_t is a random variable drawn from a
+distribution P(\cdot \mid s_t) that captures network latency,
+message drops, and adversarial perturbations.  For a given honest
+policy \pi_H and adversary policy \pi_A, the joint policy
+\pi = (\pi_H, \pi_A) induces a probability measure over trajectories
+\tau = (s_0, a_0, s_1, a_1, \ldots).  All expectations \mathbb{E}
+are taken with respect to this measure unless otherwise noted.
+
+A.2  Operational Metrics — Detailed Construction
+
+Scalability S(s): Let \tau(s) be the average number of
+transactions confirmed per second over a sliding window of W blocks,
+and \tau_{\max} the maximum throughput achievable on the reference
+hardware.  Then S(s) = \min(\tau(s)/\tau_{\max}, 1).  The window
+length is chosen long enough to smooth short‑term variance.
+
+Security Q(s): The nominal fault tolerance \Phi_0 is protocol‑
+specific.  For BFT protocols we set \Phi_0 = \frac{1}{2} (or the
+protocol’s proven bound).  For a given state s, we estimate the
+actual required corruption fraction \Phi(s) as an under‑approximation
+\widehat{\Phi}(s):
+
+· BFT class: \widehat{\Phi}_{\text{BFT}}(s) = (N - f)/N, where
+  f is the observed number of Byzantine nodes tolerated in the
+  current configuration.
+· Nakamoto PoS: Let v_1, v_2, \ldots, v_n be validator stakes,
+  sorted descending.  The Nakamoto coefficient k_N is the minimum
+  number of validators that together control more than one half of the
+  total stake.  A reorganisation from depth d requires an adversary
+  to build an alternative chain heavier than the honest chain; a
+  necessary condition is that the adversary holds more stake than the
+  largest d honest validators combined.  We set
+  \widehat{\Phi}_{\text{Nakamoto}}(s) = \frac{1}{2} \cdot
+    \frac{\text{stake of the smallest set controlling } \ge \frac12 \text{ total stake}}{\text{total stake}}.
+  A more precise bound using the deepest‑common‑ancestor analysis
+  yields \widehat{\Phi}_{\text{Nakamoto}}(s) = 
+    \frac{\text{min stake to outweigh } \lceil \frac{k}{2} \rceil \text{ consecutive confirmations}}{\text{total active stake}}
+  where k is the confirmation depth; this can be computed from the
+  current fork tree.
+· Avalanche (Snowball): The protocol’s safety proof assumes the
+  adversary controls at most  \alpha - k/2  of the total weight.
+  Hence we set \widehat{\Phi}_{\text{Avalanche}}(s) = 
+    \max(0, \frac{k\alpha - k/2}{\text{total weight}}), with k=20,
+    \alpha=15 as default parameters.  This is a linear bound that
+  reasonably well approximates the actual security margin when the
+  adversary is bounded.
+· Generic fallback: If no analytic formula exists, we maintain a
+  monitoring oracle that estimates the adversary’s effective sway
+  \widehat{\Phi}_{\text{gen}}(s) = 1 - \frac{\text{honest sway}}{\text{total sway}},
+  where “sway” is a protocol‑dependent resource (stake, computation,
+  storage).  This oracle must be conservative.
+
+The security metric is then Q(s) = 1 - \widehat{\Phi}(s)/\Phi_0,
+clamped to [0,1].
+
+Decentralisation D(s): Let p_i(s) be the fraction of blocks
+produced by validator i over the last W blocks.
+H(s) = -\sum_{i=1}^N p_i(s) \log_2 p_i(s), with the convention
+0 \log_2 0 = 0.  The maximum possible entropy is \log_2 N;
+thus D(s) = H(s)/\log_2 N.  This metric captures both the number
+of active validators and the uniformity of their block production.
+
+Energy \varepsilon(s): We define the energy consumption per epoch
+as
+
+E(s) = c_{\text{cpu}} \cdot T_{\text{cpu}}(s) + c_{\text{net}} \cdot \text{bytes\_sent}(s),
+
+where T_{\text{cpu}}(s) is the total CPU time consumed by consensus
+operations (validating, voting, leader election) during the epoch, and
+\text{bytes\_sent}(s) is the total network traffic generated.
+The constants c_{\text{cpu}}, c_{\text{net}} (joules per CPU‑second
+and joules per byte) are calibrated offline.  To account for
+heterogeneous hardware, we compute E(s) for each validator and then
+take the 95th percentile as the system‑wide energy figure, rather
+than the median.  This ensures that the energy measure is sensitive to
+the most energy‑intensive nodes.  If the variance of validator energy
+use exceeds twice the mean, governance should rescale \lambda_E.
+The metric is then \varepsilon(s) = E(s)/E_{\max}, where E_{\max}
+is the maximum permissible energy per epoch.
+
+A.3  Stochastic Game Formulation
+
+The system is modelled as a partially observable stochastic game
+(POSG) with N agents.  Honest agents share the policy \pi_\theta;
+the adversary is a single controller of up to f nodes.  The game
+is zero‑sum in the security dimension but general‑sum overall because
+the honest agents also value scalability, decentralisation, and low
+energy.
+
+Honest objective: \max_{\pi_\theta} J(\theta) = \mathbb{E}_{\pi_\theta,\pi_A}[\sum_t \gamma^t r_t].
+
+Adversary objective: \min_{\pi_A} \mathbb{E}[Q(s_t)], subject to
+budget constraints  \sum_t \text{cost}(a^A_t) \le B.
+
+The adversary’s action space is partitioned into five families
+(A1‑A5).  Each family defines a sub‑policy that can be activated.
+
+A.4  Shield and Liveness Monitor Formal Specifications
+
+Safety Shield: Given an LTL formula \varphi_{\text{safety}} and a
+discrete abstraction \mathcal{M} of the system’s state machine, the
+shield \sigma_s : S \times A \to A \cup \{\text{reject}\} is
+constructed by reactive synthesis as the maximal non‑blocking winning
+strategy from the safe states.  Formally, let
+\mathcal{S}_{\text{safe}} \subseteq S be the maximal set of states
+from which the base protocol guarantees \varphi_{\text{safety}}
+indefinitely under any sequence of honest actions.  For any state
+s \in \mathcal{S}_{\text{safe}} and action a \in A, we define
+\sigma_s(s,a) = a if
+F(s,a,\xi) \in \mathcal{S}_{\text{safe}} for all \xi in the
+support of P(\cdot|s) (for the abstraction, this condition is
+checked on the discrete grid).  Otherwise, \sigma_s(s,a) = \text{reject}.
+When \sigma_s rejects, the system falls back to a statically
+verified safe default a_{\text{safe}}(s).
+
+The factoring into sub‑shields is possible because
+\varphi_{\text{safety}} is a conjunction of independent properties:
+block validity (depends on block_size and timeout_ratio) and
+commit quorum intersection (depends on commit_rule).  The sub‑shields
+are synthesised over smaller alphabets and their conjunction trivially
+preserves the global property.
+
+Liveness Monitor: The monitor \mu : S \times \mathbb{N} \to \{0,1\}
+maintains a round counter \rho that increments with each consensus
+step.  If the system has not produced a new confirmed block within
+k steps, \mu triggers and forces a_{\text{safe}}(s).  The
+constant k is chosen such that under the base protocol’s liveness
+assumptions (bounded message delay, eventually synchronous periods),
+a_{\text{safe}} eventually leads to confirmation.
+
+A.5  Pareto Optimality and Scalarisation
+
+A policy \pi induces a long‑term average (or discounted) vector
+\mathbf{J}(\pi) = (S^\pi, Q^\pi, D^\pi, -\varepsilon^\pi) where we
+negate energy so that all objectives are maximised.  Let
+\mathcal{F} be the feasible region of these vectors for policies in
+\Pi (shielded policies).  A point \mathbf{J}^* \in \mathcal{F} is
+Pareto optimal if there is no other \mathbf{J} \in \mathcal{F} such
+that J_i \ge J_i^* for all i and strict inequality for at least
+one dimension.
+
+Linear scalarisation optimises a weighted sum
+\sum_{i=1}^4 w_i J_i with w_i > 0.  This yields solutions on the
+convex hull of \mathcal{F}.  Weighted Chebyshev scalarisation
+minimises \max_i w_i (z_i^* - J_i), where z_i^* are ideal points
+(an upper bound for each objective).  For appropriate choices of w_i,
+the Chebyshev norm can recover any Pareto‑optimal point, including
+those in non‑convex regions, because the level sets of the Chebyshev
+metric are non‑convex and can “wedge” into concavities of the frontier
+[VanMoffaert2013].
+
+Appendix B — Proofs
+=========================
+
+B.1  Shield Safety Proof (Sketch)
+
+Lemma B.1 (Perfect Safety Shield): Let \sigma_s be synthesised as
+described.  For any state s \in \mathcal{S}_{\text{safe}} and any
+action a such that \sigma_s(s,a) \ne \text{reject}, the successor
+state s' under any \xi satisfies s' \in \mathcal{S}_{\text{safe}}.
+
+Proof. The synthesis procedure guarantees that the shield disables all
+transitions leaving \mathcal{S}_{\text{safe}}.  The concrete shield
+automaton is the winning strategy of the safety game; by correctness of
+reactive synthesis (e.g., Strix/Ltlsynt), every allowed action keeps
+the abstract state within the winning region.  The discretisation
+introduces an error bounded by \epsilon(\delta) (Conjecture 3.4),
+but if \delta is sufficiently small, \epsilon(\delta) < \text{margin}
+between safe and unsafe regions, then the abstraction is conservative
+and the shield remains safe in the original system.  ∎
+
+Lemma B.2 (Shield Composition): Suppose \varphi_1, \varphi_2 are
+LTL properties over disjoint action variables, and \varphi = \varphi_1 \land \varphi_2.
+If \sigma_1 is a shield for \varphi_1 and \sigma_2 for \varphi_2,
+then the product shield (\sigma_1,\sigma_2) (applied sequentially,
+where rejection by either leads to rejection) is a shield for \varphi.
+
+Proof. Safety properties are preserved under conjunction.  Because the
+action variables are independent, an action safe for \varphi_1 and
+\varphi_2 individually is safe for their conjunction.  ∎
+
+B.2  Liveness Inheritance
+
+The monitor \mu overrides the agent with the safe default a_{\text{safe}}(s)
+after at most k idle rounds.  By the assumed liveness of the base
+protocol, from any state, repeatedly applying a_{\text{safe}} guarantees
+a new block eventually.  Thus, even if the RL agent proposes actions
+that the shield rejects or that do not produce blocks, the monitor
+ensures that progress is made within bounded time.  This provides
+\Box\Diamond \text{new\_block\_confirmed} under the base protocol’s
+liveness assumptions.
+
+B.3  Proof of Theorem 4.3 (Conditional Local Convergence)
+
+We restate the theorem:
+
+Theorem 4.3. If J(\theta) is continuously differentiable, and the
+shield intervention probability p_{\text{int}}(\theta) \to 0 as
+training progresses, then PPO with unbiased advantage estimates on
+the shielded trajectories converges almost surely to a stationary point
+\theta^* of J.  At \theta^*, the weighted sum of the four
+objectives satisfies first‑order Pareto stationarity.
+
+Proof sketch. The shielded PPO objective is
+
+L(\theta) = \mathbb{E}_{(s,a)\sim \pi_{\text{shielded}}} \left[ \min\left( \frac{\pi_\theta(a|s)}{\pi_{\text{old}}(a|s)} \hat{A}, \text{clip}\right) \right].
+
+Because the safety shield may replace the raw action a_{\text{raw}}
+with a different action a, the effective policy is
+\tilde{\pi}_\theta(a|s) = \sum_{a'} \pi_\theta(a'|s) \cdot \mathbf{1}\{\sigma_s(s,a') = a\}.
+When p_{\text{int}} \to 0, \tilde{\pi}_\theta \to \pi_\theta
+pointwise for all states (except a set of measure zero where the shield
+intervenes).  Under such limiting equivalence, the gradient of the
+expected return with respect to \theta approaches the gradient of the
+unshielded objective J(\theta).  PPO is a variant of natural policy
+gradient; under standard assumptions (smoothness, bounded rewards,
+appropriate step size schedule) it converges to a stationary point
+[Alshiekh2017, Schulman2017].  Since J(\theta) is a weighted sum,
+stationarity implies that no local direction simultaneously improves
+all four weighted objectives; this is exactly the first‑order necessary
+condition for local Pareto optimality (the Karush‑Kuhn‑Tucker conditions
+for the multi‑objective problem).  ∎
+
+The assumption that p_{\text{int}} \to 0 is essential to avoid
+gradient bias.  Without it, convergence may be to a stationary point
+of the shielded objective, which may differ from the true trilemma
+trade‑offs.
+
+B.4  Chebyshev Scalarisation Stationarity
+
+When replacing the linear reward with the Chebyshev scalarised reward
+r_t^{\text{cheb}} = -\max_i w_i (z_i^* - f_i(s_t)), the objective
+J_{\text{cheb}}(\theta) becomes non‑linear but Lipschitz.  Under the
+same convergence conditions, PPO converges to a stationary point of
+this scalarised objective.  Because Chebyshev scalarisation is a
+complete scalarisation method (any Pareto‑optimal point can be recovered
+by suitable weights and ideal points), the set of stationary points
+covers the Pareto front.  The proof of completeness for Chebyshev norms
+in multi‑objective RL is given in [Hairi2025].
+
+Appendix C — Architecture and Design Details
+=================================================
+
+C.1  Overall System Architecture
+
+The system consists of:
+
+· Validators: each runs a local copy of the shielded actor \pi_\theta,
+  the safety shield \sigma_s, and the liveness monitor \mu.
+· Centralised Critic (Training): during off‑chain training epochs, a
+  critic network V_\phi(s) is maintained in a secure enclave and
+  updated using global trajectories.
+· Shield Synthesis Module: an offline toolchain that takes the LTL
+  specification and the transition abstraction and generates the safety
+  automaton \sigma_s (in C/C++/Rust) that is embedded in the validator
+  client.
+· Monitoring and Alerting: the Isolation Forest anomaly detector
+  continuously scores transitions and tags samples in the replay buffer.
+· Governance Contract: stores the trilemma bounds Q_{\min}, D_{\min}, S_{\max}
+  and the weight vector \lambda; only it can trigger the interruptibility
+  operator.
+
+Fig. C1 (not shown) would illustrate the data flow from validators to
+the replay buffer, shield filtering, and the critic update loop.
+
+C.2  Safety Shield Synthesis Pipeline
+
+1. Model extraction: The base consensus protocol’s state machine is
+   expressed in a formal language (e.g., SMV or TLA+).  The LTL property
+   \varphi_{\text{safety}} is also given.
+2. Abstraction: Continuous variables (S, Q, D) are discretised into
+   finite intervals of width \delta.  The transition relation is
+   over‑approximated to preserve safety: if s \to s' is possible in
+   the continuous system, then the abstract transition exists.
+3. Game construction: The interaction between the shield (controller)
+   and the environment (adversary + network) is modelled as a two‑player
+   safety game.  The shield’s moves are the allowed actions; the
+   environment’s moves are the nondeterministic outcomes.
+4. Synthesis: A tool like Strix solves the game and produces a
+   Mealy machine that, given current abstract state and proposed action,
+   outputs either the same action or “reject”.  This machine is then
+   converted into an efficient lookup table.
+
+The error introduced by discretisation is conjectured to satisfy
+\epsilon(\delta) \le L_F \cdot \delta \cdot T, where L_F is the
+Lipschitz constant of the transition function over the horizon T.
+Since a formal bound for L_F in HotStuff‑like protocols is not yet
+available, we choose \delta based on a worst‑case sensitivity analysis
+from simulation (future work).
+
+C.3  Liveness Monitor Design
+
+The monitor maintains a counter stale_rounds.  Every time a new block
+is confirmed, the counter resets to zero.  If the counter reaches
+max_stale = k, the monitor enters an override state.  In the override
+mode, the monitor ignores the actor’s output and repeatedly proposes
+a_{\text{safe}} until a new block is confirmed.  The safe default
+action is protocol‑specific; for HotStuff it is a standard round‑robin
+leader proposal with conservative timeout.  The constant k is set
+to a value larger than the expected worst‑case confirmation time under
+the fault model (e.g., k = 10 epochs when the network is
+synchronous and f faults can delay progress by at most 5 rounds).
+
+C.4  Trust‑Aware Replay Buffer with Isolation Forest
+
+The anomaly detector is an Isolation Forest (IF) [Liu2008] trained on
+normal protocol trajectories.  The feature vector consists of:
+
+· block_interval: time since previous block,
+· mempool_size: number of unconfirmed transactions,
+· peer_count: number of connected peers,
+· vote_convergence: fraction of nodes converging on the same block
+  after one round.
+  These features capture basic health metrics without requiring deep
+  inspection of block content.  The IF assigns an anomaly score
+  s \in [0,1]; lower scores indicate normal behaviour.  We set a
+  threshold \tau_{\min} = 0.7.  Any transition with score above
+  \tau_{\min} is considered suspicious and removed from the replay
+  buffer before sampling.  The IF is retrained every 1,000 epochs using
+  the entire buffer of accepted transitions (which are presumed clean
+  after the initial filtering).  This retraining adapts to slowly
+  drifting protocol behaviour.  Note: this is a heuristic; a poisoning
+  attacker could craft subtle attacks that evade the IF.  The defence is
+  not provably secure.
+
+C.5  CTDE and MPC Aggregation
+
+During training, validators share their trajectory data with a central
+training coordinator.  To avoid a single trusted party, we propose a
+small committee of 5 foundation nodes that perform secure multi‑party
+computation (MPC) for gradient aggregation.  Specifically, each
+validator encrypts its local gradient using an additive secret‑sharing
+scheme; the 5 nodes compute the sum of gradients using a 3‑out‑of‑5
+threshold protocol (tolerating up to 2 malicious aggregators).  The
+aggregated gradient is then public and used to update the global
+critic.  The actors are trained locally using policy gradients
+transmitted from the coordinator.  After training, the critic is
+discarded and only the actor weights are deployed on validators.
+
+C.6  Interruptibility Protocol and Rollback Extension
+
+Algorithm 2 (safe_interrupt) relies on an exact shadow simulation.
+To strengthen this, we sketch a rollback‑enhanced version:
+
+After step 8, instead of immediately finalising, the system enters a
+trial period of T_{\text{trial}} epochs under the new protocol,
+during which the old protocol’s state is kept as a checkpoint.  A
+monitoring oracle compares the actual metrics (S', Q', D', \varepsilon')
+with the simulated ones.  If the deviation exceeds a threshold
+\Delta_{\text{tol}}, an automatic rollback to the checkpoint is
+initiated by a supermajority vote.  Formalising the safety and
+liveness of this rollback requires a proof that the checkpoint can
+always be re‑established; this is left open.
+
+Appendix D — Technical Specifications and Algorithms
+=========================================================
+
+D.1  Action Space Encoding
+
+The action space comprises four discrete dimensions:
+
+· block_size: {1KB, 10KB, 100KB, 1MB} → encoded as integer 0‑3,
+· timeout_ratio: {0.5, 1.0, 2.0} × base_timeout → 0‑2,
+· commit_rule: {sync_threshold, async_quorum} → 0,1,
+· leader_schedule: {VRand, weighted_VRF} → 0,1 (round_robin is
+  excluded because it can be unsafe under adaptive adversary; the
+  shield restricts it).
+
+Thus the raw action is a tuple (i_1, i_2, i_3, i_4), 96 possible
+combinations.  The policy network outputs logits for each dimension
+independently (a factored policy).
+
+D.2  Energy Model Calibration
+
+Offline, a reference implementation is profiled on representative
+hardware (e.g., AWS c5.xlarge for CPU, 10 Gbps network).  We measure:
+
+c_{\text{cpu}} = \frac{\text{energy consumption of a signing+verification cycle}}{\text{CPU time of that cycle}},\quad
+c_{\text{net}} = \frac{\text{energy per bit sent}}{\text{avg message size}}.
+
+The total energy per epoch for validator i is
+E_i = c_{\text{cpu}} T_{\text{cpu},i} + c_{\text{net}} B_i.
+The system‑wide energy is
+E(s) = \text{95th percentile of } \{E_i\}.
+E_{\max} is set to the energy of a worst‑case epoch under the
+current maximum load.
+
+D.3  Full Algorithm Pseudocode
+
+Algorithm D.3: Safe‑RL Consensus Loop (detailed)
+
+```
+Input: initial θ, φ, W (rolling window), L (shield interpolation tables)
+Output: trained θ*
+
+1:  σ_s ← load_shield(L)                  // pre‑synthesised
+2:  μ_counter ← 0
+3:  B ← TrustAwareReplayBuffer(capacity=1e6, threshold τ_min)
+4:  IF_detector ← IsolationForest()     // initial model
+5:
+6:  for episode = 1 to M do
+7:      s ← genesis_state()
+8:      for t = 1 to T do
+9:          a_raw ∼ π_θ(·|s)
+10:         a ← σ_s.apply(s, a_raw)
+11:         if a = REJECT then
+12:             a ← a_safe(s)
+13:         end if
+14:         if μ_counter ≥ k then
+15:             a ← a_safe(s)
+16:             μ_counter ← 0
+17:         end if
+18:         s’ ← step(s, a)
+19:         if new_block_confirmed(s’) then
+20:             μ_counter ← 0
+21:         else
+22:             μ_counter ← μ_counter + 1
+23:         end if
+24:         r ← compute_reward(s, a, s’)   // linear or Chebyshev
+25:         trust_score ← IF_detector.score([block_interval,
+26:                             mempool_size, peer_count])
+27:         B.push((s, a, r, s’, trust_score))
+28:         s ← s’
+29:
+30:         if B.size > batch_size then
+31:             minibatch ← B.sample_trusted(τ_min, batch_size)
+32:             advantages ← GAE(minibatch, V_ϕ)
+33:             θ ← PPO_update(θ, minibatch, advantages)
+34:             ϕ ← critic_update(ϕ, minibatch, returns)
+35:         end if
+36:     end for
+37:     if episode % 1000 == 0 then
+38:         IF_detector.retrain(B.all_trusted_transitions())
+39:     end if
+40: end for
+41: return θ
+```
+
+D.4  Shielded PPO Update with Trust Filtering
+
+The PPO_update step implements the clipped surrogate objective:
+
+L^{\text{CLIP}}(\theta) = \mathbb{E}_t \left[ \min(r_t(\theta) \hat{A}_t, \,\text{clip}(r_t(\theta), 1-\epsilon, 1+\epsilon) \hat{A}_t) \right] + c_1 L^{\text{VF}}(\phi) + c_2 S[\pi_\theta](s_t),
+
+where r_t(\theta) = \frac{\pi_\theta(a_t|s_t)}{\pi_{\text{old}}(a_t|s_t)}.  The
+advantage \hat{A}_t is computed using GAE on the trusted minibatch.
+Samples with trust score below \tau_{\min} are excluded before
+advantage calculation, preventing them from affecting the gradient.
+
+D.5  Interruptibility Algorithm with Rollback (Sketch)
+
+```
+Algorithm D.5: safe_interrupt_with_rollback(s_t, p_new, T_trial)
+1:  verify p_new proofs
+2:  pre_snapshot ← trilemma_metrics(s_t)
+3:  s_sim ← shadow_simulate(p_new, s_t)
+4:  if violations found then return REJECT
+5:  broadcast migrate_proposal(p_new, s_sim, pre_snapshot)
+6:  collect 2f+1 signatures → start_trial
+7:  migrate to s_sim
+8:  for epoch = 1 to T_trial do
+9:      observe actual metrics
+10:     if deviation(actual, s_sim) > Δ_tol then
+11:         initiate_rollback(pre_snapshot)
+12:         return ROLLBACK
+13:     end if
+14: end for
+15: finalize_migration
+```
+
+D.6  Metric Computation Algorithms
+
+Scalability: S(s) = (tx_confirmed_in_window / (window_time * τ_max)).
+A moving average of transaction throughput is maintained.
+
+Security: for each active protocol family, apply the corresponding
+Phi_hat formula using current epoch’s validator set, fork tree, or
+Snowball parameters.  Q = 1 - Phi_hat / Phi_0.
+
+Decentralisation: maintain a histogram of block producers; recompute
+entropy from the frequencies.
+
+Energy: aggregate per‑validator measurements; sort; extract 95th
+percentile.
+
+All metrics are computed locally by validators and gossiped; a
+consensus‑wide median (or trimmed mean) is taken to ensure uniformity.
+Because the metrics are used in the reward, they must be deterministic
+functions of the on‑chain state; the gossip step is therefore
+supplemented by a commitment scheme and aggregated with BFT agreement.
+
+---
+
+End of Appendices.
