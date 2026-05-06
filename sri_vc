@@ -1201,7 +1201,1026 @@ The current skeleton has the following known issues requiring resolution before 
 | DCT | Dominated Convergence Theorem |
 | PL | Polyak-Łojasiewicz (condition) |
 
----
+The complete Python training code for the SRI framework.
 
-*End of Appendices. Version 7.1.*
-*© 2026 Ouadi Maakoul. Licensed under CC BY-SA 4.0.*
+
+```python
+# ============================================================
+#  Stable Recursive Intelligence — Training Implementation
+#  Version 7.1  |  Author: Ouadi Maakoul
+#  License: CC BY-SA 4.0
+# ============================================================
+
+import math
+import copy
+import warnings
+from dataclasses import dataclass, field
+from typing import Optional, Callable
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch import Tensor
+from torch.optim import Optimizer
+
+
+# ============================================================
+#  1. CONFIGURATION
+# ============================================================
+
+@dataclass
+class SRIConfig:
+    # --- Fisher / K-FAC ---
+    kfac_damping: float = 1e-3        # Tikhonov damping for Fisher inversion
+    kfac_update_freq: int = 10        # Steps between K-FAC factor updates
+    use_exact_fisher: bool = False     # Override: use exact empirical Fisher
+    fisher_batch_size: int = 32       # Mini-batch for Fisher estimation
+
+    # --- Maakoul constraint ---
+    lambda_margin: float = 0.5        # δ_margin: user-chosen margin parameter
+    critic_update_freq: int = 10      # K-stale: steps between critic updates
+    mi_num_negatives: int = 64        # K negative samples in InfoNCE-anchor
+    mi_estimator_lr: float = 1e-3     # Critic learning rate
+
+    # --- CBF / alignment ---
+    cbf_alpha: float = 1.0            # Linear CBF coefficient c in α(s) = c·s
+    alignment_damping: float = 1e-6   # Numerical damping for projection QP
+
+    # --- Step-size / rollback ---
+    base_lr: float = 1e-3
+    lr_decay: str = "robbins_monro"   # "robbins_monro" | "cosine" | "constant"
+    lr_decay_offset: float = 100.0    # k₀ in ηₖ = c/(k + k₀)
+    max_grad_norm: float = 10.0
+    rollback_tolerance: float = 1e-4  # δₖ: loss increase allowed before reject
+
+    # --- Certification ---
+    certify_every: int = 50           # Steps between δ* checks
+    kfac_error_sample_batches: int = 5
+
+    # --- Logging ---
+    log_every: int = 10
+
+
+# ============================================================
+#  2. K-FAC FISHER APPROXIMATION
+# ============================================================
+
+class KFACState:
+    """Stores per-layer Kronecker factors."""
+    def __init__(self):
+        self.A: dict[str, Tensor] = {}   # Input covariance
+        self.G: dict[str, Tensor] = {}   # Gradient covariance
+        self.A_inv: dict[str, Tensor] = {}
+        self.G_inv: dict[str, Tensor] = {}
+
+
+class KFACFisher:
+    """
+    Kronecker-Factored Approximate Curvature for linear layers.
+    Supports nn.Linear. GRU layers are treated block-diagonally.
+    """
+
+    def __init__(self, model: nn.Module, config: SRIConfig):
+        self.model = model
+        self.config = config
+        self.state = KFACState()
+        self._hooks: list = []
+        self._activations: dict[str, Tensor] = {}
+        self._grad_outputs: dict[str, Tensor] = {}
+        self._register_hooks()
+
+    def _register_hooks(self):
+        for name, module in self.model.named_modules():
+            if isinstance(module, nn.Linear):
+                h_fwd = module.register_forward_hook(
+                    self._make_forward_hook(name))
+                h_bwd = module.register_full_backward_hook(
+                    self._make_backward_hook(name))
+                self._hooks.extend([h_fwd, h_bwd])
+
+    def _make_forward_hook(self, name: str):
+        def hook(module, inp, out):
+            a = inp[0].detach()                    # (B, n_in)
+            if a.dim() == 3:                       # sequence: (B, T, n_in)
+                a = a.reshape(-1, a.size(-1))
+            # Append bias column
+            if module.bias is not None:
+                ones = torch.ones(a.size(0), 1, device=a.device)
+                a = torch.cat([a, ones], dim=1)
+            self._activations[name] = a
+        return hook
+
+    def _make_backward_hook(self, name: str):
+        def hook(module, grad_in, grad_out):
+            g = grad_out[0].detach()               # (B, n_out)
+            if g.dim() == 3:
+                g = g.reshape(-1, g.size(-1))
+            self._grad_outputs[name] = g
+        return hook
+
+    @torch.no_grad()
+    def update_factors(self):
+        """Update A and G running averages (call after backward)."""
+        decay = 0.95
+        for name in self._activations:
+            a = self._activations[name]            # (B, n_in+1)
+            g = self._grad_outputs.get(name)
+            if g is None:
+                continue
+            A_new = (a.T @ a) / a.size(0)
+            G_new = (g.T @ g) / g.size(0)
+            if name in self.state.A:
+                self.state.A[name] = decay * self.state.A[name] + (1 - decay) * A_new
+                self.state.G[name] = decay * self.state.G[name] + (1 - decay) * G_new
+            else:
+                self.state.A[name] = A_new
+                self.state.G[name] = G_new
+
+    @torch.no_grad()
+    def invert_factors(self):
+        """Compute damped inverses of A and G for each layer."""
+        d = self.config.kfac_damping
+        for name in self.state.A:
+            A = self.state.A[name]
+            G = self.state.G[name]
+            n_a = A.size(0)
+            n_g = G.size(0)
+            pi = torch.sqrt((torch.trace(A) / n_a) / (torch.trace(G) / n_g + 1e-8))
+            da = math.sqrt(d) * pi
+            dg = math.sqrt(d) / (pi + 1e-8)
+            self.state.A_inv[name] = torch.linalg.inv(
+                A + da * torch.eye(n_a, device=A.device))
+            self.state.G_inv[name] = torch.linalg.inv(
+                G + dg * torch.eye(n_g, device=G.device))
+
+    @torch.no_grad()
+    def natural_gradient(self, named_grads: dict[str, Tensor]) -> dict[str, Tensor]:
+        """
+        Apply g_F⁻¹ to Euclidean gradients layer-by-layer.
+        For layer ℓ: NG_ℓ = G_ℓ⁻¹ · grad_ℓ · A_ℓ⁻¹
+        """
+        nat_grads = {}
+        for name, grad in named_grads.items():
+            layer_name = ".".join(name.split(".")[:-1])
+            if layer_name in self.state.A_inv:
+                A_inv = self.state.A_inv[layer_name]
+                G_inv = self.state.G_inv[layer_name]
+                if grad.dim() == 1:
+                    grad = grad.unsqueeze(1)
+                    nat_g = G_inv @ grad
+                    nat_grads[name] = nat_g.squeeze(1)
+                else:
+                    # grad shape: (n_out, n_in) or (n_out, n_in+1)
+                    g = grad
+                    if g.size(1) == A_inv.size(0):
+                        nat_grads[name] = G_inv @ g @ A_inv
+                    else:
+                        nat_grads[name] = grad  # fallback
+            else:
+                nat_grads[name] = grad  # non-linear layers: identity
+        return nat_grads
+
+    @torch.no_grad()
+    def estimate_approximation_error(
+            self, loss_fn: Callable, inputs: Tensor, targets: Tensor) -> float:
+        """
+        Estimate δ_KFAC = ‖ĝ_F⁻¹ − g_F⁻¹‖_op via power iteration on random vectors.
+        Compares K-FAC natural gradient to exact empirical Fisher natural gradient.
+        """
+        n_iters = 5
+        max_ratio = 0.0
+        v = {n: torch.randn_like(p)
+             for n, p in self.model.named_parameters() if p.requires_grad}
+        # Normalize
+        total_norm = math.sqrt(sum(t.norm().item()**2 for t in v.values()))
+        v = {n: t / (total_norm + 1e-8) for n, t in v.items()}
+
+        for _ in range(n_iters):
+            # K-FAC natural gradient of v
+            ng_kfac = self.natural_gradient(v)
+            # Exact natural gradient via Hessian-vector product (using autograd)
+            ng_exact = self._exact_fisher_vector_product(v, loss_fn, inputs, targets)
+            # Error ratio
+            err = {n: ng_kfac[n] - ng_exact.get(n, ng_kfac[n]) for n in ng_kfac}
+            err_norm = math.sqrt(sum(t.norm().item()**2 for t in err.values()))
+            v_norm = math.sqrt(sum(t.norm().item()**2 for t in v.values()))
+            max_ratio = max(max_ratio, err_norm / (v_norm + 1e-8))
+            # Update v for power iteration
+            v = ng_kfac
+            total_norm = math.sqrt(sum(t.norm().item()**2 for t in v.values()))
+            v = {n: t / (total_norm + 1e-8) for n, t in v.items()}
+
+        return max_ratio
+
+    def _exact_fisher_vector_product(
+            self, v: dict, loss_fn: Callable, inputs: Tensor, targets: Tensor
+    ) -> dict[str, Tensor]:
+        """Compute F·v using the exact empirical Fisher via autograd."""
+        self.model.zero_grad()
+        output = self.model(inputs)
+        loss = loss_fn(output, targets)
+        grads = torch.autograd.grad(loss, self.model.parameters(),
+                                     create_graph=True, retain_graph=True)
+        named_grads = {n: g for (n, _), g in
+                       zip(self.model.named_parameters(), grads)
+                       if g is not None}
+        # Dot product ⟨g, v⟩
+        gv = sum((named_grads[n] * v[n]).sum()
+                 for n in named_grads if n in v)
+        # Second grad = F·v
+        fv_list = torch.autograd.grad(gv, self.model.parameters(),
+                                       retain_graph=False,
+                                       allow_unused=True)
+        return {n: (fv if fv is not None else torch.zeros_like(p))
+                for (n, p), fv in zip(self.model.named_parameters(), fv_list)}
+
+    def remove_hooks(self):
+        for h in self._hooks:
+            h.remove()
+
+
+# ============================================================
+#  3. INFOCE-ANCHOR CRITIC (Maakoul Constraint Surrogate)
+# ============================================================
+
+class InfoNCEAnchorCritic(nn.Module):
+    """
+    Two-layer MLP critic T_ψ: 𝒵 × {0,1} → ℝ.
+    Definition 2.4 — K-Stale InfoNCE-Anchor surrogate.
+    """
+
+    def __init__(self, latent_dim: int, hidden_dim: int = 128):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(latent_dim + 1, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, 1),
+        )
+
+    def forward(self, z: Tensor, r: Tensor) -> Tensor:
+        """
+        Args:
+            z: (B, latent_dim)
+            r: (B,) binary rare-event indicator
+        Returns:
+            scores: (B,)
+        """
+        r_f = r.float().unsqueeze(-1)              # (B, 1)
+        return self.net(torch.cat([z, r_f], dim=-1)).squeeze(-1)
+
+
+def infoNCE_anchor_loss(
+    critic: InfoNCEAnchorCritic,
+    z_pos: Tensor,          # (B, d)  latent for positive samples
+    r_pos: Tensor,          # (B,)    rare indicators for positive samples
+    r_neg: Tensor,          # (B, K)  K negative rare indicators
+    z_anchor: Tensor,       # (1, d)  anchor latent
+    r_anchor: Tensor,       # (1,)    anchor rare indicator
+) -> Tensor:
+    """
+    Computes Î_{NCE-anchor}(θ; ψ) from Definition 2.4.
+    Returns the *negative* bound (for loss minimization = bound maximization).
+    """
+    B, K = z_pos.size(0), r_neg.size(1)
+
+    # Positive scores: T_ψ(z, r⁺)  — shape (B,)
+    score_pos = critic(z_pos, r_pos)
+
+    # Negative scores: T_ψ(z, rⱼ) for j=1..K — shape (B, K)
+    z_exp = z_pos.unsqueeze(1).expand(-1, K, -1).reshape(B * K, -1)
+    r_exp = r_neg.reshape(B * K)
+    score_neg = critic(z_exp, r_exp).reshape(B, K)         # (B, K)
+
+    # Anchor score: T_ψ(z_anchor, r_anchor) — shape (1,) broadcast
+    score_anch = critic(z_anchor.expand(B, -1),
+                        r_anchor.expand(B))                 # (B,)
+
+    # Denominator: (1/K) Σⱼ e^{T(z,rⱼ)} + e^{T(z_anch, r_anch)}
+    log_denom = torch.logsumexp(
+        torch.cat([score_neg,
+                   score_anch.unsqueeze(1)], dim=1),        # (B, K+1)
+        dim=1) - math.log(K)                                # (B,)
+
+    # InfoNCE-anchor bound (mean over batch)
+    bound = (score_pos - log_denom).mean()
+    return -bound   # Negate: we minimize, so maximizing the bound
+
+
+# ============================================================
+#  4. ALIGNMENT MANIFOLD AND SAFETY CONSTRAINT
+# ============================================================
+
+class AlignmentConstraint:
+    """
+    Defines g(θ) = 0 for the alignment manifold 𝒢.
+    Default: g(θ) = KL(p_θ ‖ p_ref) − ε for a reference model.
+    Can be subclassed for SAE-based mechanistic interpretability constraints
+    (Section 6.3.1).
+    """
+
+    def __init__(self, ref_model: nn.Module, epsilon: float = 0.1):
+        self.ref_model = ref_model
+        self.epsilon = epsilon
+
+    def value(self, model: nn.Module, inputs: Tensor) -> Tensor:
+        """Computes g(θ) — should be ≈ 0 on the manifold."""
+        with torch.no_grad():
+            logp_ref = F.log_softmax(self.ref_model(inputs), dim=-1)
+        logp = F.log_softmax(model(inputs), dim=-1)
+        kl = F.kl_div(logp_ref, logp.exp(), reduction='batchmean')
+        return kl - self.epsilon
+
+    def gradient(self, model: nn.Module, inputs: Tensor) -> dict[str, Tensor]:
+        """Computes ∇g(θ) as a parameter-indexed dict."""
+        model.zero_grad()
+        g_val = self.value_with_grad(model, inputs)
+        g_val.backward()
+        grads = {n: p.grad.clone() if p.grad is not None else torch.zeros_like(p)
+                 for n, p in model.named_parameters()}
+        model.zero_grad()
+        return grads
+
+    def value_with_grad(self, model: nn.Module, inputs: Tensor) -> Tensor:
+        """Same as value() but in a computation graph."""
+        with torch.no_grad():
+            logp_ref = F.log_softmax(self.ref_model(inputs), dim=-1)
+        logp = F.log_softmax(model(inputs), dim=-1)
+        return F.kl_div(logp_ref, logp.exp(), reduction='batchmean') - self.epsilon
+
+
+class SafetyConstraint:
+    """
+    Defines h(θ) ≥ 0 for the safe set 𝒞.
+    Default: h(θ) = KL(p_θ ‖ p_unsafe) − δ_safe.
+    """
+
+    def __init__(self, unsafe_model: nn.Module, delta_safe: float = 0.5):
+        self.unsafe_model = unsafe_model
+        self.delta_safe = delta_safe
+
+    def value(self, model: nn.Module, inputs: Tensor) -> Tensor:
+        with torch.no_grad():
+            logp_unsafe = F.log_softmax(self.unsafe_model(inputs), dim=-1)
+        logp = F.log_softmax(model(inputs), dim=-1)
+        kl = F.kl_div(logp_unsafe, logp.exp(), reduction='batchmean')
+        return kl - self.delta_safe
+
+    def gradient(self, model: nn.Module, inputs: Tensor) -> dict[str, Tensor]:
+        model.zero_grad()
+        h_val = self.value_with_grad(model, inputs)
+        h_val.backward()
+        grads = {n: p.grad.clone() if p.grad is not None else torch.zeros_like(p)
+                 for n, p in model.named_parameters()}
+        model.zero_grad()
+        return grads
+
+    def value_with_grad(self, model: nn.Module, inputs: Tensor) -> Tensor:
+        with torch.no_grad():
+            logp_unsafe = F.log_softmax(self.unsafe_model(inputs), dim=-1)
+        logp = F.log_softmax(model(inputs), dim=-1)
+        return (F.kl_div(logp_unsafe, logp.exp(), reduction='batchmean')
+                - self.delta_safe)
+
+
+# ============================================================
+#  5. JOINT PROJECTION QP  (Lemma 2.4)
+# ============================================================
+
+def fisher_inner(u: dict[str, Tensor],
+                  v: dict[str, Tensor],
+                  kfac: KFACFisher) -> float:
+    """
+    Compute ⟨u, v⟩_{g_F} = uᵀ g_F v using K-FAC.
+    We use: ⟨u, v⟩_{g_F} ≈ ⟨u, g_F · v⟩_Euclidean.
+    Since g_F · v ≈ (ĝ_F) v, and ĝ_F = A ⊗ G block-diagonal,
+    g_F · v for layer ℓ is G_ℓ · V_ℓ · A_ℓ.
+    """
+    result = 0.0
+    for name, u_val in u.items():
+        if name not in v:
+            continue
+        layer_name = ".".join(name.split(".")[:-1])
+        v_val = v[name]
+        if layer_name in kfac.state.A:
+            A = kfac.state.A[layer_name]
+            G = kfac.state.G[layer_name]
+            if v_val.dim() == 2 and v_val.size(1) == A.size(0):
+                gfv = G @ v_val @ A      # g_F · v for this layer
+                result += (u_val * gfv).sum().item()
+            else:
+                result += (u_val * v_val).sum().item()
+        else:
+            result += (u_val * v_val).sum().item()
+    return result
+
+
+def fisher_norm_sq(u: dict[str, Tensor], kfac: KFACFisher) -> float:
+    return fisher_inner(u, u, kfac)
+
+
+def dict_scale(d: dict[str, Tensor], s: float) -> dict[str, Tensor]:
+    return {k: v * s for k, v in d.items()}
+
+
+def dict_add(a: dict[str, Tensor],
+              b: dict[str, Tensor],
+              scale_b: float = 1.0) -> dict[str, Tensor]:
+    return {k: a[k] + scale_b * b[k] for k in a if k in b}
+
+
+def joint_projection(
+    psi_comp: dict[str, Tensor],
+    grad_g: dict[str, Tensor],         # ∇g(θ)
+    grad_h: dict[str, Tensor],         # ∇h(θ)
+    h_val: float,                       # h(θ) current value
+    kfac: KFACFisher,
+    alpha: float = 1.0,                 # CBF linear coefficient c
+    damping: float = 1e-6,
+) -> dict[str, Tensor]:
+    """
+    Closed-form solution from Lemma 2.4.
+
+    Ψ* = Π_θ(Ψ_comp) + ν · Π_θ(∇h),
+    where Π_θ is the g_F-orthogonal projection onto T_θ𝒢 = null(∇gᵀ),
+    and ν = max(0, (−α(h) − ⟨∇h, Π_θ(Ψ_comp)⟩) / ‖Π_θ(∇h)‖²_{g_F}).
+    """
+
+    # ── Step 1: Π_θ(Ψ_comp) ─────────────────────────────────
+    # Π_θ(u) = u − g_F⁻¹ ∇g (∇gᵀ g_F⁻¹ ∇g)⁻¹ ∇gᵀ u
+    # For scalar g (k=1):
+    #   Π_θ(u) = u − [⟨∇g, u⟩ / ‖∇g‖²_{g_F⁻¹}] · g_F⁻¹ ∇g
+
+    # g_F⁻¹ ∇g (natural gradient of g)
+    ng_g = kfac.natural_gradient(grad_g)                   # g_F⁻¹ ∇g
+
+    # ⟨∇g, u⟩ (Euclidean inner product between ∇g and u)
+    dot_g_psi = sum((grad_g[n] * psi_comp[n]).sum().item()
+                    for n in grad_g if n in psi_comp)
+
+    # ‖∇g‖²_{g_F⁻¹} = ⟨∇g, g_F⁻¹ ∇g⟩
+    norm_sq_g = sum((grad_g[n] * ng_g[n]).sum().item()
+                    for n in grad_g if n in ng_g)
+    norm_sq_g = max(norm_sq_g, damping)
+
+    coeff_g = dot_g_psi / norm_sq_g
+    pi_psi = dict_add(psi_comp, ng_g, scale_b=-coeff_g)   # Π_θ(Ψ_comp)
+
+    # ── Step 2: Π_θ(∇h) ────────────────────────────────────
+    dot_g_h = sum((grad_g[n] * grad_h[n]).sum().item()
+                  for n in grad_g if n in grad_h)
+    coeff_gh = dot_g_h / norm_sq_g
+    pi_h = dict_add(grad_h, ng_g, scale_b=-coeff_gh)      # Π_θ(∇h)
+
+    # ── Step 3: CBF multiplier ν ────────────────────────────
+    # ⟨∇h, Π_θ(Ψ_comp)⟩_{g_F}
+    dot_h_pipsi = fisher_inner(grad_h, pi_psi, kfac)
+    # ‖Π_θ(∇h)‖²_{g_F}
+    norm_sq_pih = fisher_norm_sq(pi_h, kfac)
+    norm_sq_pih = max(norm_sq_pih, damping)
+
+    cbf_rhs = -alpha * max(h_val, 0.0)
+    if dot_h_pipsi >= cbf_rhs:
+        nu = 0.0
+    else:
+        nu = (cbf_rhs - dot_h_pipsi) / norm_sq_pih
+
+    # ── Step 4: Final vector ────────────────────────────────
+    psi_star = dict_add(pi_psi, pi_h, scale_b=nu)
+    return psi_star
+
+
+# ============================================================
+#  6. λ-SELECTION AND DOMINANCE CHECK  (Corollary 3.1)
+# ============================================================
+
+@dataclass
+class DominanceResult:
+    rho: float             # Fisher cosine similarity
+    lambda_eff: float      # Selected λ
+    eta_tilde: float       # Relative dominance margin η̃
+    feasible: bool         # Is the margin δ_margin feasible?
+    delta_star: float      # Certification threshold δ*
+    kappa: float           # Condition number estimate
+
+
+def select_lambda(
+    grad_cap: dict[str, Tensor],     # ∇^F ℒ_self  (natural gradient)
+    grad_mi: dict[str, Tensor],      # ∇^F I_rare   (natural gradient)
+    kfac: KFACFisher,
+    config: SRIConfig,
+    kappa_est: float,
+) -> DominanceResult:
+    """
+    Implements Corollary 3.1 and Theorem 3.3 certificate computation.
+    """
+    delta = config.lambda_margin
+
+    norm_cap = math.sqrt(max(fisher_norm_sq(grad_cap, kfac), 1e-12))
+    norm_mi  = math.sqrt(max(fisher_norm_sq(grad_mi,  kfac), 1e-12))
+
+    # Fisher cosine similarity ρ
+    rho_raw = fisher_inner(grad_cap, grad_mi, kfac) / (norm_cap * norm_mi)
+    rho = float(max(-1.0, min(1.0, rho_raw)))
+
+    if rho <= 0.0:
+        lambda_eff = 0.0
+        eta_tilde  = 1.0
+        feasible   = True
+    else:
+        # Check feasibility: need δ < (1−ρ²)/ρ²
+        max_delta = (1.0 - rho**2) / (rho**2 + 1e-8)
+        feasible = (delta < max_delta)
+        if not feasible:
+            warnings.warn(
+                f"δ_margin={delta:.3f} exceeds feasibility bound "
+                f"{max_delta:.3f} at ρ={rho:.3f}. Clamping.",
+                RuntimeWarning)
+            delta = max(0.01, 0.9 * max_delta)
+
+        lambda_min = rho * norm_cap / (norm_mi + 1e-8)
+        lambda_eff = (1.0 + delta) * lambda_min
+        eta_tilde  = delta * rho**2 / (1.0 + delta * rho**2)
+
+    # Scale-invariant δ* from Theorem 3.3
+    # δ* = η̃ / (2√κ (1 + (1+δ)ρ²))
+    denom = 2.0 * math.sqrt(kappa_est) * (1.0 + (1.0 + delta) * rho**2 + 1e-8)
+    delta_star = eta_tilde / (denom + 1e-8)
+
+    return DominanceResult(
+        rho=rho,
+        lambda_eff=float(lambda_eff),
+        eta_tilde=float(eta_tilde),
+        feasible=feasible,
+        delta_star=float(delta_star),
+        kappa=float(kappa_est),
+    )
+
+
+# ============================================================
+#  7. CONDITION NUMBER ESTIMATION
+# ============================================================
+
+@torch.no_grad()
+def estimate_condition_number(kfac: KFACFisher) -> float:
+    """
+    Estimates κ = λ_max / λ_min across all K-FAC blocks
+    using the Kronecker structure: κ(A ⊗ G) = κ(A) · κ(G).
+    """
+    kappas = []
+    for name in kfac.state.A:
+        A = kfac.state.A[name]
+        G = kfac.state.G[name]
+        # Eigenvalues of A and G
+        eigA = torch.linalg.eigvalsh(A)
+        eigG = torch.linalg.eigvalsh(G)
+        kapA = (eigA.max() / (eigA.min().abs() + 1e-8)).item()
+        kapG = (eigG.max() / (eigG.min().abs() + 1e-8)).item()
+        kappas.append(kapA * kapG)
+    return float(max(kappas)) if kappas else 1.0
+
+
+# ============================================================
+#  8. STEP-SIZE SCHEDULER
+# ============================================================
+
+def get_lr(step: int, config: SRIConfig) -> float:
+    if config.lr_decay == "robbins_monro":
+        return config.base_lr * config.lr_decay_offset / (step + config.lr_decay_offset)
+    elif config.lr_decay == "cosine":
+        return config.base_lr * 0.5 * (1 + math.cos(math.pi * step / 10000))
+    else:
+        return config.base_lr
+
+
+# ============================================================
+#  9. SRI TRAINING STEP  (Algorithm 5.1)
+# ============================================================
+
+@dataclass
+class SRIStepResult:
+    accepted: bool
+    loss_cap: float
+    mi_bound: float
+    rho: float
+    lambda_eff: float
+    eta_tilde: float
+    delta_star: float
+    delta_kfac: float
+    certified: bool
+    h_val: float
+    g_val: float
+
+
+def sri_step(
+    model: nn.Module,
+    kfac: KFACFisher,
+    critic: InfoNCEAnchorCritic,
+    critic_optimizer: Optimizer,
+    loss_fn: Callable,
+    alignment: AlignmentConstraint,
+    safety: SafetyConstraint,
+    batch: tuple[Tensor, Tensor],
+    rare_batch: tuple[Tensor, Tensor, Tensor],  # (z_pos, r_pos, r_neg)
+    anchor: tuple[Tensor, Tensor],              # (z_anchor, r_anchor)
+    step: int,
+    config: SRIConfig,
+    kappa_est: float,
+) -> SRIStepResult:
+    """
+    One complete SRI update step — implements Algorithm 5.1.
+    """
+    inputs, targets = batch
+    z_pos, r_pos, r_neg = rare_batch
+    z_anchor, r_anchor = anchor
+
+    # ─── 1. UPDATE K-FAC FACTORS ─────────────────────────────
+    if step % config.kfac_update_freq == 0:
+        model.zero_grad()
+        out = model(inputs)
+        loss = loss_fn(out, targets)
+        loss.backward()
+        kfac.update_factors()
+        kfac.invert_factors()
+        model.zero_grad()
+
+    # ─── 2. UPDATE CRITIC (K-stale) ──────────────────────────
+    if step % config.critic_update_freq == 0:
+        critic_optimizer.zero_grad()
+        mi_loss = infoNCE_anchor_loss(critic, z_pos.detach(), r_pos,
+                                       r_neg, z_anchor, r_anchor)
+        mi_loss.backward()
+        critic_optimizer.step()
+
+    # ─── 3. COMPUTE EUCLIDEAN GRADIENTS ──────────────────────
+    # Capability gradient ∇ℒ_self
+    model.zero_grad()
+    out = model(inputs)
+    loss_cap = loss_fn(out, targets)
+    loss_cap.backward()
+    grad_cap_euc = {n: p.grad.clone()
+                    for n, p in model.named_parameters()
+                    if p.grad is not None}
+    model.zero_grad()
+
+    # MI gradient ∇I_rare  (gradient of InfoNCE-anchor w.r.t. encoder params)
+    model.zero_grad()
+    z_pos_new = _encode(model, inputs[:z_pos.size(0)])  # latent from encoder
+    mi_neg = infoNCE_anchor_loss(critic, z_pos_new, r_pos,
+                                  r_neg, z_anchor, r_anchor)
+    mi_neg.backward()
+    grad_mi_euc = {n: -p.grad.clone()   # negative: we want to maximize MI
+                   for n, p in model.named_parameters()
+                   if p.grad is not None}
+    model.zero_grad()
+    mi_bound = float(-mi_neg.item())
+
+    # ─── 4. NATURAL GRADIENTS ────────────────────────────────
+    grad_cap_nat = kfac.natural_gradient(grad_cap_euc)   # g_F⁻¹ ∇ℒ_self
+    grad_mi_nat  = kfac.natural_gradient(grad_mi_euc)    # g_F⁻¹ ∇I_rare
+
+    # ─── 5. λ-SELECTION (Corollary 3.1) ──────────────────────
+    dom = select_lambda(grad_cap_nat, grad_mi_nat, kfac, config, kappa_est)
+
+    # ─── 6. COMPOSITE VECTOR Ψ_comp ──────────────────────────
+    psi_comp = dict_add(
+        dict_scale(grad_cap_nat, -1.0),
+        grad_mi_nat,
+        scale_b=dom.lambda_eff,
+    )
+
+    # ─── 7. JOINT PROJECTION (Lemma 2.4) ─────────────────────
+    grad_g = alignment.gradient(model, inputs)
+    grad_h = safety.gradient(model, inputs)
+    g_val  = float(alignment.value(model, inputs).item())
+    h_val  = float(safety.value(model, inputs).item())
+
+    psi_star = joint_projection(
+        psi_comp, grad_g, grad_h, h_val,
+        kfac, alpha=config.cbf_alpha,
+        damping=config.alignment_damping,
+    )
+
+    # ─── 8. K-FAC CERTIFICATION (Theorem 3.3) ────────────────
+    delta_kfac = 0.0
+    certified = True
+    if step % config.certify_every == 0:
+        delta_kfac = kfac.estimate_approximation_error(loss_fn, inputs, targets)
+        certified = (delta_kfac < dom.delta_star)
+        if not certified:
+            warnings.warn(
+                f"[SRI Step {step}] K-FAC FAILS CERTIFICATION: "
+                f"δ_KFAC={delta_kfac:.4f} > δ*={dom.delta_star:.4f} "
+                f"(ratio={delta_kfac/max(dom.delta_star, 1e-8):.1f}×). "
+                f"Consider switching to exact Fisher.",
+                RuntimeWarning)
+
+    # ─── 9. GRADIENT CLIPPING AND LR ─────────────────────────
+    eta = get_lr(step, config)
+    total_norm = math.sqrt(sum(v.norm().item()**2 for v in psi_star.values()))
+    if total_norm > config.max_grad_norm:
+        clip = config.max_grad_norm / (total_norm + 1e-8)
+        psi_star = dict_scale(psi_star, clip)
+
+    # ─── 10. PROPOSED UPDATE ─────────────────────────────────
+    with torch.no_grad():
+        old_params = {n: p.clone() for n, p in model.named_parameters()}
+        for n, p in model.named_parameters():
+            if n in psi_star:
+                p.add_(psi_star[n], alpha=eta)
+
+    # ─── 11. VERIFICATION ROLLBACK ───────────────────────────
+    with torch.no_grad():
+        new_loss = loss_fn(model(inputs), targets).item()
+    old_loss = float(loss_cap.item())
+    accepted = (new_loss <= old_loss + config.rollback_tolerance)
+
+    if not accepted:
+        with torch.no_grad():
+            for n, p in model.named_parameters():
+                p.copy_(old_params[n])
+
+    return SRIStepResult(
+        accepted=accepted,
+        loss_cap=old_loss,
+        mi_bound=mi_bound,
+        rho=dom.rho,
+        lambda_eff=dom.lambda_eff,
+        eta_tilde=dom.eta_tilde,
+        delta_star=dom.delta_star,
+        delta_kfac=delta_kfac,
+        certified=certified,
+        h_val=h_val,
+        g_val=g_val,
+    )
+
+
+def _encode(model: nn.Module, inputs: Tensor) -> Tensor:
+    """
+    Extract latent representation from model.
+    Assumes model has an `encoder` attribute or returns logits directly.
+    Override this for your architecture.
+    """
+    if hasattr(model, 'encoder'):
+        return model.encoder(inputs)
+    return model(inputs)
+
+
+# ============================================================
+#  10. FULL TRAINING LOOP
+# ============================================================
+
+@dataclass
+class SRITrainer:
+    model: nn.Module
+    ref_model: nn.Module          # For alignment constraint
+    unsafe_model: nn.Module       # For safety constraint
+    loss_fn: Callable
+    config: SRIConfig = field(default_factory=SRIConfig)
+
+    def __post_init__(self):
+        self.kfac = KFACFisher(self.model, self.config)
+        latent_dim = self._infer_latent_dim()
+        self.critic = InfoNCEAnchorCritic(latent_dim)
+        self.critic_optimizer = torch.optim.Adam(
+            self.critic.parameters(), lr=self.config.mi_estimator_lr)
+        self.alignment = AlignmentConstraint(
+            self.ref_model, epsilon=0.1)
+        self.safety = SafetyConstraint(
+            self.unsafe_model, delta_safe=0.5)
+        self.kappa_est = 1.0
+        self.history: list[SRIStepResult] = []
+
+    def _infer_latent_dim(self) -> int:
+        """Infer latent dimension from model output."""
+        dummy = torch.zeros(1, 4)  # placeholder
+        try:
+            out = _encode(self.model, dummy)
+            return out.size(-1)
+        except Exception:
+            return 64
+
+    def train(
+        self,
+        dataloader,
+        rare_dataloader,
+        anchor_sample: tuple[Tensor, Tensor],
+        num_steps: int,
+    ):
+        """
+        Main training loop.
+
+        Args:
+            dataloader:      Yields (inputs, targets) batches
+            rare_dataloader: Yields (z_pos, r_pos, r_neg) batches
+            anchor_sample:   Fixed (z_anchor, r_anchor) tuple
+            num_steps:       Total training steps
+        """
+        data_iter = iter(dataloader)
+        rare_iter = iter(rare_dataloader)
+        step = 0
+        accepted_count = 0
+        certified_count = 0
+
+        while step < num_steps:
+            # ── Fetch batches ──────────────────────────────
+            try:
+                batch = next(data_iter)
+            except StopIteration:
+                data_iter = iter(dataloader)
+                batch = next(data_iter)
+
+            try:
+                rare_batch = next(rare_iter)
+            except StopIteration:
+                rare_iter = iter(rare_dataloader)
+                rare_batch = next(rare_iter)
+
+            # ── Update condition number estimate ───────────
+            if step % (self.config.kfac_update_freq * 5) == 0:
+                self.kappa_est = estimate_condition_number(self.kfac)
+
+            # ── SRI step ───────────────────────────────────
+            result = sri_step(
+                model=self.model,
+                kfac=self.kfac,
+                critic=self.critic,
+                critic_optimizer=self.critic_optimizer,
+                loss_fn=self.loss_fn,
+                alignment=self.alignment,
+                safety=self.safety,
+                batch=batch,
+                rare_batch=rare_batch,
+                anchor=anchor_sample,
+                step=step,
+                config=self.config,
+                kappa_est=self.kappa_est,
+            )
+
+            self.history.append(result)
+            accepted_count += int(result.accepted)
+            certified_count += int(result.certified)
+
+            # ── Logging ────────────────────────────────────
+            if step % self.config.log_every == 0:
+                accept_rate = accepted_count / max(step + 1, 1)
+                cert_rate   = certified_count / max(step + 1, 1)
+                print(
+                    f"[Step {step:5d}] "
+                    f"loss={result.loss_cap:.4f}  "
+                    f"MI={result.mi_bound:.4f}  "
+                    f"ρ={result.rho:+.3f}  "
+                    f"λ={result.lambda_eff:.3f}  "
+                    f"η̃={result.eta_tilde:.3f}  "
+                    f"δ*={result.delta_star:.4f}  "
+                    f"δ_KFAC={result.delta_kfac:.4f}  "
+                    f"h={result.h_val:.3f}  "
+                    f"g={result.g_val:.3f}  "
+                    f"acc={accept_rate:.2%}  "
+                    f"cert={cert_rate:.2%}  "
+                    f"{'✓' if result.accepted else '✗'}"
+                    f"{'🔒' if result.certified else '⚠️'}"
+                )
+
+            step += 1
+
+        self.kfac.remove_hooks()
+        print(f"\nTraining complete. "
+              f"Accept rate: {accepted_count/num_steps:.2%}  "
+              f"Cert rate: {certified_count/num_steps:.2%}")
+
+    def infeasibility_check(
+        self, inputs: Tensor, multiplier_grid_size: int = 20
+    ) -> tuple[bool, float]:
+        """
+        Theorem 3.5: Architectural Infeasibility Certificate.
+        Scans dual multipliers μ over a grid to check if
+        inf_θ L(θ, μ) > 0, certifying 𝒢 ∩ 𝒞 = ∅.
+
+        Returns (infeasible: bool, best_dual_bound: float).
+        """
+        best_lb = -float('inf')
+        for mu_scale in torch.linspace(-5.0, 5.0, multiplier_grid_size):
+            mu = float(mu_scale)
+            h_v = float(self.safety.value(self.model, inputs).item())
+            g_v = float(self.alignment.value(self.model, inputs).item())
+            lb = -h_v + mu * g_v
+            best_lb = max(best_lb, lb)
+
+        infeasible = (best_lb > 0)
+        if infeasible:
+            print(f"[INFEASIBILITY CERTIFICATE] 𝒢 ∩ 𝒞 = ∅ detected. "
+                  f"Dual bound: {best_lb:.4f}. "
+                  f"Revise alignment manifold or safe set before deployment.")
+        return infeasible, best_lb
+
+    def compute_summary_stats(self) -> dict:
+        """Summarize training diagnostics over history."""
+        if not self.history:
+            return {}
+        accept_rate = sum(r.accepted for r in self.history) / len(self.history)
+        cert_rate   = sum(r.certified for r in self.history) / len(self.history)
+        mi_vals     = [r.mi_bound for r in self.history]
+        loss_vals   = [r.loss_cap for r in self.history]
+        rho_vals    = [r.rho for r in self.history]
+        return {
+            "accept_rate":        accept_rate,
+            "cert_rate":          cert_rate,
+            "mi_final":           mi_vals[-1],
+            "mi_delta":           mi_vals[-1] - mi_vals[0],
+            "loss_final":         loss_vals[-1],
+            "loss_delta":         loss_vals[-1] - loss_vals[0],
+            "rho_mean":           sum(rho_vals) / len(rho_vals),
+            "mi_non_decreasing":  all(b >= a - 1e-4
+                                       for a, b in zip(mi_vals, mi_vals[1:])),
+            "loss_non_increasing": all(b <= a + 1e-4
+                                        for a, b in zip(loss_vals, loss_vals[1:])),
+            "kappa_final":        self.kappa_est,
+        }
+
+
+# ============================================================
+#  11. EXAMPLE USAGE  (Pendulum-v1 setup from Section 5.2)
+# ============================================================
+
+if __name__ == "__main__":
+    torch.manual_seed(42)
+
+    # ── Minimal policy model (GRU encoder + linear head) ────
+    class PolicyModel(nn.Module):
+        def __init__(self, obs_dim=3, act_dim=1, hidden=64):
+            super().__init__()
+            self.encoder = nn.GRU(obs_dim, hidden, batch_first=True)
+            self.head = nn.Linear(hidden, act_dim)
+
+        def forward(self, x):
+            if x.dim() == 2:
+                x = x.unsqueeze(1)
+            out, _ = self.encoder(x)
+            return self.head(out[:, -1, :])
+
+    obs_dim, act_dim, hidden = 3, 1, 64
+    model        = PolicyModel(obs_dim, act_dim, hidden)
+    ref_model    = PolicyModel(obs_dim, act_dim, hidden)   # fixed reference
+    unsafe_model = PolicyModel(obs_dim, act_dim, hidden)   # fixed unsafe ref
+    ref_model.eval();  unsafe_model.eval()
+    for p in ref_model.parameters():    p.requires_grad_(False)
+    for p in unsafe_model.parameters(): p.requires_grad_(False)
+
+    # ── Dummy dataloaders ────────────────────────────────────
+    def make_batch(B=32):
+        x = torch.randn(B, obs_dim)
+        y = torch.randn(B, act_dim)
+        return x, y
+
+    def make_rare_batch(B=32, K=16, d=hidden):
+        z_pos = torch.randn(B, d)
+        r_pos = torch.randint(0, 2, (B,))
+        r_neg = torch.randint(0, 2, (B, K))
+        return z_pos, r_pos, r_neg
+
+    dataloader      = [make_batch()      for _ in range(200)]
+    rare_dataloader = [make_rare_batch() for _ in range(200)]
+    z_a = torch.randn(1, hidden)
+    r_a = torch.tensor([1])
+    anchor_sample   = (z_a, r_a)
+
+    # ── Config ───────────────────────────────────────────────
+    config = SRIConfig(
+        kfac_damping=1e-3,
+        kfac_update_freq=10,
+        lambda_margin=0.5,
+        critic_update_freq=10,
+        mi_num_negatives=16,
+        base_lr=4e-3,
+        lr_decay="robbins_monro",
+        lr_decay_offset=100.0,
+        rollback_tolerance=1e-4,
+        certify_every=50,
+        log_every=20,
+    )
+
+    # ── Trainer ─────────────────────────────────────────────
+    trainer = SRITrainer(
+        model=model,
+        ref_model=ref_model,
+        unsafe_model=unsafe_model,
+        loss_fn=nn.MSELoss(),
+        config=config,
+    )
+
+    trainer.train(dataloader, rare_dataloader, anchor_sample, num_steps=200)
+
+    # ── Summary ─────────────────────────────────────────────
+    stats = trainer.compute_summary_stats()
+    print("\n── SRI Training Summary ──────────────────────────────")
+    for k, v in stats.items():
+        print(f"  {k:<25s}: {v}")
+
+    # ── Infeasibility check ──────────────────────────────────
+    test_inputs = torch.randn(16, obs_dim)
+    infeasible, lb = trainer.infeasibility_check(test_inputs)
+    print(f"\nInfeasibility check: infeasible={infeasible}, dual_bound={lb:.4f}")
+```
+
