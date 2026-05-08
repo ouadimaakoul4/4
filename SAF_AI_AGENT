@@ -248,6 +248,303 @@ Prompt injection is not a superficial “prompt bug” but a structural failure 
 
 We have addressed the Autonomy Tax as a first‑class design constraint, incorporated mechanisms with empirical capability‑preservation evidence, and identified the multimodal injection gap, reasoning‑level attacks, and adaptive white‑box robustness as priority open problems. The framework aligns with emerging standards from OWASP, CSA, NIST, and IETF, and provides a phased migration path tied to the CSA Agentic Trust Framework maturity levels. While no experimental validation is provided, this work establishes a foundation for building, evaluating, and iteratively improving secure agent systems.
 
+Appendix A: Formal Security Property Definitions and Proof Sketches
+
+---
+
+A.1 Formal Notation
+
+Let an LLM agent $\mathcal{A}$ have user intent $\iota$, tool set $\mathcal{T} = \{t_1,\dots,t_k\}$, memory $\mathcal{M}$, and environment $\mathcal{E}$. An execution trace is a sequence $\sigma = (s_0, s_1, \dots, s_n)$ where each step $s_i = (\theta_i, a_i, o_i)$ consists of a thought $\theta_i$, action $a_i \in \mathcal{T} \cup \{\text{respond}\}$, and observation $o_i \in \mathcal{E} \cup \mathcal{M}$. The context window at step $i$ is $C_i = \text{sys\_prompt} \oplus h_{<i} \oplus o_i$, where $h_{<i}$ is conversation history and $\oplus$ is token concatenation. An injection occurs at step $i$ if $o_i$ contains an adversarial payload $p \in \mathcal{P}$ constructed by an attacker $\mathcal{A}_* \in \{\mathcal{A}_S, \mathcal{A}_C, \mathcal{A}_W, \mathcal{A}_M\}$.
+
+---
+
+A.2 Goal Integrity
+
+Definition A.1 (Goal Integrity). An execution $\sigma$ satisfies goal integrity with respect to user intent $\iota$ iff for every action $a_i$, $a_i \in \text{Authorized}(\iota)$, where $\text{Authorized}(\iota)$ is the set of actions consistent with the original goal expressed at step $s_0$.
+
+Definition A.2 (Instruction Provenance). An instruction $x$ has trusted provenance iff there exists a verifiable certificate chain
+x \xrightarrow{\text{sign}_{k_1}} y_1 \xrightarrow{\text{sign}_{k_2}} \cdots \xrightarrow{\text{sign}_{k_m}} \text{TrustRoot},
+
+
+where each $k_j$ is a registered, non‑revoked signing key in the Agent Identity Registry. An instruction without trusted provenance must be treated as data and routed to the passive IDSL zone (Layer 1).
+
+Proof Sketch (ASIDE → Goal Integrity against $\mathcal{A}_S$).
+Under ASIDE [18], data tokens receive embedding $e_d = R \cdot e_{\text{orig}}$, where $R \in SO(2d)$ is a fixed isoclinic rotation. Let the instruction subspace be $\mathcal{V}_I \subset \mathbb{R}^{2d}$ and the data subspace $\mathcal{V}_D = R(\mathcal{V}_I)$. Because $R$ is an isometry with $\mathcal{V}_I \perp \mathcal{V}_D$ by construction, no data token projects onto $\mathcal{V}_I$ without passing through $R^{-1}$. Since $R^{-1}$ is not applied at inference, a static attacker’s payload $p$ entering as data has zero instructional authority.
+Limitation: For $\mathcal{A}_W$, an attacker knowing $R$ might craft payloads in $\mathcal{V}_D$ that still exert instructional influence via the model’s post‑rotation processing. Formal adversarial robustness bounds under white‑box knowledge of $R$ remain open.
+
+---
+
+A.3 Non‑Impersonation
+
+Definition A.3 (Non‑Impersonation). Let $\text{id}(A)$ be the claimed identity of agent $A$ and $\text{key}(A)$ its registered cryptographic key pair. A communication $m$ satisfies non‑impersonation iff
+\text{Verify}(\text{id}(A), \text{sig}(m), \text{key}(A)) = 1
+
+
+and $\text{key}(A)$ is active in the Agent Identity Registry at the time of $m$.
+
+Proof Sketch (Layer 2 guarantee).
+Under ATTP [22], every inter‑agent message carries an Agent Passport (JWT) signed with ECDSA P‑256. Non‑impersonation reduces to the existential unforgeability of ECDSA under adaptive chosen‑message attack (EUF‑CMA). Under the hardness of the elliptic curve discrete logarithm problem (ECDLP), no probabilistic polynomial‑time adversary can forge a valid signature for an identity it does not control, except with negligible probability. This guarantee degrades to computational security against quantum adversaries; see Appendix F for post‑quantum migration.
+
+---
+
+A.4 Memory Consistency
+
+Definition A.4 (Memory Consistency). Let $\mathcal{M} = \{m_1,\dots,m_r\}$. Memory is consistent iff (i) for all $m_i, m_j$, there exists no query $q$ such that the reasoning path induced by $m_i$ contradicts that induced by $m_j$, and (ii) every $m_i$ has an unbroken provenance tag to a verified observation from an untainted execution step.
+
+Coverage. A‑MemGuard [32] enforces (i) through consensus‑based validation: for a candidate $m_{\text{new}}$, $k$ parallel reasoning paths are built using $m_{\text{new}}$ and $k-1$ existing memories. If the path induced by $m_{\text{new}}$ deviates from the majority by more than threshold $\tau$, $m_{\text{new}}$ is rejected. The dual‑memory structure weakly enforces (ii) by storing detected failures as “lessons.” DRIFT [33] adds injection isolation, masking instructions in the memory stream that conflict with the current query.
+
+---
+
+A.5 Capability Preservation (Autonomy Tax Constraint)
+
+Definition A.5 (Capability‑Preserving Defense). Let $\Pi_{\text{benign}}(\mathcal{A})$ be the benign task completion rate of agent $\mathcal{A}$ on benchmark $\mathcal{B}$, and $\Pi_{\text{benign}}(\mathcal{A}^D)$ the rate of defended variant $\mathcal{A}^D$. A defense mechanism $D$ is capability‑preserving iff
+\Pi_{\text{benign}}(\mathcal{A}^D) \ge (1-\varepsilon) \cdot \Pi_{\text{benign}}(\mathcal{A}),\quad \varepsilon \le 0.05
+
+
+for all $\mathcal{A}$ and $\mathcal{B} \in \{\text{AgentDojo, ASB, AgentDyn}\}$. Mechanisms failing this constraint must not be deployed.
+
+Verified mechanisms: ASIDE (no capability loss), AgentArmor (1 % utility drop), VIGIL (more than doubles utility under attack), A‑MemGuard (minimal utility cost). ARGUS preserves 87.5 % utility ($\varepsilon = 0.125$), marginally outside the recommended bound.
+
+Conjecture (Compositional Defense Budget). Let $D = D_1 \circ D_2 \circ \cdots \circ D_7$ and $\delta_i$ be the independent benign‑task degradation of layer $i$. Under independence,
+\Pi_{\text{benign}}(\mathcal{A}^D) \ge \prod_{i=1}^{7}(1-\delta_i) \cdot \Pi_{\text{benign}}(\mathcal{A}).
+
+
+Caveat: Independence is almost certainly false; cascade amplification in multi‑step agents [6] causes superlinear degradation. The bound is an optimistic theoretical floor, not a guaranteed operational threshold. Empirical evaluation under incremental layer activation is required.
+
+---
+
+Appendix B: Extended Threat Model — Attacker Class Formalization
+
+---
+
+B.1 Attacker Hierarchy
+
+The four attacker classes form a strict capability hierarchy:
+\mathcal{A}_S \subsetneq \mathcal{A}_C \subsetneq \mathcal{A}_W \quad (\text{text‑domain}),
+
+
+\mathcal{A}_M \not\subset \mathcal{A}_W,\; \mathcal{A}_W \not\subset \mathcal{A}_M \quad (\text{orthogonal surfaces}).
+
+
+$\mathcal{A}_M$ is not subsumed by $\mathcal{A}_W$ because the attack surface (vision/audio/sensor encoders) is architecturally distinct.
+
+B.2 Static Attacker — $\mathcal{A}_S$
+
+Capabilities: Controls external data (web pages, APIs, PDFs). Payloads crafted offline without defense knowledge. Complexity: $O(1)$—one crafted document suffices.
+
+Coverage: Fully addressed by Layer 1 (ASIDE/PCFI), Layer 3 (TOF schema enforcement), Layer 5 (provenance tagging). Weakest class.
+
+B.3 Context‑Adaptive Attacker — $\mathcal{A}_C$
+
+Capabilities: Observes partial agent state (current task, tool outputs, intermediate reasoning) via a state oracle $\mathcal{O}(s_i) \to \hat{s}_i$. Payloads are functions of this state: $p = \phi(\hat{s}_i)$. Attack success depends on context.
+
+Why static defenses fail: PCFI and ASIDE operate at input level, before agent state exists; they cannot distinguish a context‑plausible injection from a legitimate workflow continuation.
+
+Coverage: Partial. ARGUS [10] reduces ASR to 3.8% against adaptive white‑box adversaries by tracking provenance; it is the primary defense. Residual risk remains for payloads that exploit narrow legitimate task semantics.
+
+B.4 Adaptive White‑Box Attacker — $\mathcal{A}_W$
+
+Capabilities: Full knowledge of defense architecture (ASIDE’s $R$, PCFI rules, A‑MemGuard threshold $\tau$, AgentArmor’s type graph, ARGUS provenance logic). Iteratively probes the system: payload $p_r = \phi_r(D, \{p_1,\dots,p_{r-1}\}, \{b_1,\dots,b_{r-1}\})$ where $b_r$ is defense outcome, until bypass.
+
+Known vulnerabilities: NAACL 2025 study [7] showed >50 % ASR for twelve published defenses under adaptive attack. No current mechanism offers formal adversarial robustness proofs. Cryptographic layers (L2, partially L4) resist through computational hardness; content‑based layers (L1, L3, L5, L6) lack formal guarantees.
+
+Coverage: Probabilistic only. ARGUS claims robustness but requires third‑party validation.
+
+B.5 Multimodal Attacker — $\mathcal{A}_M$
+
+Capabilities: Injects via vision, audio, or sensor channels processed by multimodal/embodied agents. Visual injection achieves 60–80 % ASR [14]; physical‑world attacks (CHAI, [15]) require no digital access.
+
+Framework gap: Layers 1, 3, 6 operate on text tokens only; they provide zero coverage for inputs passing through vision encoders $f_V$, audio encoders $f_A$, or sensor encoders $f_S$. For any modality $m \in \{V,A,S\}$, a payload $p_m$ is invisible to all seven layers as specified.
+
+Mitigation path: Glass Wall [19] addresses multimodal visual injections in its benchmark. Extending ASIDE‑style orthogonal rotation to vision‑encoder output tokens is a conjectured but unverified extension.
+
+---
+
+Appendix C: Layer Interaction Analysis and Known Interference Points
+
+---
+
+C.1 Motivation
+
+Seven layers operating concurrently may interact synergistically or antagonistically. Identifying boundary failure modes is essential for principled composition.
+
+C.2 Synergistic Interactions
+
+· L1 ↔ L6: ASIDE eliminates data‑sourced instruction nodes; AgentArmor’s PDG type checker trivially passes. Layer 6 is a redundant backstop for Layer 1 failures—defense‑in‑depth.
+· L5 ↔ L6: DRIFT masks injected memory before context insertion; unmasked payloads are caught by AgentArmor’s data‑flow type check. Independent checkpoints.
+· L2 ↔ L4: ATTP’s signing provides cryptographic identity ground truth for ZTAA policy evaluation. Layers must be deployed together; neither is operationally useful alone.
+
+C.3 Antagonistic Interactions
+
+· L3 ↔ L6 (Cascade Failure Risk): If VIGIL blocks a tool output, AgentArmor receives an incomplete trace with missing observation node. This may cause a false security violation or an incomplete graph. Explicit error‑propagation semantics between L3 and L6 are not yet specified.
+· L1 ↔ L3 (Redundant Latency): PCFI processes every tool output at the API gateway; TOF independently applies schema enforcement and VIGIL. In high‑throughput systems, double processing consumes latency budget. Consolidation may be needed in Phase 2.
+· L5 ↔ L1 (Temporal Gap): Memory entries written before IDSL deployment were not protected by ASIDE/PCFI. Later recall bypasses IDSL because the entry enters context as a recalled memory, not a new tool output. A‑MemGuard partially mitigates via dual‑memory lessons but does not retroactively sanitize historical entries. A deployment‑time memory audit is required.
+· L7 ↔ GDPR (Auditability vs. Minimization): Immutable logs contain personal data (financial, health, communications). Full reconstructability conflicts with GDPR Article 5(1)(c) (data minimisation). A privacy‑preserving audit architecture with selective encryption and DPO‑controlled key escrow is needed; currently not specified.
+
+---
+
+Appendix D: Benchmark Landscape and Evaluation Methodology
+
+---
+
+D.1 Recommended Benchmark Suite
+
+Layer Primary Benchmark Secondary Benchmarks Key Metric
+L1 (IDSL) SEP (Zverev et al.) InjecAgent, TensorTrust IDS‑Score, ASR
+L2 (Signed Comm) ATTP conformance suite W3C DID resolver conformance Auth failure rate, latency
+L3 (TOF) SIREN (959 cases) AgentDojo, ASB ASR under injection, utility
+L4 (Trust Isolation) NANDA conformance Enterprise IAM audits Policy violation rate, blast radius
+L5 (MPL) EHRAgent (A‑MemGuard) AgentDojo memory tasks ASR reduction, utility cost
+L6 (Runtime Verification) AgentDojo (97 tasks, 1000 prompts) ASB, AgentDyn ASR (target <5 %), utility (target >95 %)
+L7 (Auditability) ACL 2026 KnowFM dimensions EU AI Act Art. 12 checklist Five‑dimension auditability score
+
+D.2 Benchmark Limitations
+
+· AgentDojo: Designed for single‑hop tool use; does not capture multi‑step cascade failures. For cascade evaluation, AgentDyn is required.
+· SIREN: Created by the same team as VIGIL; no independent replication yet.
+· PCFI benchmark: 0 % FPR measured on a custom “synthetic and semi‑realistic” dataset. No evaluation on established benchmarks (AgentDojo, ASB, SIREN). Claims are proof‑of‑concept; deployment‑bound evaluation on AgentDojo is essential.
+
+D.3 Composed Framework Evaluation Protocol
+
+1. Baseline: Measure undefended $\Pi_{\text{benign}}^{\text{base}}$ and $\Pi_{\text{attack}}^{\text{base}}$.
+2. Incremental activation: Activate layers in order 1 → 3 → 5 → 6 → 2 → 4 → 7, recording marginal benefit and capability cost.
+3. Cascade interaction testing: For each adjacent pair $(L_i, L_{i+1})$, test boundary interactions identified in Appendix C.3. Specify expected behavior.
+4. Adaptive attack evaluation: Subject composed framework to $\mathcal{A}_W$‑class adversary (human red‑teaming or AgentVigil). Report residual ASR separately from static ASR.
+5. Capability preservation check: Verify $\Pi_{\text{benign}}^D \ge 0.95 \cdot \Pi_{\text{benign}}^{\text{base}}$ on all three benchmarks. If violated, identify responsible layers and redesign.
+
+---
+
+Appendix E: Agent Identity Lifecycle — Formal Specification
+
+---
+
+E.1 Lifecycle State Machine
+
+States:
+\text{UNREGISTERED} \xrightarrow{\text{Provision}} \text{ACTIVE} \xrightarrow{\text{Suspend}} \text{SUSPENDED} \xrightarrow{\text{Reinstate}} \text{ACTIVE}
+
+
+\text{ACTIVE} \xrightarrow{\text{Revoke}} \text{REVOKED}
+
+
+\text{SUSPENDED} \xrightarrow{\text{Revoke}} \text{REVOKED}
+
+
+\text{ACTIVE} \xrightarrow{\text{Expire}} \text{EXPIRED}
+
+Provision $(A, \text{scope}, T_{\text{exp}})$: Creates identity $\text{id}(A)$ with DID, generates Ed25519 key pair, assigns capability scope $S \subseteq \mathcal{T} \cup \mathcal{R}$, sets expiration $T_{\text{exp}}$. Precondition: provisioning authority holds ATTP L3+ credential. Post‑condition: $\text{id}(A)$ broadcast to federated registry.
+
+Revoke $(A, \text{reason})$: Broadcasts signed revocation to all verifiers. Revocation must propagate within $\Delta T_{\text{revoke}} \le 60$ s (kill‑switch requirement). Bindu’s distributed ledger provides eventual consistency; the 60 s bound requires consensus finality compatible with the deployment’s threat model.
+
+Rotate $(A, pk_{\text{new}})$: Replaces signing key while preserving identity continuity. Rotation on schedule ($T_{\text{max}} \le 90$ d standard, $\le 30$ d high‑assurance), on compromise indication, and on container restart.
+
+E.2 Capability Delegation Protocol
+
+Delegation is represented as a Verifiable Credential (VC):
+\text{VC}_{A_1 \to A_2} = \left\{ \text{issuer}: \text{id}(A_1),\ \text{subject}: \text{id}(A_2),\ \text{scope}: S' \subseteq S_{A_1},\ \text{expiry}: T_{\text{exp}}' \le T_{\text{exp}}^{A_1},\ \text{sig}: \text{Sign}(sk_{A_1}, \cdot) \right\}
+
+Anti‑privilege‑escalation constraints:
+
+1. $S' \subseteq S_{A_1}$ (cannot delegate unheld capabilities).
+2. $T_{\text{exp}}' \le T_{\text{exp}}^{A_1}$ (delegation not exceed credential lifetime).
+3. Delegation depth $d \le d_{\text{max}}$ (recommended $d_{\text{max}}=3$) enforced at policy engine.
+4. Non‑transitive by default; re‑delegation requires delegatable: true and L4 trust level.
+
+E.3 NHI Scale — Architectural Requirements
+
+At enterprise scale, the system must support:
+
+· Registration throughput $\ge 10^4$ agent provisioning events/s.
+· Revocation propagation $\le 60$ s full‑fleet.
+· Identity verification latency $\le 5$ ms (L1), $\le 50$ ms (L3 full capability check).
+· Storage: ~2 KB per identity. At $10^9$ identities, registry exceeds 2 TB; federated sharding (Bindu) required.
+
+---
+
+Appendix F: Post‑Quantum Cryptography Migration Roadmap
+
+---
+
+F.1 Threat Timeline
+
+Current ATTP and Bindu rely on ECDSA/Ed25519, broken by Shor’s algorithm on a cryptographically relevant quantum computer (CRQC). “Harvest now, decrypt later” threatens long‑lived sensitive agent communications. NIST published ML‑DSA (CRYSTALS‑Dilithium, FIPS 204), ML‑KEM (CRYSTALS‑Kyber, FIPS 203), and SLH‑DSA (SPHINCS+, FIPS 205) in August 2024; the federal migration target is 2030.
+
+F.2 Migration Phases
+
+Phase 1 (Immediate): Hybrid Signatures. Double‑bag each message with ECDSA + ML‑DSA (Dilithium3). Both signatures must verify. Provides classical and quantum security today, with ~51× increase in signature size (3,293 B vs. 64 B).
+
+Phase 2 (2027 target): Native ML‑DSA. All agent identities transition to ML‑DSA signing. DID documents updated to advertise PQC key types via Multikey entries with algorithm identifier ML‑DSA-65.
+
+Phase 3 (2030 target): Full PQC Infrastructure. Extend ML‑KEM to agent‑to‑agent encrypted channels; implement crypto‑agility via sidecar proxy pattern.
+
+F.3 Implementation Constraint
+
+The 51× signature payload increase under Dilithium3 adds latency. For throughput‑sensitive deployments, SLH‑DSA‑SHAKE‑128s offers 49 B signatures at ~10× slower signing. Algorithm choice is deployment‑specific; crypto‑agility ensures configurable without architectural change.
+
+---
+
+Appendix G: Standards and Regulatory Compliance Matrix
+
+---
+
+Framework/Standard Relevant Provision Layer(s) Coverage
+OWASP Agentic AI Top 10 (Dec 2025) ASI01–ASI09 L1–L7 ASI09 (multimodal) gap
+CSA Agentic Trust Framework (Feb 2026) Identity Management L2, App. E Full
+CSA ATF Behavioral Monitoring L6, L7 Full
+CSA ATF Data Governance L1, L3 Full
+CSA ATF Segmentation L4 Full
+CSA ATF Incident Response L7, App. E (kill switch) Full
+NSA ZIG (Jan 2026) Explicit Verification, Assume Breach, Least Privilege L2, L4 Full; PQC roadmap only
+NIST AI Agent Standards Initiative (Feb 2026) Security guidance All Aligned
+EU AI Act Art. 12 Record‑keeping L7 Full
+EU AI Act Art. 14 Human oversight L7 (Auditability Card) Full
+EU AI Act Art. 15 Cybersecurity L1–L6 Full
+GDPR Art. 5(1)(c) Data minimisation L7 Gap (see App. C.3)
+IETF ATTP (draft‑sharif) Agent authentication L2 Full
+W3C DID Core Agent identity L2, App. E Full
+
+---
+
+Appendix H: Known Gaps and Priority Research Directions
+
+---
+
+H.1 Gap Registry
+
+Each gap is rated by severity (Critical/High/Medium).
+
+GAP‑01: Multimodal Attack Surface (Critical)
+Layers 1, 3, 6 do not process non‑text modalities. $\mathcal{A}_M$‑class attacks exploit this.
+Priority: Extend ASIDE rotation to vision‑encoder outputs; design multimodal TOF; develop physical‑world injection taxonomy.
+
+GAP‑02: Adaptive White‑Box Robustness (Critical)
+No content‑based layer provides formal $\mathcal{A}_W$ guarantees. Cryptographic layers offer computational security only.
+Priority: Adversarial robustness certification for ASIDE’s $R$; formal verification of AgentArmor type system; ARGUS‑style provenance hardening.
+
+GAP‑03: Compositional Defense Budget (High)
+The additive Defense Budget conjecture is violated by cascade amplification. No empirical measurement of composed $\Pi_{\text{benign}}$.
+Priority: Incremental activation evaluation on AgentDojo/AgentDyn; model cascade amplification as function of defense blocking rate and trajectory depth.
+
+GAP‑04: Reasoning‑Level Attacks (High)
+Attacks on internal chain‑of‑thought (e.g., “thinking‑stopped”) bypass all seven layers that assume context‑window injection.
+Priority: Characterise reasoning attack surface for extended‑thinking models; integrate SAVER belief‑state auditing as Layer 6 extension.
+
+GAP‑05: GDPR/Auditability Conflict (Medium)
+Immutable logs violate data minimisation.
+Priority: Selective field encryption with DPO‑controlled key escrow; cryptographic commitment‑based audit trails.
+
+GAP‑06: Retroactive Memory Sanitization (Medium)
+Pre‑deployment memory entries may carry undetected poisoning. A‑MemGuard does not audit historical entries.
+Priority: Bulk consensus audit at deployment; continuous background re‑evaluation.
+
+H.2 Summary Research Agenda (Priority Order)
+
+1. Compositional evaluation of all seven layers on AgentDojo/ASB/AgentDyn.
+2. Adaptive white‑box red‑teaming of composed framework.
+3. Design and prototype multimodal IDSL/TOF extensions.
+4. Formal adversarial robustness proof for ASIDE under $\mathcal{A}_W$.
+5. GDPR‑compatible audit logging architecture.
+
 ---
 
 Verified References
