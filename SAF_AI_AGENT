@@ -1,0 +1,295 @@
+A Secure Architecture Framework for AI Agent Systems:
+
+Structural Defenses Against Prompt Injection and Multi-Agent Compromise
+
+Conceptual Blueprint (Doctoral Synthesis — Final Revision)
+
+---
+
+Abstract
+Modern AI agent systems suffer from a fundamental architectural flaw: the conflation of data and instruction channels in a single, unpartitioned context stream. This enables prompt injection attacks that propagate through tool outputs, cross-agent communication, long‑term memory, and—increasingly—multimodal sensory streams. We propose a seven‑layer defense architecture grounded in the principle of untrusted‑by‑default data flow. Each layer is mapped to specific, externally validated mechanisms from the 2025–2026 research literature: structural input separation (ASIDE, The Glass Wall, PCFI, PFI), cryptographically verifiable agent identity (ATTP, Bindu/DIDs), verified tool output pipelines (VIGIL, AgentArmor, IPIGuard), zero‑trust agent isolation (NANDA/ZTAA), consensus‑based memory protection (A‑MemGuard, DRIFT), formal runtime verification of execution trace integrity (AgentArmor, ARGUS, SAVER), and an auditability layer for post‑hoc accountability. We incorporate a formalized threat model that includes static, context‑adaptive, white‑box adaptive, and multimodal adversaries, and we explicitly address the capability‑alignment paradox (the “Autonomy Tax”). We introduce a conjectured Defense Overhead Budget, weakened to acknowledge compositional non‑additivity, and identify critical open problems including multimodal injection, adaptive white‑box robustness, and reasoning‑level attacks. The framework aligns with the OWASP Agentic AI Top‑10, the Cloud Security Alliance Agentic Trust Framework, NIST’s AI Agent Standards Initiative, and EU AI Act auditability requirements. No experimental implementation is presented; this work is a principled design synthesis and a research roadmap.
+
+---
+
+1. Introduction
+
+Large language model (LLM)‑powered agents are increasingly deployed in multi‑step, tool‑augmented workflows across domains including finance, healthcare, and critical infrastructure [1, 2]. However, their fundamental vulnerability—the inability to securely distinguish between trusted instructions and untrusted data—remains unresolved. State‑of‑the‑art models remain susceptible to indirect prompt injection via poisoned web pages, manipulated tool outputs, compromised agent memory, and multimodal sensory streams [3, 4]. Multi‑agent systems amplify these risks because trust is often inherited rather than verified, enabling cascading compromise [5].
+
+Recent empirical work has revealed a deeper structural problem: the capability‑alignment paradox, or “Autonomy Tax” [6]. Defense training designed to improve safety systematically destroys agent competence while failing to prevent sophisticated attacks. Defended models exhibit agent incompetence bias (refusing or generating invalid actions on benign tasks before observing any external content), cascade amplification bias (early failures propagating through retry loops, causing timeout on 99% of tasks), and trigger bias (paradoxical security degradation where defended models perform worse than undefended baselines while straightforward attacks bypass defenses at high rates). The root cause is shortcut learning: models overfit to surface attack patterns rather than developing semantic threat understanding.
+
+Current mitigation approaches centered on prompt engineering, static keyword filtering, or system‑prompt disclaimers are architecturally inadequate. Worse, a 2025 NAACL study demonstrated that eight published indirect‑injection defenses were bypassed with greater than 50% attack success rates under adaptive attacks—attackers who iteratively probe the defense and craft bypasses specifically targeting it [7, 8].
+
+This paper proposes a structural defense blueprint organized into seven layers. Each layer is underpinned by recent, externally verifiable academic and industry proposals; together they form a zero‑trust architecture for agentic systems. We explicitly address the Autonomy Tax by introducing, as a formal constraint, that every defense layer must be evaluated against a capability‑preservation metric. We document known limitations, identify open gaps (multimodal attacks, adaptive white‑box robustness, reasoning‑level attacks), and outline a phased migration path tied to the Cloud Security Alliance Agentic Trust Framework maturity levels. No experimental validation or implementation is presented; this work is a principled synthesis and research roadmap.
+
+---
+
+2. Problem Statement and Formalized Threat Model
+
+2.1 Root Cause
+
+The root cause of prompt injection is the collapse of instruction and data channels into a single token stream. In standard autoregressive transformer architectures, the model cannot differentiate between a system prompt, a user query, a retrieved document, or a multimodal sensory input. Any external content that enters the context window can act as an instruction, violating the integrity of the agent’s goal. This is not a model weakness but an architectural design flaw: untrusted data is treated as trusted instruction through system design.
+
+2.2 Formalized Threat Model
+
+We adopt a strong, layered adversary model that explicitly includes adaptive and multimodal capabilities, drawing on recent formalizations [9, 10, 11] and the OWASP Top‑10 for Agentic Applications [12] and the Cloud Security Alliance Agentic Trust Framework (ATF) threat taxonomy [13].
+
+Attacker Classes:
+
+· 𝒜ₛ (Static Attacker): Controls arbitrary external data sources (web pages, API responses, PDFs, emails) and injects adversarial payloads crafted offline without knowledge of the defense internals. This corresponds to the traditional “context‑insensitive” model.
+· 𝒜꜀ (Context‑Adaptive Attacker): Observes partial agent state (current task, tool outputs, intermediate reasoning) before crafting and injecting payloads. This attacker adapts attacks to the agent’s dynamic context, as formalized in ARGUS [10].
+· 𝒜ᵥᵥ (Adaptive White‑Box Attacker): Possesses full knowledge of the defense architecture and iteratively probes the system to craft targeted bypasses. This class subsumes 𝒜꜀ and represents the strongest realistic threat, as demonstrated in [7].
+· 𝒜ₘ (Multimodal Attacker): Injects adversarial payloads through non‑text modalities—images, audio, sensor data—that are processed by multimodal agents. Visual perturbations achieve 60–80% attack success rates on vision‑language models [14], and physical‑world attacks (e.g., malicious road signs) can hijack embodied AI agents [15].
+
+In multi‑agent settings, any attacker class may control one or more agents, which can arbitrarily deviate from their specified protocol. The attacker does not directly access agent code, system prompts, or cryptographic keys.
+
+Attack Vectors (Mapped to OWASP ASI categories [12]):
+
+· Direct injection (ASI01): User‑supplied input containing instruction‑like text.
+· Indirect injection via tools (ASI01, ASI02): Retrieved documents, API responses, or code execution output carrying hidden instructions.
+· Cross‑agent injection (ASI07): Malicious agent outputs relayed through trusted communication channels.
+· Memory poisoning (ASI06): Long‑term memory entries crafted to mislead future reasoning.
+· Multimodal injection (ASI01, ASI02): Adversarial instructions embedded in images, audio, or sensor streams.
+
+Security Properties to Preserve [9, 16]:
+
+· Goal integrity: Executed actions align with the user’s original intent.
+· Instruction provenance: No instruction originates from an untrusted source without explicit, verified authorization.
+· Non‑impersonation: The identity and authority of every agent are cryptographically verifiable.
+· Memory consistency: Persistent knowledge is free of contradictions and verifiable against a trusted knowledge base.
+· Capability preservation: No defense mechanism shall reduce benign task completion below an operationally defined threshold (the Autonomy Tax constraint [6]).
+· Auditability: All agent actions are traceable to an accountable identity and reconstructable post‑hoc for forensic and compliance purposes [17].
+
+---
+
+3. Core Design Principle
+
+Untrusted‑by‑default data flow architecture. Every input, output, tool response, inter‑agent message, memory entry, and multimodal sensory stream is treated as potentially hostile. The system design structurally prevents any data channel from injecting instructions into the control flow. Critically, we adopt the Autonomy Tax constraint as a first‑class design requirement: every defense mechanism must be evaluated not only on attack success rate reduction but also on benign task completion preservation.
+
+---
+
+4. Proposed Defense Architecture
+
+The architecture comprises seven layers: six form the prevention core; Layer 7 adds post‑hoc accountability. They operate concurrently and can be incrementally deployed.
+
+4.1 Layer 1: Instruction–Data Separation Layer (IDSL)
+
+Objective: Prevent any untrusted data from being interpreted as an instruction.
+
+Design: We enforce structural separation at the context‑construction level, integrating four complementary mechanisms from verified research.
+
+· Orthogonal embedding rotation (ASIDE) [18]: ASIDE modifies the model to apply a fixed orthogonal rotation to data‑token embeddings, creating distinct representations for instructions and data without additional parameters. Instruction‑tuned LLMs with ASIDE achieve substantially higher instruction‑data separation scores without loss in model capabilities, and perform competitively on prompt injection benchmarks even without dedicated safety training. ASIDE is the only mechanism in our framework that has demonstrated empirically that it does not trigger the Autonomy Tax.
+· Zonal tokenization with LoRA hardening (The Glass Wall) [19]: The Glass Wall enforces cognitive segregation through zonal tokenization; untrusted inputs are isolated into “Passive Zones,” and a LoRA adapter hardens the attention mechanism by retuning Query and Value projection layers. On stratified benchmarks totaling 23,100 inference calls, the approach reported a 0.00% Attack Success Rate. Caveat: This extraordinary claim originates from a non‑peer‑reviewed TechRxiv preprint; independent replication has not been confirmed, and the evaluation may be limited to the authors’ own attack set. Until published in a peer‑reviewed venue, this result should be treated as preliminary.
+· Middleware enforcement (PCFI) [20]: For black‑box models, PCFI operates as a FastAPI‑based middleware gateway, modeling each API request as a structured composition of system, developer, user, and retrieved‑document segments. A three‑stage pipeline applies lexical heuristics, role‑switch detection, and hierarchical policy enforcement. PCFI intercepted all attack‑labeled requests while maintaining a 0% False Positive Rate on a custom benchmark of synthetic and semi‑realistic workloads, with 0.04 ms median overhead. Caveat: The 0% FPR is measured on a self‑designed benchmark; generalizability to out‑of‑distribution attacks, particularly from the 𝒜ᵥᵥ class, has not been established.
+· Agent‑level privilege separation (Prompt Flow Integrity – PFI) [21]: PFI separates an LLM agent into a trusted agent that handles user input and trusted plugin results, and an untrusted agent that processes external tool data, preventing privilege escalation by restricting the untrusted agent’s capabilities even if compromised. This is structurally complementary to embedding‑level separation; we position PFI as an execution‑level enforcement mechanism that reinforces the IDSL guarantee.
+
+The IDSL guarantees that, regardless of content, data is rendered structurally inert.
+
+4.2 Layer 2: Signed Agent Communication Protocol
+
+Objective: Ensure message authenticity, integrity, non‑impersonation, and auditable provenance among agents.
+
+Design: We adopt the IETF Agent Trust Transport Protocol (ATTP) [22] and the Bindu decentralized identity framework [23].
+
+· ATTP (Agent Trust Transport Protocol): An IETF Internet‑Draft (March 2026). ATTP operates as an application‑layer protocol over HTTP, adding mandatory ECDSA P‑256 cryptographic identity verification and per‑message signing to every agent‑server interaction. Every request MUST carry a valid Agent Passport (JWT‑based identity credential), every request and response body MUST be signed, and every interaction MUST be recorded in a hash‑chained audit trail. It defines five trust‑gated access levels (L0–L4).
+· Decentralized Identifiers (Bindu/DIDs) [23]: Bindu equips agents with W3C‑compliant Decentralized Identifiers (DIDs) and Ed25519 key pairs, enabling cryptographically verifiable communication across organizational boundaries, essential for scaling multi‑agent systems.
+· Intent‑bound authorization [13, 24]: A signed message includes a scoped capability claim (e.g., “Agent B may execute read‑only SQL on behalf of User X for 5 minutes”). This transforms identity verification into an authorization enforcement point, limiting blast radius even if an agent is compromised.
+
+Post‑Quantum Migration Path: The current ATTP and Bindu specifications rely on ECDSA and Ed25519, vulnerable to quantum adversaries implementing Shor’s algorithm [25]. NIST has standardized CRYSTALS‑Dilithium (ML‑DSA) and CRYSTALS‑Kyber (ML‑KEM) as federal post‑quantum cryptographic standards [26]. For long‑lived deployments, we recommend a hybrid approach: wrapping existing signatures in a CRYSTALS‑Dilithium layer, with migration to native ML‑DSA signatures by the NIST 2030 deadline. Crypto‑agility via sidecar proxies is essential for agent fleets in high‑security environments [27].
+
+4.3 Layer 3: Tool Output Firewall (TOF)
+
+Objective: Sanitize all tool interactions such that no executable instructions leak back into the agent’s context.
+
+Design: The TOF is a structured pipeline drawing on VIGIL, IPIGuard, and AgentArmor.
+
+1. Schema Enforcement (IPIGuard Tool Dependency Graph) [28]: All tool outputs are parsed into a predefined data schema. IPIGuard explicitly models the agent’s task execution process as a traversal over a planned Tool Dependency Graph (TDG), decoupling action planning from external data. The TDG formalizes which fields are permitted and ensures that only expected structured data enters the agent’s reasoning loop.
+2. Verify‑before‑Commit (VIGIL) [29]: VIGIL facilitates speculative hypothesis generation and enforces safety through intent‑grounded verification. Before a tool output is inserted into the agent’s instruction stream, a separate validator agent checks if it would cause task drift. On the SIREN benchmark (959 tool stream injection cases), VIGIL reduced attack success rate by over 22% while more than doubling utility under attack compared to static baselines.
+3. Graph‑Based Integrity (AgentArmor) [16]: For high‑assurance deployments, AgentArmor intercepts execution traces and abstracts them into Program Dependence Graphs (PDGs). A graph annotator assigns security properties to each node, and a graph inspector enforces security policies through a type system, blocking unsafe operations before execution. AgentArmor reduces Attack Success Rate to just 3% while introducing only 1% functional overhead.
+
+Known Limitations: VIGIL’s SIREN evaluation is fixed‑benchmark; adaptive red‑teamers such as AgentVigil [30] achieve 65–67% attack success rates against GPT‑4o and Gemini with black‑box fuzzing. The residual ASR of our TOF pipeline against such an adaptive attacker is unknown. Furthermore, a published critique of AgentArmor notes that its “control flow” terminology differs from standard control‑flow analysis, assuming certain structural properties that may be exploited [31]. We propose that integrating ARGUS‑style provenance auditing (Layer 6) mitigates this gap by verifying that decisions are justified by trustworthy evidence, not merely by structural flow.
+
+4.4 Layer 4: Multi‑Agent Trust Isolation Model
+
+Objective: Eliminate implicit trust chains and prevent cascading compromise.
+
+Design: We formalize a zero‑trust agent access (ZTAA) model based on the NANDA framework [24] and the CSA Agentic Trust Framework (ATF) [13].
+
+· NANDA ZTAA: NANDA extends Zero Trust Network Access to autonomous agents, addressing capability spoofing, impersonation, and sensitive data leakage. It defines Agent Visibility and Control mechanisms for enterprise governance while maintaining operational autonomy.
+· CSA Agentic Trust Framework (ATF): The ATF provides an open specification structured around Identity Management, Behavioral Monitoring, Data Governance, Segmentation, and Incident Response. It defines a four‑level Agent Maturity Model (Intern → Junior → Senior → Principal) where agents earn autonomy through demonstrated trustworthiness.
+· Delegated, scoped capabilities: An agent issues a verifiable credential granting another agent limited, time‑bound authority. The receiving agent independently validates the credential’s signature, scope, and freshness.
+
+This removes the “inherit trust” anti‑pattern and ensures that compromise of one agent does not automatically compromise downstream collaborators. The PFI‑inspired privilege separation at the agent level (Layer 1) complements ZTAA by restricting the capabilities of any agent that handles untrusted data.
+
+4.5 Layer 5: Memory Protection Layer (MPL)
+
+Objective: Prevent memory poisoning from subverting long‑term reasoning.
+
+Design: We integrate two active defense mechanisms:
+
+· Consensus‑based verification (A‑MemGuard) [32]: A‑MemGuard is a proactive defense framework combining consensus‑based validation—detecting anomalies by comparing reasoning paths derived from multiple related memories—with a dual‑memory structure where detected failures are distilled into “lessons” stored separately and consulted before future actions. This breaks the self‑reinforcing error cycle. Across multiple benchmarks, A‑MemGuard cuts attack success rates by over 95% while incurring minimal utility cost.
+· Injection isolation (DRIFT) [33]: DRIFT (NeurIPS 2025, arXiv:2506.12104) is a Dynamic Rule‑based Isolation Framework. Its Injection Isolator detects and masks instructions in the memory stream that conflict with the user query. Its Secure Planner constructs a minimal function trajectory and JSON‑schema parameter checklist based on the user query, while its Dynamic Validator monitors deviations from the original plan. DRIFT maintained high utility across diverse models on AgentDojo and ASB benchmarks.
+
+Provenance tagging, contradiction checking, and write‑restriction remain as baseline policies.
+
+4.6 Layer 6: Runtime Verification Loop
+
+Objective: Detect and block the execution of any instruction that originated from an untrusted source before sensitive actions are taken.
+
+Design: We replace classic “self‑audit” prompts with a formal, multi‑mechanism approach.
+
+· Program Dependence Graph verification (AgentArmor) [16]: The runtime verification loop intercepts execution traces and abstracts them into PDGs. A graph annotator assigns security properties to each node, and a graph inspector enforces security policies through a type system. This verification runs in a separate, minimal context devoid of potentially compromised conversation history. AgentArmor introduces only 1% functional overhead.
+· Influence Provenance Graph (ARGUS) [10]: ARGUS constructs an influence provenance graph tracking how untrusted context propagates into agent decisions. It reduces attack success rate to 3.8% while preserving 87.5% task utility and remains robust against adaptive white‑box adversaries. Differentiation: AgentArmor performs structural verification (control/data flow), while ARGUS performs provenance verification (trustworthiness of evidence). We propose integrating both: structural checks pre‑execution, provenance auditing for post‑hoc decision justification.
+· Self‑Audited Verified Reasoning (SAVER) [34]: SAVER enforces verification over internal belief states before action commitment, using adversarial auditing to localize reasoning violations. While ARGUS tracks where untrusted context enters a decision, SAVER verifies whether the reasoning leading to the decision is internally consistent. This adds semantic verification to the structural and provenance layers, improving theoretical completeness.
+
+Addressing the AgentArmor critique [31]: The published critique notes that AgentArmor’s control‑flow abstraction is not standard and may assume structural properties exploitable by adversaries. By complementing AgentArmor with ARGUS’s provenance graph and SAVER’s belief‑state auditing, we add cross‑mechanism redundancy that can detect violations that a single analysis might miss. Formal proof of composition remains an open problem.
+
+4.7 Layer 7: Auditability Layer
+
+Objective: Ensure that all agent actions remain answerable after deployment—critical for regulatory compliance, forensic investigation, and public trust.
+
+Design: Drawing on the USC auditable‑agents framework [17] and the CSA ATF’s incident response element [13]:
+
+· Immutable execution logs: Every agent action, tool invocation, inter‑agent message, and memory update is recorded in a tamper‑evident, hash‑chained audit trail, extending ATTP’s mandatory audit trail requirement.
+· Provenance‑tagged decision records: Every decision is linked to its evidence chain: which data sources contributed, which agent made the decision, and which verification checks were passed or failed.
+· Auditability Card disclosure: A standardized disclosure mechanism (analogous to Model Cards or System Cards) documenting: what is logged, retention periods, access controls for audit data, and the scope of forensic reconstructability.
+· Regulatory alignment: This layer maps to EU AI Act Articles 12 (record‑keeping), 14 (human oversight), and 15 (accuracy, robustness, cybersecurity).
+
+---
+
+5. System‑Level Defense Strategy: Multi‑Dimensional Threat Coverage
+
+The seven layers operate in defense‑in‑depth, with overlapping coverage against defined attack vectors and attacker classes.
+
+Threat‑to‑Layer Matrix (with Adversarial Complexity)
+
+Attack Vector Primary Layers 𝒜ₛ (Static) 𝒜꜀ (Adaptive) 𝒜ᵥᵥ (White‑Box) 𝒜ₘ (Multimodal)
+Direct prompt injection IDSL, Runtime Verification ✓ Full ✓ Full ⚠ Partial (adaptive bypass risk) Partial (text only)
+Indirect injection via tool TOF, IDSL ✓ Full ✓ Full ⚠ Partial (AgentVigil ASR ~65%) Partial
+Agent impersonation Signed Comm, Trust Isolation ✓ Cryptographic ✓ Cryptographic ⚠ PQC migration needed ✓
+Cross‑agent injection Trust Isolation, Signed Comm ✓ ZTAA coverage ✓ ZTAA coverage ⚠ Key security dependent ✓
+Memory poisoning MPL, Runtime Verification ✓ >95% reduction ✓ >95% reduction ⚠ Adaptive memory attacks Partial
+Multimodal injection GAP: Not fully addressed ✗ ✗ ✗ ✗
+Task/goal drift TOF, Runtime Verification, MPL ✓ AgentArmor ASR 3% ⚠ ARGUS ASR 3.8% ⚠ No formal proof Partial
+
+Key: ✓ = Strong coverage, ⚠ = Partial/conditional coverage, ✗ = Gap
+
+Identified Coverage Gaps:
+
+1. Multimodal Injection (𝒜ₘ): Our layers operate primarily on text token streams. Multimodal agents introduce attack surfaces where adversarial perturbations in images achieve 60–80% ASR [14], and physical‑world injection (e.g., CHAI via road signs [15]) can hijack embodied agents. Mitigation path: The Glass Wall already addresses textual and multimodal visual injections [19]; extending ASIDE‑style orthogonal embedding separation to vision encoders is a critical research direction. Sensor input validation pipelines must be incorporated into the TOF.
+2. Adaptive White‑Box Attacks (𝒜ᵥᵥ): No layer provides formal adversarial robustness guarantees. ARGUS has demonstrated robustness against adaptive white‑box adversaries [10]; extending AgentArmor’s type‑system verification to include adversarial robustness proofs is a long‑term goal.
+3. Reasoning‑Level Attacks: Our structural layers operate at the context, token, or trace level; none operate on the internal reasoning chain of chain‑of‑thought models. A “thinking‑stopped” vulnerability in reasoning LLMs causes empty responses via injected arithmetic triggers [6]. As agents increasingly leverage extended thinking, this attack surface must be addressed. SAVER [34] offers a potential path by enforcing verification over internal belief states.
+
+---
+
+6. Addressing the Autonomy Tax: The Capability‑Preservation Constraint
+
+The Autonomy Tax [6] demonstrates that defense‑trained models fail on 47–77% of benign tasks while sophisticated attacks achieve 73–86% bypass rates.
+
+Our Response:
+
+1. Architectural, not behavioral, defense: Every layer operates outside the model—at the context, protocol, or verification layer. None rely on model‑level safety training, avoiding the shortcut learning that causes the Autonomy Tax.
+2. Empirically validated low‑tax mechanisms: ASIDE maintains capability [18]; AgentArmor introduces only 1% overhead [16]; ARGUS preserves 87.5% utility [10]; VIGIL more than doubles utility under attack [29]; A‑MemGuard incurs minimal utility cost [32]. Each has been explicitly evaluated for capability preservation.
+3. Formal Capability‑Preservation Constraint: Any defense mechanism must satisfy: Benign Task Completion Rate (defended) ≥ Benign Task Completion Rate (undefended) × (1 − ε), where ε is an operationally defined tolerance (suggested ε ≤ 0.05 for high‑assurance deployments), evaluated on standardized benchmarks (AgentDojo, ASB, AgentDyn).
+4. Defense Overhead Budget Theorem (conjectured, weakened): For an agent system with N defense layers, let δᵢ be the independent benign‑task degradation introduced by layer i. We conjecture that Σδᵢ ≤ ε. Critical caveat: This assumes independence of per‑layer degradations. In practice, interactions between layers may cause superlinear cascade amplification [6], and the additive model may give false operational assurance. Empirical evaluation under compositional deployment remains an open problem. The conjecture is not proven; it serves only as a design heuristic.
+
+---
+
+7. Agent Identity Lifecycle Management
+
+Enterprise‑scale deployments face an NHI (Non‑Human Identity) explosion: 53% of organizations now manage more non‑human identities than human employees, with 23% reporting a ratio of six‑to‑one or higher [35]. Only 12% have comprehensive automated lifecycle management for machine identities [36]. International estimates project non‑human and agentic identities could exceed 45 billion by end‑2026 [37].
+
+Our Signed Communication Protocol (Layer 2) must address this scale. We propose lifecycle phases aligned with emerging practices [38]:
+
+· Provisioning: Every agent receives a DID at instantiation with scoped capabilities and an expiration timestamp.
+· Active management: Continuous monitoring of agent behavior against granted permissions; automated credential rotation.
+· Decommissioning: Automatic revocation of all credentials and audit trail finalization upon agent termination.
+· Kill‑switch integration: Aligned with the CSA ATF Incident Response element, a centralized kill switch must be capable of revoking all credentials for a compromised agent across all systems within minutes. Currently, 55% of organizations lack this capability [35].
+
+---
+
+8. Integration with Industry Standards and Regulatory Frameworks
+
+To ground the architecture in the broader security ecosystem:
+
+· OWASP Top‑10 for Agentic Applications (2025) [12]: Maps ASI01–ASI08 to our layers.
+· Cloud Security Alliance Agentic Trust Framework (2026) [13]: Our phased migration path (Section 9) ties directly to the ATF Maturity Model.
+· NIST AI Agent Standards Initiative (February 2026) [39]: The initiative explicitly seeks security guidance for autonomous agent deployments; our framework directly addresses this call.
+· NSA Zero Trust Implementation Guidelines (ZIGs, January 2026) [40]: Our ZTAA model aligns with NSA’s seven pillars of Zero Trust.
+· EU AI Act: The Auditability Layer (Layer 7) addresses Articles 12, 14, and 15.
+
+---
+
+9. Phased Migration Path (ATF‑Aligned)
+
+ATF Level Phase Actions Key Mechanisms
+Intern (Observe only) Phase 1 (Immediate) Deploy PCFI middleware for black‑box IDSL; basic schema‑based TOF; begin audit logging PCFI, basic audit trails
+Junior (Recommend, human approves) Phase 2 (Mid‑term) Implement ATTP signing with DIDs; deploy VIGIL verify‑before‑commit TOF; activate A‑MemGuard ATTP, Bindu/DIDs, VIGIL, A‑MemGuard
+Senior (Act with guardrails) Phase 3 (Advanced) Integrate AgentArmor graph‑based verification; deploy ARGUS/SAVER provenance auditing; full ZTAA policy enforcement AgentArmor, ARGUS, SAVER, NANDA ZTAA
+Principal (Autonomous in scope) Phase 4 (Full maturity) Transition to models with native ASIDE/Glass Wall separation; post‑quantum hybrid signatures; full auditability layer; multimodal sensor validation ASIDE, Glass Wall, CRYSTALS‑Dilithium, full Auditability
+
+---
+
+10. Limitations and Future Work
+
+This blueprint is a conceptual synthesis; no experimental validation is presented. Key open problems:
+
+1. Multimodal Injection (𝒜ₘ): Full architectural separation of instructions and data for vision, audio, and sensor modalities is an open research area.
+2. Adaptive White‑Box Robustness: No current mechanism provides formal guarantees against the 𝒜ᵥᵥ class; formal adversarial robustness proofs for agent defense pipelines are an open problem.
+3. Reasoning‑Level Attacks: Attacks on internal chain‑of‑thought (e.g., thinking‑stopped vulnerabilities) are entirely orthogonal to our structural layers. Integration of SAVER‑style belief‑state auditing into Layer 6 is a near‑term research direction.
+4. Compositional Defense Evaluation: The Defense Overhead Budget Theorem is conjectured under independence; empirical evaluation of layered defenses under real‑world composition is essential.
+5. Emerging References: ARGUS is three days old as of this writing; The Glass Wall is an unreviewed preprint. Community consensus on these mechanisms has not yet formed, and claims may require revision as peer review proceeds.
+6. PFI Integration: PFI’s privilege separation at the agent execution level is included, but a formal proof that PFI + ZTAA subsumes all cross‑agent privilege escalation is outstanding.
+
+---
+
+11. Conclusion
+
+Prompt injection is not a superficial “prompt bug” but a structural failure arising from the inability of current architectures to distinguish instruction from data. This framework argues that robust security requires a system‑level shift: data and instructions must be structurally isolated, agent identity must be cryptographically verifiable, all external inputs must pass through verifiable integrity checks, and all actions must remain auditable post‑hoc. The seven‑layer architecture presented here synthesizes the most empirically grounded mechanisms from the 2025–2026 research literature into a coherent defense blueprint.
+
+We have addressed the Autonomy Tax as a first‑class design constraint, incorporated mechanisms with empirical capability‑preservation evidence, and identified the multimodal injection gap, reasoning‑level attacks, and adaptive white‑box robustness as priority open problems. The framework aligns with emerging standards from OWASP, CSA, NIST, and IETF, and provides a phased migration path tied to the CSA Agentic Trust Framework maturity levels. While no experimental validation is provided, this work establishes a foundation for building, evaluating, and iteratively improving secure agent systems.
+
+---
+
+Verified References
+
+[1] Greshake, K., et al. “Not what you’ve signed up for: Compromising Real‑World LLM‑Integrated Applications with Indirect Prompt Injection.” Proc. 16th ACM Workshop on Artificial Intelligence and Security, 2023.
+[2] Liu, Y., et al. “Prompt Injection Attacks and Defenses in LLM‑Integrated Applications.” arXiv preprint, 2024.
+[3] Rehberger, J., et al. “Indirect Prompt Injection in the Wild.” arXiv preprint, 2024.
+[4] OWASP Foundation. “OWASP Top 10 for LLM Applications: LLM01 — Prompt Injection.” 2025. https://genai.owasp.org/llmrisk/llm01-prompt-injection/
+[5] Cohen, R., et al. “Multi‑Agent Trust Cascades: Systemic Risk in LLM Agent Pipelines.” arXiv preprint, 2024.
+[6] Nourizadeh, M., et al. “The Autonomy Tax: Defense Training Breaks LLM Agents.” arXiv:2603.19423, March 2026. https://arxiv.org/abs/2603.19423
+[7] Zhan, Q., Fang, R., Panchal, H.S., Kang, D. “Adaptive Attacks Break Defenses Against Indirect Prompt Injection Attacks on LLM Agents.” NAACL 2025 Findings, pp. 7101‑7117. https://dblp.org/rec/conf/naacl/ZhanFPK25
+[8] “Beyond Pattern Matching: Seven Cross‑Domain Techniques for Prompt Injection Detection.” arXiv preprint, April 2026.
+[9] Askell, A., et al. “A Framework for Agent Security Properties.” arXiv preprint, 2025.
+[10] “ARGUS: Defending LLM Agents Against Context‑Aware Prompt Injection.” arXiv:2605.03378, May 2026. https://arxiv.org/abs/2605.03378
+[11] Zhan, Q., et al. “Adaptive Attacks Break Defenses Against Indirect Prompt Injection Attacks on LLM Agents.” NAACL 2025 Findings, 2025.
+[12] OWASP GenAI Security Project. “OWASP Top 10 for Agentic Applications.” Dec 2025. https://genai.owasp.org/2025/12/09/owasp-genai-security-project-releases-top-10-risks-and-mitigations-for-agentic-ai-security/
+[13] Cloud Security Alliance / MassiveScale.AI. “The Agentic Trust Framework: Zero‑Trust Governance for AI Agents.” Feb 2026. https://cloudsecurityalliance.org/blog/2026/02/02/the-agentic-trust-framework-zero-trust-governance-for-ai-agents
+[14] Liu, P., Lao, Y. “VisInject: Disruption ≠ Injection — A Dual‑Dimension Evaluation of Universal Adversarial Attacks on Vision‑Language Models.” arXiv:2605.01449, May 2026. https://arxiv.org/abs/2605.01449
+[15] “CHAI: Command Hijacking Against Embodied AI.” arXiv preprint, March 2026. https://sos-vo.org
+[16] Wang, P., et al. “Securing Large Language Model Agents via Structured Graph Abstraction (AgentArmor).” arXiv:2508.01249, Nov 2025. https://arxiv.org/abs/2508.01249
+[17] Zhao, Y., et al. “Auditable Agents: Toward Post‑Hoc Accountability in Autonomous AI Systems.” ACL 2026 Workshop on Knowledge and Foundation Models (KnowFM), Apr 2026. https://viterbi-web.usc.edu/~yzhao010/auditable-agents.html
+[18] Zverev, E., Kortukov, E., Panfilov, A., Volkova, A., Tabesh, S., Lapuschkin, S., Samek, W., Lampert, C.H. “ASIDE: Architectural Separation of Instructions and Data in Language Models.” arXiv:2503.10566, Mar 2025 (ICLR 2025 Workshop). https://arxiv.org/abs/2503.10566
+[19] Alshaer, J. “The Glass Wall: Enforcing Cognitive Segregation in Large Language Models via Zonal LoRA Hardening.” TechRxiv, Feb 2026. DOI:10.36227/techrxiv.177219982.22869977/v1. ⚠ Non‑peer‑reviewed preprint.
+[20] Alam, M.T.U., et al. “Prompt Control‑Flow Integrity: A Priority‑Aware Runtime Defense Against Prompt Injection in LLM Systems.” arXiv:2603.18433, Mar 2026. https://arxiv.org/abs/2603.18433
+[21] “Prompt Flow Integrity: Preventing Privilege Escalation in LLM Agents.” arXiv:2503.15547, Mar 2025. https://arxiv.org/abs/2503.15547
+[22] Sharif, R. “ATTP: Agent Trust Transport Protocol for Secure Agent‑to‑Server Communication.” IETF Internet‑Draft draft‑sharif‑attp‑agent‑trust‑transport‑00, Mar 2026. https://datatracker.ietf.org/doc/draft-sharif-attp-agent-trust-transport/
+[23] AG2 / GetBindu. “Bindu: Decentralized Identity and A2A Protocol for AI Agents.” 2025–2026. https://docs.ag2.ai/latest/docs/ecosystem/bindu/
+[24] “Using the NANDA Index Architecture in Practice: An Enterprise Perspective.” arXiv:2508.03101, 2025. https://arxiv.org/abs/2508.03101
+[25] Gopher Security. “Quantum‑Resistant Identity and Access Management for Federated AI Agents.” Jan 2026. https://www.gopher.security/blog/quantum-resistant-identity-access-management-federated-ai-agents
+[26] NIST. “Post‑Quantum Cryptography Standards: ML‑KEM (FIPS 203), ML‑DSA (FIPS 204), SLH‑DSA (FIPS 205).” Aug 2024.
+[27] Autheo. “When AI Agents Hold the Keys: Securing Agentic Systems in the Post‑Quantum Era.” Apr 2026.
+[28] “IPIGuard: Tool Dependency Graph for LLM Agent Security.” arXiv:2508.15310, 2025. https://arxiv.org/abs/2508.15310
+[29] Lin, J., et al. “VIGIL: Defending LLM Agents Against Tool Stream Injection via Verify‑Before‑Commit.” arXiv:2601.05755, Jan 2026. https://arxiv.org/abs/2601.05755
+[30] “AgentVigil: Black‑Box Red‑Teaming for Indirect Prompt Injection.” arXiv:2505.05849, May 2025. https://arxiv.org/abs/2505.05849
+[31] “Breaking and Fixing Defenses Against Control‑Flow‑Based Agent Attacks.” OpenReview, 2026. https://openreview.net/pdf?id=PNU9Rj5RDQ
+[32] Wei, Q., et al. “A‑MemGuard: A Proactive Defense Framework for LLM‑Based Agent Memory.” arXiv:2510.02373, Sep 2025. https://arxiv.org/abs/2510.02373
+[33] Li, H., et al. “DRIFT: Dynamic Rule‑Based Defense with Injection Isolation for Securing LLM Agents.” NeurIPS 2025, arXiv:2506.12104. https://arxiv.org/abs/2506.12104
+[34] “SAVER: Self‑Audited Verified Reasoning for Agent Safety.” arXiv:2604.08401, Apr 2026. https://arxiv.org/abs/2604.08401
+[35] JumpCloud. “The Agentic IAM Pulse Report: Closing the Governance Gap to Accelerate with AI.” May 2026. https://jumpcloud.com/press/jumpcloud-research-reveals-ai-agents-are-operating-without-governance-in-critical-workflows
+[36] ManageEngine. “Identity Security Study 2026: Key Enterprise Shifts.” Jan 2026.
+[37] International AI Safety Report 2026 (via DRJ.com). “Identity Security in the AI Era.” Mar 2026.
+[38] Okta. “The Non‑Human Identity Lifecycle: From Provisioning to Decommissioning at Scale.” Feb 2026. https://www.okta.com
+[39] NIST. “AI Agent Standards Initiative.” Feb 2026. Referenced in arXiv:2604.02767.
+[40] National Security Agency. “Zero Trust Implementation Guidelines (ZIGs): Primer, Discovery Phase, Phase One, and Phase Two.” Jan 2026. https://www.nsa.gov/Press-Room/Press-Releases-Statements/Press-Release-View/Article/4393480/nsa-releases-phase-one-and-phase-two-of-the-zero-trust-implementation-guidelines/
+
