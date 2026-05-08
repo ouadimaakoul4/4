@@ -71,14 +71,4 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 
 **Made with ❤️ for Humanity**
 
----
 
-### How to add it:
-
-1. Go to your repo: https://github.com/ouadimaakoul4/4
-2. Click on `README.md` → Edit (pencil icon)
-3. Replace the current content with the markdown above
-4. Commit the changes
-
-Would you like a **shorter version**, a **more technical tone**, or to emphasize specific projects? I can adjust it quickly.
-```
