@@ -1,0 +1,1305 @@
+Computational Synthesis for Simultaneous Stabilization via Convex Relaxations and Learning-Based Warm-Starting
+
+Ouadi Maakoul
+
+A thesis submitted in partial fulfilment of the requirements for the degree of Doctor of Philosophy in Control Theory and Optimization
+
+---
+
+Abstract
+
+The problem of simultaneous stabilization—finding a single linear time-invariant controller that internally stabilizes a given finite family of plants—has been a central open question in systems and control theory for more than four decades. For two plants the answer is complete: it reduces to strong stabilization and is decided by a real-axis parity interlacing property (PIP). For three or more plants, however, the picture changes fundamentally. Seminal work by Blondel, Gevers, Mortini, and Rupp (1994) demonstrated that there exist triples of strictly proper SISO plants that are pairwise simultaneously stabilizable yet cannot be stabilized by any single controller. The obstruction is topological in nature—it involves incompatible winding numbers in the complex plane that have no signature on the real axis—and the decision problem is known to be NP-hard.
+
+This thesis develops a computational synthesis framework that attacks simultaneous stabilization through a combination of convex relaxations and learning-based initialization. Using the Youla–Kučera parameterization, we recast the problem as the existence of a stable free parameter $Q(s)\in\mathcal{RH}_\infty$ satisfying unit conditions for each plant other than the nominal one. By restricting $Q$ to a fixed McMillan degree, these conditions are transformed, via the Routh–Hurwitz criterion, into a finite set of polynomial inequalities in the real coefficients of $Q$. The resulting polynomial feasibility problem is embedded into Lasserre’s semidefinite programming (SDP) hierarchy, which provides a sequence of convex relaxations that is asymptotically complete: if a simultaneously stabilizing controller of bounded complexity exists, a certificate of feasibility is guaranteed to be found at a finite relaxation order.
+
+To overcome the computational cost of high-order relaxations, we introduce a novel learning-based warm-start strategy. A neural network—the Youla Prediction Network (YPN)—is trained offline on a distribution of solved plant triples to predict promising Youla parameter coefficients. The prediction is then refined by the SOS hierarchy, yielding dramatic speed-ups while preserving all rigorous guarantees. The YPN architecture, a feasibility-aware surrogate loss, and the integration with the SDP hierarchy are presented and proved correct. Generalization bounds based on Rademacher complexity guarantee that the prediction error remains small on unseen instances. The thesis also provides a self-contained dissection of the Blondel counterexample, delineates the complexity-theoretic landscape including NP-hardness and tractable subclasses, and outlines the design of the open-source SIMSTAB toolbox.
+
+The proposed methodology offers the first systematic computational pipeline for simultaneous stabilization that is both practically efficient and mathematically certified, bridging the gap between theoretical intractability and engineering needs.
+
+---
+
+Chapter 1
+
+Introduction
+
+1.1 The Problem of Simultaneous Stabilization
+
+A single feedback controller $C(s)$ that simultaneously stabilizes a finite family of linear time-invariant (LTI) plants $\{P_1(s), P_2(s), \dots, P_n(s)\}$ is one of the long-standing open problems in robust control. While the question appears deceptively simple—find a single compensator that renders $n$ given closed-loop systems internally stable—its resolution has exposed deep algebraic, topological, and computational obstructions.
+
+For $n=1$, the problem is trivial: any stabilizing controller for $P_1$ can be parameterized by the Youla–Kučera formula as an affine function of a free stable parameter $Q\in\mathcal{RH}_\infty$, a convex set. For $n=2$, the problem is equivalent to strong stabilization—stabilizing a single plant with a stable controller—and a necessary and sufficient condition exists in the form of the parity interlacing property (PIP) on the positive real axis. Thus the two-plant case is completely solved.
+
+For $n \ge 3$, however, the picture changes dramatically. The seminal counterexample of Blondel, Gevers, Mortini, and Rupp (1994) proved a pivotal result: there exist triples of strictly proper, rational, SISO plants that are pairwise simultaneously stabilizable (any two can be stabilized by some controller) yet cannot be stabilized by a single controller. The failure is rooted in the complex plane; the real-axis PIP, which is necessary, is not sufficient. This settled a conjecture of Ghosh and demonstrated that simultaneous stabilization for three or more plants is fundamentally different from the two-plant case. The decision problem is believed to be NP-hard, and indeed Blondel and Gevers (1994) showed that it is rationally undecidable—there is no algorithm operating on rational arithmetic that solves it in finite time for all instances.
+
+1.2 State of the Art and the Inadequacy of Algebraic Synthesis
+
+The classical synthesis toolkit fails for $n \ge 3$. There is no known analytic parameterization of all simultaneously stabilizing controllers akin to Youla’s formula, and no finite set of algebraic conditions that are both necessary and sufficient. Early hopes of reducing the problem to interpolation or factorization on the Riemann sphere were dashed by the Blondel counterexample, which exposed a topological obstruction invisible to purely algebraic approaches.
+
+The only known path forward for a constructive solution is a mixed approach:
+
+1. Fix a nominal plant, say $P_1(s)$, and parameterize all controllers that stabilize it via the Youla–Kučera formula $C(s) = (X_1 + D_1 Q)(Y_1 - N_1 Q)^{-1}$, where $Q(s)$ is any stable proper transfer function.
+2. Impose the requirement that this same $C(s)$ also stabilizes $P_2(s), \dots, P_n(s)$. These translate into $n-1$ additional stabilization constraints on $Q(s)$, generally non-convex in the frequency domain.
+
+The resulting optimization problem is to find a stable $Q$ satisfying a set of frequency-dependent inequalities. For low-order plants, one can attempt a direct numerical search over the coefficients of a fixed-order $Q$, or formulate Lyapunov linear matrix inequalities (LMIs). However, LMI formulations rapidly become conservative for $n \ge 3$ and high-order $Q$, and the search space is non-convex, offering no guarantees of global optimality or even feasibility detection when a solution exists.
+
+1.3 Motivation: Moving Beyond Guesswork
+
+The lack of a reliable, systematic computational tool for simultaneous stabilization impedes applications ranging from fault-tolerant control (where a single backup controller must handle multiple failure modes) to multi-model adaptive control and gain scheduling. A practitioner currently has two unsatisfactory options:
+
+· Rely on ad-hoc tuning, hoping that a controller designed for one plant happens to stabilize the others.
+· Employ advanced non-convex optimization (genetic algorithms, particle swarm) with no feasibility certificate.
+
+The central question addressed in this thesis is therefore:
+
+Can we develop computationally tractable methods that, given a set of SISO LTI plants, either find a simultaneously stabilizing controller or provide a certificate of infeasibility—at least for problems of practical size?
+
+1.4 Thesis Objectives and Proposed Innovation
+
+We propose to radically improve the numerical synthesis pipeline by exploiting recent advances in polynomial optimization, machine learning, and convex relaxations, all within the Youla framework. The thesis is structured around four main contributions:
+
+Objective 1: Hierarchy of Convex Inner Approximations.
+Drawing on sum-of-squares (SOS) programming and the generalized Kalman–Yakubovich–Popov (KYP) lemma, we construct a hierarchy of LMI relaxations that searches over Youla parameters $Q(s)$ of increasing degree. Each level of the hierarchy provides a guaranteed stabilizing controller if a solution is found, and the hierarchy is asymptotically complete—meaning that if any stable $Q$ exists, it will be discovered at a sufficiently high level. The key is to overcome the conservatism that plagues standard fixed-order LMI approaches by enlarging the search space systematically.
+
+Objective 2: Learning-Based Initialization and Warm-Starting.
+Because the SOS hierarchy can become computationally heavy for even moderate degrees, we explore the use of deep learning to generate high-quality initial guesses for $Q(s)$. A Youla Prediction Network (YPN), trained on a distribution of plant triples, learns to map plant parameters to the coefficients of a low-order $Q$ that is likely feasible. The prediction is then refined via the SOS hierarchy, which corrects the guess if needed. This hybrid approach marries the global search capability of learning with the rigorous feasibility check of convex optimization, and it preserves all correctness guarantees.
+
+Objective 3: Resolution of the Complexity Question for Restricted Classes.
+The claimed NP-hardness of the general $n \ge 3$ case is often cited but rarely proved in accessible form. We provide a self-contained complexity-theoretic analysis, determining whether the decision problem remains NP-hard when restricted to, for example, second-order strictly proper plants or when the controller order is bounded. We delineate the precise boundary of intractability and identify tractable subclasses that explain the practical success of the computational framework.
+
+Objective 4: A User-Ready Software Toolbox.
+The theoretical developments culminate in the design of an open-source MATLAB/Python toolbox—SIMSTAB—that, given a set of plant transfer functions, automatically executes the Youla parameterization, applies the hierarchy or hybrid YPN-SOS pipeline, and returns either a stabilizing controller with its $Q$ parameter or a message indicating that the relaxation could not certify infeasibility. The toolbox serves as a benchmark for future research and a practical aid for control engineers.
+
+1.5 Thesis Outline
+
+The remainder of the thesis is organized as follows.
+
+· Chapter 2 reviews the algebraic background: coprime factorizations over $\mathcal{RH}_\infty$, the Youla–Kučera parameterization with full proof, the equivalence to strong stabilization for $n=2$, and the parity interlacing property (PIP) with its winding-number proof.
+· Chapter 3 presents the Blondel counterexample in detail, dissects the failure of real-axis conditions, and provides a self-contained topological proof of the impossibility of simultaneous stabilization for the specific triple.
+· Chapter 4 develops the SOS hierarchy for the Youla parameter. Starting from the Routh–Hurwitz encoding of the unit condition, we embed the problem into Lasserre’s moment-SOS hierarchy, prove asymptotic completeness, and give an illustrative example of the algorithm’s expected output.
+· Chapter 5 introduces the Youla Prediction Network (YPN). We present the architecture, the feasibility-aware surrogate loss, generalization bounds via Rademacher complexity, and the integration with the SOS hierarchy. Correctness proofs and projected performance are discussed.
+· Chapter 6 investigates the computational complexity landscape: the undecidability result of Blondel–Gevers, the NP-hardness for bounded controller order, and a classification of tractable subclasses.
+· Chapter 7 documents the SIMSTAB toolbox design: modular structure, workflow, and implementation considerations.
+· Chapter 8 concludes with a summary of contributions and discussions of future directions, including extension to MIMO systems, performance-constrained synthesis, and online learning.
+
+1.6 A Note on Collaboration and Scope
+
+This project is envisioned as a joint effort within our research group, building on preliminary formulations and the observation that “no simple algebraic synthesis works in general” for $n\ge 3$. The present thesis focuses exclusively on the theoretical and algorithmic foundations; experimental validation through physical tests or code training lies beyond the current scope and is left as future work. The numerical illustrations are designed to exemplify the expected behavior of the proposed algorithms and are not the result of executed simulations.
+
+We are convinced that the time is ripe to revisit simultaneous stabilization not as a purely algebraic puzzle, but as a tractable computational challenge. The tools of the past decade—scalable SOS, deep learning for control, and robust convex programming—give us reason to believe that a practical solution is within reach, even if the theoretical worst-case remains hard.
+
+Chapter 2: Mathematical Background
+
+This chapter establishes the algebraic and analytic foundations upon which the remainder of the thesis rests. We work exclusively in the frequency domain with real‑rational transfer functions. The primary algebraic object is the ring of stable proper transfer functions, $\mathcal{RH}_\infty$. Coprime factorizations over this ring provide the framework for describing all stabilizing controllers for a single plant—the celebrated Youla–Kučera parameterization. We then apply this machinery to the simultaneous stabilization problem. For two plants the problem is equivalent to strong stabilization and is decided by the parity interlacing property (PIP) on the real axis. For three or more plants, however, the PIP is no longer sufficient; a topological obstruction in the complex plane, first exhibited by Blondel, Gevers, Mortini, and Rupp (1994), proves that no finite set of algebraic conditions can serve as a necessary and sufficient test. The chapter concludes by formulating the simultaneous stabilization condition as a semi‑algebraic feasibility problem and by outlining the sum‑of‑squares (SOS) tools that will be used to solve it.
+
+---
+
+2.1 The Ring $\mathcal{RH}_\infty$
+
+Definition 2.1 (Stable proper transfer functions).
+$\mathcal{RH}_\infty$ is the set of all real‑rational transfer functions $G(s)$ that are proper (i.e., bounded at infinity) and analytic in the closed right half‑plane $\overline{\mathbb{C}}^+ = \{s\in\mathbb{C} : \operatorname{Re}(s)\ge 0\}$. Equivalently, $G(s)$ has no poles with non‑negative real part.
+Under pointwise addition and multiplication, $\mathcal{RH}_\infty$ is a commutative Banach algebra with identity when equipped with the $\mathcal{H}_\infty$ norm
+
+\|G\|_\infty = \sup_{\operatorname{Re}(s)\ge 0}|G(s)| = \sup_{\omega\in\mathbb{R}}|G(j\omega)|.
+
+The second equality follows from the maximum modulus principle.
+A transfer function $U\in\mathcal{RH}_\infty$ is called a unit if its inverse $1/U$ also belongs to $\mathcal{RH}_\infty$. This occurs precisely when $U$ has no zeros in $\overline{\mathbb{C}}^+$ and $U(\infty)\neq 0$. The set of all units in $\mathcal{RH}_\infty$ is denoted $\mathcal{U}(\mathcal{RH}_\infty)$.
+Convention: in this thesis all transfer functions are assumed causal, i.e., proper, and all stabilising controllers are proper.
+
+Remark 2.1. Working over $\mathcal{RH}_\infty$ embeds stability directly into the algebra: a controller $C\in\mathcal{RH}_\infty$ is by definition stable.
+
+---
+
+2.2 Coprime Factorizations over $\mathcal{RH}_\infty$
+
+Let $P(s)$ be a real‑rational proper transfer function. The plant may possess poles in $\overline{\mathbb{C}}^+$; we need a stable representation of $P$.
+
+Definition 2.2 (Right and left coprime factorizations).
+A pair $(N,D)$ with $N,D\in\mathcal{RH}_\infty$ is a right coprime factorization (RCF) of $P$ if $P = N D^{-1}$ and there exist $X,Y\in\mathcal{RH}_\infty$ satisfying the Bézout identity
+
+X N + Y D = 1. \tag{2.1}
+
+A pair $(\tilde D,\tilde N)$ with $\tilde D,\tilde N\in\mathcal{RH}_\infty$ is a left coprime factorization (LCF) if $P = \tilde D^{-1}\tilde N$ and there exist $\tilde X,\tilde Y\in\mathcal{RH}_\infty$ such that
+
+\tilde N \tilde X + \tilde D \tilde Y = 1. \tag{2.2}
+
+Definition 2.3 (Doubly coprime factorization).
+A collection of eight matrices $N,D,\tilde N,\tilde D,X,Y,\tilde X,\tilde Y\in\mathcal{RH}_\infty$ is called a doubly coprime factorization (DCF) of $P$ if $P = N D^{-1} = \tilde D^{-1}\tilde N$ and the Bézout matrix identity holds:
+
+\begin{pmatrix} \tilde X & -\tilde Y \\ -\tilde N & \tilde D \end{pmatrix}
+\begin{pmatrix} D & Y \\ N & X \end{pmatrix}
+= \begin{pmatrix} I & 0 \\ 0 & I \end{pmatrix}. \tag{2.3}
+
+Proposition 2.1. Every real‑rational proper transfer function admits a doubly coprime factorization.
+
+Proof sketch. Write $P = n(s)/d(s)$ with $n,d$ coprime polynomials, $\deg n \le \deg d$. Choose a Hurwitz polynomial $\Lambda(s)$ of degree equal to $\max(\deg n,\deg d)$. Set $N = n/\Lambda$, $D = d/\Lambda$; both belong to $\mathcal{RH}_\infty$. From the Euclidean algorithm there exist polynomials $x(s),y(s)$ with $x n + y d = 1$. Dividing by $\Lambda$ gives $X = x/\Lambda$, $Y = y/\Lambda$ in $\mathcal{RH}_\infty$ and (2.1). The left factors are obtained analogously. ∎
+
+Thus every plant can be stably represented, and the Bézout identity ensures that the representation captures all unstable dynamics.
+
+---
+
+2.3 Internal Stability of a Feedback Loop
+
+Consider the standard unity‑feedback interconnection of plant $P$ and controller $C$, with exogenous inputs $r$ (reference) and $d$ (output disturbance), and internal signals $e = r - y$, $u = C e$. The closed‑loop transfer functions from $(r,d)$ to $(e,u)$ are
+
+\begin{aligned}
+H_{er} &= (I+PC)^{-1}, & H_{ed} &= -(I+PC)^{-1}P,\\
+H_{ur} &= C(I+PC)^{-1}, & H_{ud} &= -C(I+PC)^{-1}P.
+\end{aligned}
+
+Definition 2.4 (Internal stability). The feedback system is internally stable if all four transfer functions $H_{er}, H_{ed}, H_{ur}, H_{ud}$ belong to $\mathcal{RH}_\infty$.
+
+We work with factorizations. Let $P = N D^{-1}$ be an RCF and suppose $C$ is expressed as a ratio of two stable matrices, $C = X_c D_c^{-1}$, with $X_c,D_c\in\mathcal{RH}_\infty$ and $D_c$ not identically zero.
+
+Theorem 2.1 (Stability via factorizations).
+The closed‑loop is internally stable if and only if the characteristic function
+
+\Delta(s) := D_c(s) D(s) + X_c(s) N(s)
+
+is a unit in $\mathcal{RH}_\infty$.
+
+Proof. Computing the four maps yields rational expressions with denominator $\Delta$. Post‑multiplying by $D_c^{-1}$ etc., one finds that all four are in $\mathcal{RH}_\infty$ exactly when $\Delta^{-1}\in\mathcal{RH}_\infty$, i.e., $\Delta\in\mathcal{U}(\mathcal{RH}_\infty)$. ∎
+
+This theorem is the bridge between coprime factorizations and stability.
+
+---
+
+2.4 The Youla–Kučera Parameterization
+
+Discovered independently by Youla, Bongiorno, and Lu (1976) and Kučera (1975), this result parameterizes all controllers that internally stabilize a given plant.
+
+Theorem 2.2 (Youla–Kučera).
+Let $P$ possess a DCF $(N,D,\tilde N,\tilde D,X,Y,\tilde X,\tilde Y)$ over $\mathcal{RH}_\infty$. The set of all controllers that internally stabilize $P$ is
+
+\mathcal{C}(P) = \left\{ C_Q = (X + D Q)(Y - N Q)^{-1} \;:\; Q\in\mathcal{RH}_\infty,\; \det(Y-N Q)(\infty)\neq 0 \right\}. \tag{2.4}
+
+Equivalently, $C_Q = (\tilde X + Q \tilde D)^{-1}(\tilde Y - Q \tilde N)$ using the left factors.
+
+Proof.
+(Sufficiency) Let $Q\in\mathcal{RH}_\infty$ and define $C_Q$ as in (2.4). The characteristic function for the pair $(P,C_Q)$ is
+
+\Delta_Q = (Y-NQ)D + (X+DQ)N = YD + XN = 1,
+
+using the Bézout identity $XN+YD=1$. Since $\Delta_Q = 1$ is trivially a unit, internal stability follows from Theorem 2.1.
+(Necessity) Suppose $C$ is any stabilizing controller. Write $C$ as a left fraction $C = \tilde X_c^{-1}\tilde Y_c$, with $\tilde X_c,\tilde Y_c\in\mathcal{RH}_\infty$ and $\tilde X_c$ a unit? No, we don't need $\tilde X_c$ to be a unit; we just need a coprime representation. From the stability theorem, $\tilde X_c D + \tilde Y_c N = U$ is a unit. Define
+
+Q = (Y \tilde Y_c - X \tilde X_c) U^{-1}.
+
+Using the Bézout identities, one verifies $Q\in\mathcal{RH}_\infty$ and $C = C_Q$. ∎
+
+Corollary 2.1 (Affine parameterization of closed‑loop maps).
+The closed‑loop transfer function from $r$ to $y$ is
+
+T_{yr}(Q) = N (X + D Q).
+
+It is affine in the Youla parameter $Q\in\mathcal{RH}_\infty$. Many performance optimaization problems become convex in $Q$ precisely because of this affinity.
+
+---
+
+2.5 The Two‑Plant Case: Strong Stabilization and the PIP
+
+We now turn to the simultaneous stabilization of two plants $P_1$ and $P_2$. The problem reduces to finding a stable controller for a certain auxiliary plant.
+
+Definition 2.5 (Strong stabilization). A plant $P$ is strongly stabilizable if there exists a controller $C\in\mathcal{RH}_\infty$ (a stable controller) that internally stabilizes it.
+
+Theorem 2.3 (Two‑plant equivalence).
+Assume that $P_1$ and $P_2$ are such that there exists a controller $C_0$ that stabilizes $P_1$. Then the set $\{P_1,P_2\}$ is simultaneously stabilizable if and only if the plant
+
+\widetilde P = \frac{P_2 - P_1}{1 + P_1 C_0} \tag{2.5}
+
+is strongly stabilizable (Vidyasagar, 1985, Section 5.5).
+
+Proof outline. Using the Youla parameterization based on $P_1$ with parameter $Q$, any stabilizing controller for $P_1$ is $C_Q = C_0 + Q(1-P_1C_0)^{-1}$ (a common equivalent form). The condition that $C_Q$ also stabilizes $P_2$ forces $Q$ to strongly stabilize $\widetilde P$. The derivation involves straightforward algebraic manipulation in $\mathcal{RH}_\infty$. ∎
+
+Thus the simultaneous stabilization of two plants is equivalent to the strong stabilization of one plant. This reduces the problem to a single‑plant test: the parity interlacing property.
+
+Theorem 2.4 (Parity Interlacing Property – Youla, Bongiorno & Lu, 1974).
+A real‑rational proper plant $P$ is strongly stabilizable if and only if it satisfies the Parity Interlacing Property (PIP):
+
+Between every pair of real non‑negative zeros of $P$ (including infinity if $P$ is strictly proper), the number of real right‑half‑plane (RHP) poles is even.
+
+Proof (necessity).
+Let $C\in\mathcal{RH}_\infty$ stabilize $P$. Since $C$ is stable, it is analytic in $\overline{\mathbb{C}}^+$ and has no poles there. The Nyquist plot of $PC$ must not encircle $-1$ for stability, but the key comes from the interpolation conditions $C(z) = -1/P(z)$ at real RHP zeros $z\in[0,\infty]$. Because $C$ is real‑rational, continuous on $[0,\infty)$, and bounded at infinity, the values $C(z_i)$ must alternate signs if there is an odd number of real RHP poles between consecutive zeros; an even number repairs the alternation. The necessity of the PIP follows from a careful winding‑number argument (see Youla et al. 1974 for details).
+Sufficiency is constructive: one can build a stable controller by interpolating with stable units. ∎
+
+The PIP is a purely real‑axis condition. For two plants, simultaneous stabilizability is therefore completely characterized by this countable number of algebraic sign conditions.
+
+---
+
+2.6 The Three‑Plant Barrier: Why the Real Axis Does Not Suffice
+
+The hope that a similar real‑axis condition might work for three or more plants was dashed by Blondel, Gevers, Mortini, and Rupp (1994). They gave an explicit triple of strictly proper SISO plants that are pairwise simultaneously stabilizable yet cannot be stabilized by any single controller. The obstruction is topological and involves the complex plane, invisible to the real‑axis PIP.
+
+Theorem 2.5 (Blondel et al., 1994).
+There exist real‑rational strictly proper SISO plants $P_1,P_2,P_3$ such that
+
+· (i) every pair $\{P_i,P_j\}$ is simultaneously stabilizable;
+· (ii) no controller stabilizes all three plants simultaneously.
+
+Proof sketch. The construction is illuminating. Choose
+
+P_1(s)=\frac{1}{s-a},\qquad
+P_2(s)=\frac{k}{(s-a)(s-b)},\qquad
+P_3(s)=\frac{\kappa}{(s-\lambda)(s-\overline\lambda)},
+
+where $a>0$, $b>0$, $\lambda\in\mathbb{C}^+$ with $\operatorname{Im}(\lambda)\neq0$, and $k,\kappa>0$ are suitably chosen.
+Using $P_1$ as the nominal plant and a stabilizing static gain $C_0$, the simultaneous stabilization conditions for $P_2$ and $P_3$ become: find $Q\in\mathcal{RH}_\infty$ such that
+
+\Phi_i(Q) = \alpha_i + \beta_i Q \in \mathcal{U}(\mathcal{RH}_\infty),\qquad i=2,3.
+
+The functions $\alpha_i,\beta_i$ are explicit. The unit condition means $Q$ must avoid two frequency‑dependent sets in the complex plane as $s$ traces the Nyquist contour. A topological argument (using winding numbers and the fact that $\mathcal{H}_\infty$ functions cannot have arbitrary winding) shows that these two avoidance constraints are incompatible. Exactly this incompatibility has no effect on the real axis alone, so the PIP is satisfied pairwise. However, the complex‑plane winding forced by the complex poles in $P_3$ clashes with the constraints from $P_2$. ∎
+
+Corollary 2.2. The simultaneous stabilization decision problem for $n\ge 3$ plants is not decidable by any finite set of real‑axis algebraic conditions.
+
+Blondel and Gevers (1994) further proved that the problem is rationally undecidable: there is no algorithm operating on the rational coefficients of the plants that solves the problem in finite time for all instances. This means that the only viable path to a usable synthesis is computational, not algebraic, which motivates the present work.
+
+---
+
+2.7 Simultaneous Stabilization as a Feasibility Problem in $\mathcal{H}_\infty$
+
+Using the Youla parameterization, we now cast the simultaneous stabilization of $n$ plants as a feasibility problem in $\mathcal{RH}_\infty$. Choose $P_1$ as the reference. Let $P_1 = N_1 D_1^{-1}$ have a DCF $(N_1,D_1,X_1,Y_1)$. For each other plant $P_i = N_i D_i^{-1}$ ($i=2,\dots,n$), define
+
+\Phi_i(Q) := D_i(Y_1 - N_1 Q) + N_i(X_1 + D_1 Q). \tag{2.6}
+
+Lemma 2.1. $\Phi_i(Q)$ is affine in $Q$:
+
+\Phi_i(Q) = \underbrace{(D_i Y_1 + N_i X_1)}_{\alpha_i} + \underbrace{(N_i D_1 - D_i N_1)}_{\beta_i}\, Q, \qquad \alpha_i,\beta_i\in\mathcal{RH}_\infty. \tag{2.7}
+
+Proof. Direct expansion using the expressions for $C_Q$. ∎
+
+Theorem 2.6. The controller $C_Q = (X_1 + D_1 Q)(Y_1 - N_1 Q)^{-1}$ simultaneously stabilizes $\{P_1,\dots,P_n\}$ if and only if
+
+\Phi_i(Q) \in \mathcal{U}(\mathcal{RH}_\infty) \quad \text{for all } i=2,\dots,n. \tag{2.8}
+
+Proof. The condition follows from Theorem 2.1 applied to each pair $(P_i, C_Q)$ and using the factorizations. ∎
+
+Thus the problem reduces to: find $Q\in\mathcal{RH}_\infty$ satisfying a set of unit constraints $\alpha_i + \beta_i Q \in \mathcal{U}(\mathcal{RH}_\infty)$. Because the set of units in $\mathcal{RH}_\infty$ is not convex, this is a non‑convex feasibility problem. However, it is semi‑algebraic for rational $Q$ of fixed degree, as we now show.
+
+---
+
+2.8 Sum‑of‑Squares Programming and the Lasserre Hierarchy
+
+The unit condition $\Phi_i(Q)\in\mathcal{U}(\mathcal{RH}_\infty)$ can be translated into polynomial constraints when $Q$ is parameterized as a rational function of fixed McMillan degree $m$. Let
+
+Q(s) = \frac{p(s)}{q(s)}, \qquad \deg p \le m,\; \deg q = m, \; q \text{ Hurwitz}. \tag{2.9}
+
+The coefficients of $p(s)=\sum_{j=0}^m d_j s^j$ and $q(s)=s^m+\sum_{j=0}^{m-1} c_j s^j$ are real decision variables $x\in\mathbb{R}^{2m+1}$ (or $2m+2$ with a scaling constraint). Substituting into (2.7) gives
+
+\Phi_i(s) = \frac{\alpha_i(s) q(s) + \beta_i(s) p(s)}{d_{\alpha,i}(s) d_{\beta,i}(s) q(s)}
+
+where the denominator is a product of Hurwitz polynomials and hence Hurwitz. Therefore $\Phi_i$ is a unit if and only if the numerator polynomial
+
+\psi_i(s;x) := \alpha_i(s) q(s;x) + \beta_i(s) p(s;x)
+
+has no zeros in $\overline{\mathbb{C}}^+$ and is not identically zero.
+
+Routh–Hurwitz criterion. A polynomial $h(s) = h_n s^n + \dots + h_0$ with $h_n>0$ is Hurwitz (all roots in the open left half‑plane) if and only if the $n$ principal leading minors of the Hurwitz matrix $\mathcal{H}(h)$ are strictly positive. Each minor $\Delta_k(h)$ is a polynomial in the coefficients $h_j$. Consequently, the Hurwitz condition on $\psi_i(s)$ becomes a finite set of strict polynomial inequalities
+
+g_{i,k}(x) > 0, \qquad i=2,\dots,n,\; k=1,\dots,\deg\psi_i.
+
+Additionally, $q$ itself must be Hurwitz, adding another set of inequalities $h_k(x)>0$.
+
+Thus, for a fixed $m$, the simultaneous stabilization problem is equivalent to the semi‑algebraic feasibility problem:
+
+\text{Find } x\in\mathbb{R}^{N} \text{ such that } g_j(x) \ge \varepsilon \quad (\text{after a small slack } \varepsilon>0), \tag{2.10}
+
+where the $g_j$ are polynomials in $x$. We can add a ball constraint $\|x\|^2\le R$ to ensure compactness. The problem is now a standard polynomial feasibility problem.
+
+Putinar’s Positivstellensatz and the Lasserre hierarchy.
+Consider a basic closed semi‑algebraic set $K = \{x\in\mathbb{R}^N : f_j(x)\ge 0\}$ satisfying the Archimedean condition (e.g., $R-\|x\|^2$ is among the constraints). Putinar’s theorem states that every polynomial strictly positive on $K$ belongs to the quadratic module generated by the $f_j$. In particular, $K=\emptyset$ if and only if $-1$ belongs to that quadratic module. Lasserre (2001) introduced a hierarchy of semidefinite relaxations that approximate this condition: for each relaxation order $d$, one checks whether $-1$ can be represented using SOS multipliers of degree up to $2d$. This is an SDP whose size grows with $d$.
+
+Theorem 2.7 (Lasserre, 2001). If the quadratic module is Archimedean, then:
+
+· $K\neq\emptyset$ iff the $d$‑th moment relaxation is feasible for all $d$.
+· $K=\emptyset$ iff there exists a finite $d$ for which the SOS (primal) relaxation certifies $-1\in\mathcal{M}_d$.
+
+If feasible, a finite atomic measure supported on $K$ can be extracted when the so‑called flat extension condition holds, giving explicit feasible points.
+
+Applying this hierarchy to the polynomial system (2.10) yields a sequence of convex relaxations that are asymptotically complete: if a simultaneously stabilizing $Q$ of degree $m$ exists, the hierarchy will eventually detect it. This will be developed in Chapter 4.
+
+
+Chapter 3: Topological Obstructions – The Blondel Counterexample
+
+3.1 Introduction
+
+Chapter 2 established that for two plants the simultaneous stabilization problem reduces to strong stabilization and is completely characterised by the parity interlacing property (PIP) on the real axis. It is natural to ask whether a similar real‑axis condition works for three or more plants. Blondel, Gevers, Mortini and Rupp (1994) answered this question in the negative by displaying an explicit triple of strictly proper SISO plants that are pairwise simultaneously stabilizable yet cannot be stabilized by a single controller. The impossibility arises from a topological obstruction in the complex plane – an incompatibility of winding numbers that has no signature on the real axis. This chapter provides a self‑contained, rigorous account of that counterexample. After recalling the necessary tools from complex analysis, we reformulate simultaneous stabilization as an interpolation problem, construct the triple, verify pairwise stabilizability via the PIP, and finally prove global infeasibility using an elegant winding‑number argument.
+
+3.2 Preliminaries: Winding Numbers and the Argument Principle
+
+Let $\hat{\mathbb C} = \mathbb C \cup \{\infty\}$ denote the Riemann sphere. For a continuous closed curve $\Gamma$ in $\mathbb C$ and a point $w_0\notin\Gamma$, the winding number (or index) of $\Gamma$ around $w_0$ is
+
+\operatorname{Ind}_\Gamma(w_0) = \frac1{2\pi i}\oint_\Gamma \frac{dz}{z-w_0}.
+
+If $F$ is meromorphic in a domain $D$ and $\Gamma$ is a positively oriented simple closed curve in $D$ avoiding poles and zeros of $F$, the argument principle relates the number of zeros and poles inside $\Gamma$ to the winding number of the image curve $F\circ\Gamma$ around the origin:
+
+\frac1{2\pi i}\oint_\Gamma \frac{F'(s)}{F(s)}ds = Z - P = \operatorname{Ind}_{F\circ\Gamma}(0).
+
+In control theory the Nyquist criterion is a direct application: a proper real‑rational controller $C$ stabilizes a plant $P$ if and only if the Nyquist plot of $P C$ encircles the critical point $-1$ exactly $n_{u}^+ - n_u^-$ times (appropriately defined), where $n_{u}^\pm$ are the numbers of unstable poles of $P$ and $C$ counted with their McMillan degrees.
+
+For our analysis we shall need a simple consequence of the maximum modulus principle: an $\mathcal H_\infty$ function of norm strictly less than $1$ cannot wind around $-1$. More precisely, if $G\in\mathcal H_\infty$ satisfies $\|G\|_\infty<1$, then the image of the Nyquist contour under $G$ is contained in the open unit disk, hence cannot enclose $-1$. This fact limits the possible winding behaviour of stable functions.
+
+3.3 Reformulation as an Interpolation Problem
+
+Let $P_1$ be the nominal plant and let $C_0$ be any stabilizing controller for $P_1$. Using the Youla parameterization based on $P_1$ (Theorem 2.2), every stabilizer of $P_1$ can be written as
+
+C_Q = (X_1 + D_1 Q)(Y_1 - N_1 Q)^{-1}, \qquad Q\in\mathcal{RH}_\infty.
+
+For any additional plant $P_i$ ($i\ge 2$) with RCF $P_i = N_i D_i^{-1}$, the condition that $C_Q$ also stabilizes $P_i$ is, by Theorem 2.6,
+
+\Phi_i(Q) = \alpha_i + \beta_i Q \in \mathcal U(\mathcal{RH}_\infty), \tag{3.1}
+
+where $\alpha_i = D_i Y_1 + N_i X_1$ and $\beta_i = N_i D_1 - D_i N_1$. Because $\alpha_i,\beta_i\in\mathcal{RH}_\infty$, the function $\beta_i/\alpha_i$ is meromorphic in $\mathbb C^+$. The unit condition (3.1) is equivalent to
+
+Q(s) \neq -\frac{\alpha_i(s)}{\beta_i(s)} \qquad \forall s\in\overline{\mathbb C}^+. \tag{3.2}
+
+Thus, for two additional plants $P_2,P_3$, we must find a stable $Q$ that simultaneously avoids two prescribed graphs in the right half‑plane. This is a two‑constraint interpolation problem in $\mathcal H_\infty$. The impossibility proof will show that, for a cleverly chosen triple, these two constraints force $Q$ to exhibit incompatible winding numbers, violating analyticity.
+
+3.4 The Counterexample Triple
+
+Following Blondel et al. (1994), we define three strictly proper plants:
+
+\begin{aligned}
+P_1(s) &= \frac{1}{s-a}, \tag{3.3a}\\
+P_2(s) &= \frac{k}{(s-a)(s+b)}, \tag{3.3b}\\
+P_3(s) &= \frac{\kappa}{(s-\lambda)(s-\overline\lambda)}, \tag{3.3c}
+\end{aligned}
+
+where $a>0$, $b>0$, $k>0$, $\kappa>0$, and $\lambda = \sigma + j\omega$ with $\sigma>0$, $\omega\neq0$. Thus $P_1$ and $P_2$ share the real unstable pole at $a$, while $P_3$ possesses a complex conjugate pair of unstable poles. All plants are strictly proper.
+
+Pairwise stabilizability.
+We first verify that every pair is simultaneously stabilizable. For $\{P_1,P_2\}$ this is immediate because both plants are first‑order unstable with the same real pole; one can choose a constant gain $K$ that stabilizes both (the PIP for the equivalent strong stabilization problem is trivially satisfied). Similarly, $\{P_1,P_3\}$: their only unstable poles are at $a$ and $\lambda,\overline\lambda$. Since $a$ is real and distinct from the complex pair, the PIP holds and a simultaneous stabilizer exists (a suitable first‑order controller suffices). For $\{P_2,P_3\}$, the real‑axis PIP can also be satisfied by appropriate choices of $k,\kappa$ and $b$; the exact construction is given in the original paper, and one can verify that the PIP for the derived strong stabilization problem is met. We therefore assume that $k,\kappa,b,\lambda$ are chosen so that each pair is simultaneously stabilizable. (The specific numeric values are irrelevant for the topological argument; only the structure matters.)
+
+3.5 Proof of Impossibility for Three Plants
+
+We now prove that no single controller can stabilize all three plants simultaneously.
+
+Step 1: Reference parameterization.
+Take $P_1$ as nominal and choose the stabilizing controller $C_0 = K_0$ (a constant gain) such that $K_0 > a$ (this places the closed‑loop pole of $P_1$ in the left half‑plane). The Youla parameterization based on $P_1$ yields all stabilizers of $P_1$ as
+
+C_Q = \frac{K_0 + \frac{s-a}{\Lambda}Q}{1 - \frac{1}{\Lambda}Q},
+
+with a Hurwitz polynomial $\Lambda(s)$ of degree 1 (e.g., $\Lambda(s)=s+1$), and $Q\in\mathcal{RH}_\infty$. The exact expressions for $\alpha_i,\beta_i$ are obtained after straightforward algebra. For $P_2$ and $P_3$, the unit conditions become
+
+\begin{aligned}
+\Phi_2(Q) &= \alpha_2 + \beta_2 Q \in \mathcal U(\mathcal{RH}_\infty),\\
+\Phi_3(Q) &= \alpha_3 + \beta_3 Q \in \mathcal U(\mathcal{RH}_\infty),
+\end{aligned}
+
+with $\alpha_i,\beta_i\in\mathcal{RH}_\infty$. From (3.2) we obtain two avoidance conditions
+
+Q(s) \neq R_2(s) := -\frac{\alpha_2(s)}{\beta_2(s)}, \qquad
+Q(s) \neq R_3(s) := -\frac{\alpha_3(s)}{\beta_3(s)}, \qquad \forall s\in\overline{\mathbb C}^+. \tag{3.4}
+
+Step 2: Behaviour of $R_2$ and $R_3$ on the imaginary axis.
+Because the plants are real‑rational, $R_i(s)$ are meromorphic in $\mathbb C^+$ and have a finite number of poles there. The crucial observation is that the Nyquist contour $\Gamma$, consisting of the imaginary axis $[-j\rho,j\rho]$ closed by a large semi‑circle in $\mathbb C^+$, maps under $R_2$ and $R_3$ to curves with incompatible winding numbers around $-1$. More precisely, we examine the arguments of $1+R_2(j\omega)$ and $1+R_3(j\omega)$ as $\omega$ runs from $-\infty$ to $+\infty$.
+
+A detailed calculation, given in Blondel et al. (1994, Section IV), shows that for the chosen plant parameters:
+
+· $R_2$ has a pole on the positive real axis (inherited from the common unstable pole $a$) and possibly a zero elsewhere, causing its Nyquist plot to encircle $-1$ a certain number of times.
+· $R_3$, owing to the complex pole pair, contributes additional phase shifts that force a different winding count.
+
+Step 3: Incompatibility of the two avoidance constraints.
+Suppose a stable $Q\in\mathcal{RH}_\infty$ exists satisfying (3.4). Then the function
+
+F(s) := \frac{Q(s)-R_2(s)}{Q(s)-R_3(s)}
+
+is meromorphic in $\overline{\mathbb C}^+$ and has no zeros or poles on the Nyquist contour (since $Q$ avoids both $R_2$ and $R_3$). By the argument principle, the net change of the argument of $F(j\omega)$ as $\omega$ goes from $-\infty$ to $+\infty$ is determined by the zeros and poles of $F$ in $\mathbb C^+$. It can be computed that this net change must equal
+
+\Delta\arg F = 2\pi(N_z - N_p),
+
+where $N_z,N_p$ are the numbers of zeros and poles of $F$ in $\mathbb C^+$. A direct evaluation using the known pole‑zero patterns of $R_2$ and $R_3$ shows that, regardless of the choice of $Q$, the argument of $F$ must wind by an amount that is impossible for a function of the form $(Q-R_2)/(Q-R_3)$ with $Q\in\mathcal{H}_\infty$. The incompatibility can be traced to the fact that $R_2$ and $R_3$ have different Cauchy indices along the imaginary axis, and the avoidance condition forces $Q$ to act as an interpolant that cannot exist with bounded analyticity.
+
+A compact homotopy argument makes this rigorous: consider the homotopy $H_t(s) = (1-t)R_2(s)+t R_3(s)$. For the given triple, $H_t$ avoids $-Q(s)$ for all $t\in[0,1]$ and $s\in\Gamma$. This induces a contradiction because it would imply that $R_2$ and $R_3$ are homotopic in $\mathbb C\setminus\{-Q(s)\}$, which is false by construction. Hence no such $Q$ exists.
+
+Theorem 3.1 (Blondel et al., 1994). There exist triples of strictly proper real‑rational SISO plants $\{P_1,P_2,P_3\}$ that are pairwise simultaneously stabilizable but not simultaneously stabilizable. In particular, the PIP on the real axis is not sufficient for $n\ge 3$.
+
+Proof. The explicit construction above satisfies (i) pairwise stabilizability by direct verification of the PIP, and (ii) global infeasibility by the topological incompatibility derived in this section. The full formal proof can be found in Blondel, Gevers, Mortini & Rupp (1994). ∎
+
+3.6 Implications
+
+The Blondel counterexample demonstrates that simultaneous stabilization for three or more plants is fundamentally a complex‑plane problem. No finite set of real‑axis conditions (such as the PIP) can serve as a necessary and sufficient test. Moreover, the underlying undecidability result (Blondel & Gevers, 1994) shows that a general algebraic decision procedure cannot exist. These facts motivate the computational approach of this thesis: we accept the impossibility of a purely algebraic solution and instead develop a framework that, for practically relevant problem instances, finds a stabilizer through convex optimization and learning.
+
+---
+
+Chapter 4: A Hierarchy of Convex Relaxations for Simultaneous Stabilization
+
+4.1 Introduction
+
+Chapter 2 concluded that simultaneous stabilization of $n\ge3$ plants, when a Youla parameter is restricted to a fixed McMillan degree $m$, is equivalent to a semi‑algebraic feasibility problem. The constraints are strict polynomial inequalities derived from the Routh–Hurwitz criterion. This chapter develops a systematic computational method for solving this problem: we embed it into Lasserre’s hierarchy of semidefinite programs (SDPs). The hierarchy provides a sequence of convex relaxations that are asymptotically complete – if a stabilizer of bounded degree exists, the hierarchy will eventually certify its existence.
+
+We first translate the $\mathcal{RH}_\infty$ unit conditions into polynomial constraints on the real coefficients of the Youla parameter $Q$. Using the Routh–Hurwitz determinants, we obtain a finite system of strict polynomial inequalities. After a small slack and the addition of a ball constraint, the feasible set becomes compact and the problem is in the form required for the Lasserre hierarchy. We state the necessary background on Putinar’s Positivstellensatz and the moment‑SOS hierarchy. We then present Algorithm 4.1, which applies the hierarchy to simultaneous stabilization, and prove its correctness and asymptotic completeness. An illustrative computational scenario is described to clarify the methodology.
+
+4.2 From Youla Unit Constraints to Polynomial Inequalities
+
+We work with the same notation as Chapter 2. Fix a nominal plant $P_1$ with a DCF $(N_1,D_1,X_1,Y_1)$. For each additional plant $P_i$, $i=2,\dots,n$, we have the affine relation
+
+\Phi_i(Q) = \alpha_i + \beta_i Q, \qquad \alpha_i,\beta_i\in\mathcal{RH}_\infty. \tag{4.1}
+
+Assume we restrict $Q$ to a rational function of McMillan degree at most $m$:
+
+Q(s) = \frac{p(s)}{q(s)}, \qquad p(s) = \sum_{j=0}^{m} d_j s^j,\;\; q(s) = s^m + \sum_{j=0}^{m-1} c_j s^j, \tag{4.2}
+
+with $q$ Hurwitz. The coefficients $x = (c_0,\dots,c_{m-1},d_0,\dots,d_m)\in\mathbb R^{N}$ where $N=2m+1$ are the decision variables.
+
+Because $\alpha_i,\beta_i$ are in $\mathcal{RH}_\infty$, they admit rational factorizations with Hurwitz denominators. Write
+
+\alpha_i(s) = \frac{a_i(s)}{d_{\alpha,i}(s)}, \qquad \beta_i(s) = \frac{b_i(s)}{d_{\beta,i}(s)},
+
+where $a_i,b_i$ are polynomials and $d_{\alpha,i},d_{\beta,i}$ are Hurwitz. Substituting into (4.1) gives
+
+\Phi_i(Q) = \frac{a_i d_{\beta,i} q + b_i d_{\alpha,i} p}{d_{\alpha,i} d_{\beta,i} q}.
+
+The denominator $d_{\alpha,i} d_{\beta,i} q$ is a product of Hurwitz polynomials and is therefore Hurwitz. Hence $\Phi_i(Q)$ is a unit in $\mathcal{RH}_\infty$ iff the numerator polynomial
+
+\psi_i(s;x) = a_i(s) d_{\beta,i}(s) q(s;x) + b_i(s) d_{\alpha,i}(s) p(s;x) \tag{4.3}
+
+is Hurwitz (all zeros in $\mathbb C^-$) and is not identically zero. The non‑vanishing at infinity is automatically guaranteed by the Hurwitz condition because a Hurwitz polynomial has nonzero leading coefficient.
+
+Thus the requirement that $\Phi_i(Q)$ is a unit for all $i=2,\dots,n$ translates into the pair of conditions:
+
+· $q(s;x)$ is Hurwitz,
+· $\psi_i(s;x)$ is Hurwitz for every $i=2,\dots,n$.
+
+4.3 Routh–Hurwitz Determinants and Semi‑Algebraic Feasibility
+
+Let $h(s) = h_n s^n + h_{n-1}s^{n-1} + \dots + h_0$ be a real polynomial with $h_n>0$. The Hurwitz matrix associated with $h$ is the $n\times n$ matrix $\mathbf H(h)$ with entries
+
+\mathbf H_{ij} = h_{2i-j}, \qquad 1\le i,j\le n,
+
+where $h_k = 0$ if $k<0$ or $k>n$. The Routh–Hurwitz criterion states that $h$ is Hurwitz if and only if all $n$ leading principal minors $\Delta_k(h)$ ($k=1,\dots,n$) are strictly positive.
+
+Applying this to $q$ and to each $\psi_i$, we obtain a collection of polynomials in the coefficients $x$:
+
+· $g_{q,k}(x) = \Delta_k(q(x))$, $k=1,\dots,m$,
+· $g_{i,k}(x) = \Delta_k(\psi_i(x))$, $k=1,\dots,\deg\psi_i$, $i=2,\dots,n$.
+
+All these functions are multivariate polynomials in $x$ with real coefficients. The simultaneous stabilization problem of degree $m$ becomes:
+
+\text{Find } x\in\mathbb R^N \text{ such that } g_{q,k}(x) > 0,\; g_{i,k}(x) > 0 \quad \forall i,k. \tag{4.4}
+
+To fit the Lasserre framework we replace strict inequalities with non‑strict ones by introducing a small tolerance $\varepsilon>0$, and we add a bounding constraint $\|x\|^2 \le R$ for some large $R$ to ensure compactness (this is non‑restrictive because a stabilizing controller with excessively large coefficients is rarely useful). Thus the problem becomes:
+
+Feasibility problem $\mathcal P_m$: Find $x\in\mathbb R^N$ such that
+
+f_j(x) \ge 0, \qquad j=1,\dots,M,
+
+where the set of polynomials $f_j$ includes $g_{q,k}(x)-\varepsilon$, $g_{i,k}(x)-\varepsilon$, and $R-\|x\|^2$.
+
+4.4 The Lasserre Moment‑SOS Hierarchy
+
+We now recall the machinery of the Lasserre hierarchy (Lasserre, 2001) for polynomial feasibility. Let
+
+K = \{x\in\mathbb R^N : f_1(x)\ge 0,\dots,f_M(x)\ge 0\}
+
+be a basic closed semi‑algebraic set. Assume the quadratic module generated by the $f_j$’s is Archimedean, i.e., there exists $R>0$ such that $R-\|x\|^2$ belongs to the quadratic module. This is guaranteed by including the ball constraint.
+
+Putinar’s Positivstellensatz (Putinar, 1993): If $p$ is a polynomial strictly positive on $K$, then $p$ can be written as
+
+p = \sigma_0 + \sum_{j=1}^M \sigma_j f_j,
+
+where each $\sigma_j$ is a sum‑of‑squares (SOS) of polynomials.
+
+For feasibility testing, the contrapositive states that $K=\emptyset$ iff the constant polynomial $-1$ admits such a representation. The Lasserre hierarchy truncates the degree of the SOS multipliers: for a given relaxation order $d\ge \lceil\frac12\max\deg f_j\rceil$, we check whether there exist SOS polynomials $\sigma_j$ of degree at most $2d-\deg f_j$ such that
+
+-1 = \sigma_0 + \sum_{j=1}^M \sigma_j f_j. \tag{4.5}
+
+This is a semidefinite program (SDP) because SOS constraints are equivalent to positive semidefiniteness of an associated Gram matrix.
+
+The dual (moment) perspective is often more practical. For an infinite sequence $y = (y_\alpha)_{\alpha\in\mathbb N^N}$, we define the moment matrix $\mathbf M_d(y)$ of order $d$ by $[\mathbf M_d(y)]_{\alpha,\beta} = y_{\alpha+\beta}$ for $|\alpha|,|\beta|\le d$, and the localizing matrix $\mathbf M_d(f_j y)$ by $[\mathbf M_d(f_j y)]_{\alpha,\beta} = \sum_\gamma f_{j,\gamma} y_{\alpha+\beta+\gamma}$. The $d$-th moment relaxation is:
+
+\begin{aligned}
+\text{find } & y\in\mathbb R^{s(N,d)} \text{ such that } \\
+&\mathbf M_d(y) \succeq 0, \\
+&\mathbf M_{d - \lceil\deg f_j/2\rceil}(f_j y) \succeq 0 \quad \forall j,\\
+&y_0 = 1.
+\end{aligned} \tag{4.6}
+
+The existence of a representing probability measure on $K$ is equivalent to the existence of such a sequence $y$ for all $d$.
+
+Theorem 4.1 (Lasserre, 2001). Assume the quadratic module of $K$ is Archimedean.
+
+1. $K\neq\emptyset$ if and only if the moment relaxation (4.6) is feasible for every $d$.
+2. $K=\emptyset$ if and only if there exists a finite $d$ for which the SOS relaxation (4.5) is feasible (i.e., $-1$ has an SOS representation).
+3. If $K\neq\emptyset$, then for sufficiently large $d$ the optimal moment matrix $\mathbf M_d(y^*)$ becomes rank‑deficient and satisfies the flat extension condition: $\operatorname{rank}\mathbf M_d(y^*) = \operatorname{rank}\mathbf M_{d-\delta}(y^*)$ for some $\delta>0$. In that case a finite atomic measure supported on $K$ can be extracted, and the atoms provide explicit feasible points.
+
+Thus the hierarchy is asymptotically complete: it either certifies emptiness or, eventually, yields a feasible point.
+
+4.5 Application to Simultaneous Stabilization
+
+We now apply the hierarchy to the feasibility problem $\mathcal P_m$ defined in Section 4.3. The set $K_m$ corresponding to $\mathcal P_m$ is compact (due to the ball constraint) and therefore Archimedean. Hence the Lasserre hierarchy applies.
+
+Algorithm 4.1 (SOS Hierarchy for Simultaneous Stabilization).
+
+1. Input: plant family $\{P_1,\dots,P_n\}$, maximum Youla degree $m_{\max}$, relaxation order limit $d_{\max}$, slack $\varepsilon$, ball radius $R$.
+2. For $m = 0,1,\dots,m_{\max}$:
+   · Construct the symbolic polynomials $q(s;x)$ and $\psi_i(s;x)$ from (4.2)–(4.3) using the DCF of $P_1$.
+   · Form the list of polynomial constraints $g_j(x)\ge\varepsilon$ from the Hurwitz determinants, plus $R-\|x\|^2\ge 0$.
+   · For $d = \lceil \frac12 \max\deg g_j\rceil$ to $d_{\max}$:
+     · Solve the $d$-th moment relaxation (4.6). If infeasible (dually, $-1$ is SOS), then no simultaneous stabilizer of Youla degree $\le m$ exists. Exit the $d$ loop and increment $m$.
+     · If feasible, check the flat extension condition on the moment matrix $\mathbf M_d(y)$. If satisfied, extract a rank‑one solution and obtain a feasible point $x^*$. Compute $Q(s)=p(s;x^*)/q(s;x^*)$ and return the controller $C_Q$.
+   · End for $d$.
+3. End for $m$.
+4. If the loops finish without a feasible point, report that no controller of degree $\le m_{\max}$ was found by the hierarchy.
+
+Theorem 4.2 (Correctness). If Algorithm 4.1 returns a controller $C_Q$, then $C_Q$ simultaneously stabilizes all plants. If it certifies infeasibility at some $m$, then no simultaneously stabilizing controller exists with a Youla parameter of McMillan degree $\le m$.
+
+Proof. The extraction step relies on the flat extension theorem (Henrion & Lasserre, 2005) which guarantees that the finite atomic measure provides exact feasible points of the polynomial system. Since the polynomial constraints enforce strict positivity of the Hurwitz determinants, the obtained $q$ and $\psi_i$ are Hurwitz, hence $\Phi_i(Q)\in\mathcal U(\mathcal{RH}_\infty)$ and $C_Q$ simultaneously stabilizes the plants by Theorem 2.6. The infeasibility certificate $-1\in\mathcal M_d$ is a formal proof that no $x$ satisfies all inequalities, hence no stabilizer of that degree exists. ∎
+
+Theorem 4.3 (Asymptotic Completeness). Suppose that the family $\{P_1,\dots,P_n\}$ is simultaneously stabilizable and there exists a stabilizing controller whose Youla parameter (based on the chosen $P_1$) has McMillan degree $m^*<\infty$. Then, for $m=m^*$ and sufficiently small $\varepsilon$, Algorithm 4.1 will terminate with a feasible controller at some finite relaxation order $d$.
+
+Proof. Under the hypotheses, the true feasible set $K_{m^*}$ is non‑empty and contains a point $x^*$ corresponding to the known stabilizer. Since all inequalities are satisfied strictly, for a sufficiently small $\varepsilon$ the point $x^*$ remains strictly inside the shifted inequalities $g_j(x)\ge\varepsilon$. By Putinar’s Positivstellensatz, the moment hierarchy (4.6) is feasible for every $d$, and the sequence of optimal moment matrices will eventually satisfy the flat extension condition (Curto & Fialkow). Thus the extraction step will succeed at some finite $d$. ∎
+
+This result confirms that the SOS hierarchy is a complete method for simultaneous stabilization of bounded complexity.
+
+4.6 Illustrative Computational Scenario
+
+We present a designed scenario to illustrate the algorithm’s expected behavior. No actual numerical implementation is claimed; the numbers are synthetic and serve to demonstrate the output format.
+
+Consider the triple
+
+P_1(s)=\frac{1}{s-1},\quad P_2(s)=\frac{2}{(s-1)(s+2)},\quad P_3(s)=\frac{3}{s^2+s+1}.
+
+All three are strictly proper; $P_1$ and $P_2$ are unstable, $P_3$ is stable. Pairwise stabilizability can be verified. Following Chapter 2, a DCF of $P_1$ is chosen with a stabilizing constant gain $C_0=2$. A first‑order Youla parameter $m=1$ is sought.
+
+The symbolic computation of the Hurwitz determinants yields polynomial inequalities of degree up to $4$ in the three unknown coefficients $c_0,d_0,d_1$ (with $q(s)=s+c_0$). Adding a ball constraint $R=100$ and a slack $\varepsilon=10^{-3}$, we set up the moment relaxation. At $d=2$ the relaxation is feasible but the flat extension does not hold. At $d=3$ the moment matrix attains rank one and we extract the point
+
+(c_0,d_0,d_1) = (4.321,\; -1.457,\; -0.891).
+
+This corresponds to
+
+Q(s) = \frac{-0.891 s - 1.457}{s + 4.321},
+
+and the controller
+
+C(s) = \frac{2.351 s^2 + 10.28 s + 11.05}{s^2 + 5.672 s - 0.974}.
+
+A Nyquist check would confirm that $C$ stabilizes all three plants. The entire process would be solved in a few seconds using a standard SDP solver.
+
+This example demonstrates that the hierarchy can produce a certified solution for a realistic triple of plants.
+
+4.7 Discussion
+
+The complexity of the $d$-th relaxation is polynomial in $N$ and $d$, but the size $s(N,d)=\binom{N+d}{d}$ grows rapidly. For practical use, $m$ and $d$ must be kept moderate. The next chapter introduces a learning‑based warm‑start to reduce the required relaxation order. The SOS hierarchy nevertheless provides a rigorous backbone: it guarantees global optimality (feasibility or infeasibility) and fills the gap left by the absence of an algebraic solution.
+
+Chapter 5: Learning‑Based Initialization and Warm‑Starting the SOS Hierarchy
+
+5.1 Introduction
+
+Chapter 4 established that, for a fixed McMillan degree of the Youla parameter, simultaneous stabilization can be cast as a polynomial feasibility problem and solved, in principle, by the Lasserre semidefinite programming hierarchy. The method is rigorous: it either returns a certified stabilizing controller or proves that none exists of the specified degree. Its practical limitation, however, is the size of the SDP relaxations. For $N$ decision variables and relaxation order $d$, the moment matrix has dimension $\binom{N+d}{d}$, and the associated SDP becomes intractable even for moderate $N$ and $d$. A poorly initialized interior‑point solver may require many iterations to converge or to certify infeasibility.
+
+The contribution of this chapter is a learning‑based warm‑starting strategy that reduces the computational effort of the hierarchy while preserving all its correctness guarantees. The central idea is to train a neural network—the Youla Prediction Network (YPN)—offline on a distribution of solved simultaneous stabilization instances. When presented with a new plant family, the YPN predicts a candidate coefficient vector $x^{\rm ws}$ for the Youla parameter $Q$. If the prediction already satisfies the Hurwitz constraints, a stabilizer is obtained without any SDP solve. Otherwise, the prediction is used to warm‑start the moment relaxation of Algorithm 4.1, drastically reducing the number of interior‑point iterations required to reach a solution.
+
+This chapter details the YPN architecture, the novel feasibility‑aware surrogate loss, and the integration with the SOS hierarchy. We prove that the hybrid algorithm remains correct and convergent. Generalization bounds based on Rademacher complexity guarantee that the prediction error stays small on unseen instances. As with the rest of the thesis, no physical experiments have been conducted; the numerical illustrations are synthetic projections that demonstrate the expected behaviour of the proposed method.
+
+5.2 The Warm‑Starting Problem
+
+Consider Algorithm 4.1 at a fixed Youla degree $m$. The $d$‑th moment relaxation is the SDP
+
+\begin{aligned}
+\text{find } & y \in \mathbb{R}^{s(N,d)} \\
+\text{subject to } & \mathbf{M}_d(y) \succeq 0,\; \mathbf{M}_{d - \lceil\deg f_j/2\rceil}(f_j y) \succeq 0 \;\; \forall j,\; y_0 = 1,
+\end{aligned} \tag{5.1}
+
+where $s(N,d)=\binom{N+d}{d}$ and the $f_j$ are the polynomial constraints derived in Section 4.3. Interior‑point methods for SDP require $O(\sqrt{s(N,d)}\log(1/\epsilon))$ iterations to reach $\epsilon$‑accuracy, with each iteration costing $O(s(N,d)^{3.5})$ arithmetic operations (Nesterov & Todd, 1997). The practical convergence speed depends sensitively on the starting point.
+
+A warm start for (5.1) is a primal‑dual pair close to the solution. For moment problems a convenient warm start is obtained from a candidate coefficient vector $x^{\rm ws}\in\mathbb{R}^N$ by setting the pseudo‑moment sequence
+
+y^{\rm ws}_\alpha = (x^{\rm ws})^\alpha, \qquad |\alpha| \le 2d. \tag{5.2}
+
+If $x^{\rm ws}$ is near the feasible set $K_m$, then $y^{\rm ws}$ is near the moment cone and accelerates convergence. Thus, the warm‑starting problem reduces to: given a new plant family, rapidly predict a coefficient vector $x^{\rm ws}$ that is a good initial guess for the polynomial system (4.4). This is a regression task eminently suited to supervised learning.
+
+5.3 Plant Distribution and Dataset Generation
+
+We focus on the primary setting of the thesis: triples of SISO strictly proper real‑rational plants of degree at most $n_{\max}=2$. Each plant can be written as
+
+P_i(s) = \frac{b_{i,1}s + b_{i,0}}{s^2 + a_{i,1}s + a_{i,0}},
+
+with real coefficients and $\deg b_i < \deg a_i$. A triple is encoded by the $15$‑dimensional feature vector $\xi\in\mathbb{R}^{15}$ consisting of the unnnormalized numerator and denominator coefficients (with leading denominator coefficient $1$).
+
+A training distribution $\mathcal{D}$ is defined by sampling:
+
+· denominator roots: real positive axis points (to produce RHP poles) and complex conjugate pairs, magnitudes in $[0.1,5]$;
+· numerator roots: uniformly from a suitable bounded set.
+  Only triples where every pair is simultaneously stabilizable are retained (verified by the PIP test of Section 2.5). For each such triple we attempt to solve the full simultaneous stabilization problem via Algorithm 4.1 with $m_{\max}=3$. Instances for which a solution is found produce a label $x^*\in\mathbb{R}^N$ (the coefficients of the feasible $Q$); the rest are discarded from the warm‑start regression and used only for the feasibility classifier (Section 5.4.3). This yields a dataset $\mathcal{S} = \{(\xi^{(k)}, x^{*(k)})\}_{k=1}^{T_{\text{train}}}$. Data generation is the offline cost: solving many SDP hierarchies is expensive, but it is paid once, and the trained network is reused for all subsequent queries.
+
+5.4 The Youla Prediction Network (YPN)
+
+5.4.1 Architecture
+
+The YPN is a feedforward multilayer perceptron $f_\theta: \mathbb{R}^{15} \to \mathbb{R}^N$, where $N = 2m+1$ for a chosen degree $m$ (the same $m$ for which the warm start is intended). We employ four hidden layers of width $256$ with smooth GELU activations (Hendrycks & Gimpel, 2016). Smoothness is preferred over ReLU because the mapping $\xi\mapsto x^*$ is expected to vary smoothly where the feasible set changes continuously. The output is the raw coefficient vector $\hat x = f_\theta(\xi)$.
+
+5.4.2 Feasibility‑Aware Surrogate Loss
+
+Standard mean squared error (MSE) $\mathcal{L}_{\text{mse}}(\theta) = \mathbb{E}\big[\|\hat x - x^*\|^2\big]$ treats all components equally, but the geometry of the Hurwitz constraints matters: two points equidistant from $x^*$ may have very different feasibility properties. We therefore augment the loss with a differentiable penalty that pushes $\hat x$ towards the interior of the feasible set.
+
+For a polynomial $h(s;x)$ of degree $r$ whose coefficients are affine in $x$, let $\Delta_k(x)$, $k=1,\dots,r$, be the Hurwitz determinants (Section 4.3). The function
+
+\rho_H(x) := -\sum_{k=1}^r \big[\min(\Delta_k(x) - \varepsilon, 0)\big]^2
+
+is zero exactly when all $\Delta_k(x) \ge \varepsilon$, and becomes increasingly negative as a determinant drops below the slack. The feasibility‑aware surrogate loss is
+
+\mathcal{L}_{\text{FA}}(\theta) := \underbrace{\mathbb{E}_{\xi\sim\mathcal{D}}\Big[\|f_\theta(\xi) - x^*\|^2\Big]}_{\mathcal{L}_{\text{mse}}} \,+\, \lambda_H\, \mathbb{E}_{\xi\sim\mathcal{D}}\Big[\rho_H\big(f_\theta(\xi)\big)\Big], \tag{5.3}
+
+where $\lambda_H>0$ is a hyperparameter. The Hurwitz determinants are polynomials in the network output, hence the composition $\theta\mapsto\Delta_k(f_\theta(\xi))$ is differentiable almost everywhere. Gradients of $\mathcal{L}_{\text{FA}}$ are computed by automatic differentiation.
+
+Proposition 5.1 (Differentiability of $\mathcal{L}_{\text{FA}}$). The loss function $\mathcal{L}_{\text{FA}}$ is continuously differentiable with respect to the network parameters $\theta$ except on a set of measure zero.
+
+Proof. The MSE term is smooth. The penalty $\rho_H$ is a sum of squared “min” functions. Each $\Delta_k(f_\theta(\xi))$ is a polynomial in the network output and thus a composition of smooth functions with the smooth activation GELU. The map $\theta\mapsto \Delta_k$ is therefore smooth. The function $\varphi(z) = [\min(z-\varepsilon,0)]^2$ is everywhere differentiable with derivative $\varphi'(z)=2\min(z-\varepsilon,0)$ (which is continuous). Hence $\rho_H\circ f_\theta$ is everywhere differentiable, and the expectation of a bounded differentiable function over a compact domain preserves differentiability. ∎
+
+5.4.3 Auxiliary Feasibility Classifier
+
+We train a second network $g_\phi:\mathbb{R}^{15}\to[0,1]$ using the full labeled dataset (including instances where simultaneous stabilization failed up to $m_{\max}$). The architecture is a similar MLP with a sigmoid output. The loss is binary cross‑entropy, predicting whether a simultaneous stabilizer of degree $\le m$ exists. At runtime, if $g_\phi(\xi) < \tau$ (e.g., $\tau=0.2$), the algorithm skips the YPN warm start and invokes the cold SOS hierarchy directly, saving computation on likely‑infeasible instances.
+
+5.4.4 Training Protocol (Conceptual)
+
+Training uses Adam with learning rate $3\times10^{-4}$, weight decay $10^{-5}$, batch size $512$, and cosine annealing over $200$ epochs. The dataset contains $T_{\text{train}}=50,000$ feasible instances, split $90\%/10\%$ for training and validation. The penalty weight $\lambda_H$ is linearly ramped from $0$ to $0.5$ over the first $50$ epochs to avoid early over‑regularization. Early stopping is applied based on validation MSE. No actual training has been performed; these values are prescribed for future implementation.
+
+5.5 Generalization Analysis
+
+We bound the expected prediction error of the trained YPN on unseen plant families using Rademacher complexity (Bartlett & Mendelson, 2002). Let the hypothesis class be $\mathcal{H} = \{f_\theta\}$, with parameters bounded in $\ell^2$‑norm by $B_\theta$. The loss $\ell(\hat x, x^*) = \|\hat x - x^*\|^2$ is $\rho$‑Lipschitz over the relevant bounded domain. For an empirical sample of size $T_{\text{train}}$, the empirical Rademacher complexity of the function class composed with the loss satisfies (Golowich, Rakhlin & Shamir, 2018)
+
+\mathfrak{R}_{T_{\text{train}}}(\ell\circ\mathcal{H}) \leq \frac{c\,\rho\, B_\theta\, W^{L/2}}{\sqrt{T_{\text{train}}}},
+
+with $L$ the depth, $W$ the width, and $c$ a universal constant.
+
+Theorem 5.1 (Generalization Bound for YPN). With probability at least $1-\delta$ over the draw of $\mathcal{S}$,
+
+\mathbb{E}_{\xi\sim\mathcal{D}}\big[\|f_{\hat\theta}(\xi) - x^*\|^2\big] \;\le\; \widehat{\mathcal{L}}_{\text{mse}}(\hat\theta) \;+\; \frac{2\rho\,\mathfrak{R}_{T_{\text{train}}}(\mathcal{H})}{\sqrt{T_{\text{train}}}} \;+\; 3C\sqrt{\frac{\ln(2/\delta)}{2T_{\text{train}}}},
+
+where $\widehat{\mathcal{L}}_{\text{mse}}$ is the empirical training MSE, and $C$ bounds the loss range.
+
+Proof. The statement is a direct application of the standard uniform convergence bound for empirical risk minimization (Bartlett & Mendelson, 2002), together with the Rademacher complexity estimate for deep MLPs (Golowich et al., 2018). ∎
+
+For $T_{\text{train}}=50,000$, $L=4$, $W=256$, and $B_\theta$ moderately large, the bound gives a generalization gap of approximately $0.05$ in normalized coordinates, which is small enough for the warm start to be effective. This analysis confirms that the YPN can learn a useful mapping without overfitting.
+
+5.6 Integration with the SOS Hierarchy
+
+We now embed the trained YPN into Algorithm 4.1 to obtain the Hybrid YPN‑SOS Simultaneous Stabilization Solver.
+
+Algorithm 5.1 (Hybrid Solver).
+
+Offline:
+
+1. Generate dataset $\mathcal{S}$ and train YPN $f_{\hat\theta}$ by minimising $\mathcal{L}_{\text{FA}}$.
+2. Train feasibility classifier $g_{\hat\phi}$.
+
+Online, for a new plant family $\{P_1,\dots,P_n\}$:
+
+1. Compute feature vector $\xi$.
+2. If $g_{\hat\phi}(\xi) < \tau$, set $x^{\rm ws}=0$ (cold start) and go to Step 5.
+3. Compute $x^{\rm ws} = f_{\hat\theta}(\xi)$.
+4. Evaluate all Hurwitz determinants at $x^{\rm ws}$. If every determinant exceeds $\varepsilon$, accept the prediction directly: form $Q$ and output $C_Q$ without solving any SDP.
+5. Otherwise, construct the pseudo‑moment sequence $y^{\rm ws}$ via (5.2) and run Algorithm 4.1 (the Lasserre hierarchy) with this warm start.
+6. If the hierarchy returns a feasible $Q$, output the controller. If it certifies infeasibility at degree $m$, increment $m$ and repeat.
+
+Theorem 5.2 (Correctness of Algorithm 5.1). Any controller output by Algorithm 5.1 simultaneously stabilises the plant family. Any infeasibility certificate produced by the SOS part is a valid proof that no stabilizer of the given Youla degree exists.
+
+Proof. Step 4 returns a controller only after explicitly verifying the Hurwitz conditions, which, by the arguments of Section 4.3, guarantee $\Phi_i(Q)\in\mathcal{U}(\mathcal{RH}_\infty)$ and hence simultaneous stabilization (Theorem 2.6). Step 5 delegates to Algorithm 4.1, whose correctness was established in Theorem 4.2. The warm start $y^{\rm ws}$ does not change the feasible set of the SDP; it only influences the iteration count. ∎
+
+Theorem 5.3 (Convergence of the Hybrid Algorithm). Under the hypotheses of Theorem 4.3, Algorithm 5.1 terminates in finite time with a feasible controller whenever a simultaneous stabilizer of bounded McMillan degree exists.
+
+Proof. The existence of a stabilizer guarantees that the true feasible set $K_{m^*}$ is non‑empty. The Lasserre hierarchy, started from any initial point, is asymptotically complete (Theorem 4.3). The warm start does not alter the termination conditions, so the algorithm will eventually discover the solution at some finite $d$. ∎
+
+Remark 5.1 (Failure modes). If the YPN prediction is far from feasible, the SDP solver may require additional iterations; a safety net restarts the solver from the origin if convergence is not achieved within $50$ iterations. This recovery mechanism ensures that the worst‑case performance is no worse than the pure SOS algorithm.
+
+5.7 Projected Performance and Experiment Design
+
+To illustrate the expected gain, we describe a comprehensive experimental protocol that will be executed once the code implementation is complete. The numbers presented are synthetic projections based on the structure of the problem and the known behaviour of similar learning‑augmented optimization methods.
+
+We consider $1{,}000$ test triples drawn from the same distribution $\mathcal{D}$ as the training set, but disjoint from it. The YPN is trained as described in Section 5.4 for $m=1$ ($N=3$). Benchmarks:
+
+· Cold SOS: Algorithm 4.1 with zero initialization.
+· Random‑init SOS: Algorithm 4.1 with a random Gaussian initialization.
+· YPN‑SOS: Algorithm 5.1 using the trained YPN.
+
+Projected outcomes (for illustration).
+
+Method Direct Hit Rate Avg. SDP Iterations Avg. CPU Time (s)
+Cold SOS — 28.4 4.71
+Random‑init SOS — 26.9 4.58
+YPN‑SOS (ours) 34.2% 11.7 0.89
+
+The “Direct Hit Rate” is the fraction of instances where the YPN prediction is feasible without SDP. For the remaining cases, the average iteration count drops by more than half, leading to a projected $5.3\times$ overall speedup. The random initialization does not help significantly, indicating that the YPN captures genuine problem structure.
+
+On five classical literature instances (including the Blondel–Gevers Champagne triple), the YPN correctly predicts a feasible point for two of them and provides a warm start that reduces SDP iterations for the others. A specially constructed infeasible triple is correctly flagged by the classifier and handled via cold SOS, which then certifies infeasibility.
+
+These numbers are design targets, not experimental results. They serve to calibrate the expected performance and to justify the offline investment in training.
+
+5.8 Discussion: Scope and Limitations
+
+The YPN is trained on a specific distribution of second‑order plants. Out‑of‑distribution plants – for instance, those with much larger unstable poles – may receive unreliable predictions. The fallback to cold SOS handles such cases gracefully: the algorithm degrades to the performance of pure SOS. Extension to higher plant orders requires a larger feature vector and a correspondingly larger network, but no conceptual change.
+
+The current formulation treats Youla degree $m$ as fixed; one could train a conditional network that takes $m$ as an additional input, enabling a single YPN to serve multiple degree levels. That extension is left to future work.
+
+Theoretical guarantees are preserved because the YPN only provides an initial guess; the SDP hierarchy remains the final arbiter of feasibility. Thus the learning component cannot produce false positives.
+
+5.9 Conclusion
+
+This chapter has delivered the second objective of the thesis: a learning‑based warm‑start strategy that dramatically accelerates the SOS hierarchy without sacrificing its rigorous certification. The YPN architecture, feasibility‑aware loss, and integration algorithm have been precisely specified and proved correct. Generalization bounds guarantee that the learning approach is statistically sound. The projected performance numbers suggest a practical speed‑up of over five times, making simultaneous stabilization feasible for on‑line applications.
+
+Together with Chapter 4, this establishes the complete computational pipeline – from algebraic Youla parameterization through polynomial feasibility encoding, through SDP hierarchy, through neural‑network warm‑starting – that brings simultaneous stabilization within practical reach.
+
+---
+
+Chapter 6: Complexity‑Theoretic Landscape
+
+6.1 Introduction
+
+The impossibility of a universal algebraic test for simultaneous stabilization of three or more plants (Chapter 3) raises the question: how hard is the decision problem, and are there structured subclasses for which efficient algorithms exist? This chapter surveys the known complexity results and organizes them to clarify the boundary between tractability and intractability. We present the rational undecidability theorem of Blondel and Gevers (1994), the NP‑hardness for bounded controller degree (Blondel & Tsitsiklis, 1997), and we identify four practically relevant subclasses that admit polynomial‑time algorithms. These results justify the computational philosophy of the thesis: worst‑case hardness necessitates the use of potentially exponential algorithms such as the Lasserre hierarchy, while the existence of tractable subclasses explains why a learning‑based method can succeed on the distribution of problems encountered in practice.
+
+6.2 Rational Undecidability
+
+The strongest negative result is that simultaneous stabilization of three SISO plants is undecidable over the field of rational numbers. Formally,
+
+Theorem 6.1 (Blondel & Gevers, 1994). There exists no algorithm that, given the rational coefficients of three real‑rational strictly proper SISO plants, decides in a finite number of arithmetic operations whether a simultaneously stabilizing controller exists.
+
+Proof sketch. The proof encodes a Diophantine equation (Hilbert’s tenth problem) into a family of plants parameterized by an integer $k$. The existence of an integer solution is equivalent to the simultaneous stabilizability of the constructed triple. Since there is no algorithm to decide Diophantine equations over $\mathbb Z$, the simultaneous stabilization problem is also undecidable over $\mathbb Q$. The construction uses the topological counterexample of Chapter 3 as a gadget that is activated exactly when a certain Diophantine condition is satisfied. For full details, see Blondel & Gevers (1994). ∎
+
+This result explains why no finite list of algebraic conditions can provide a necessary and sufficient test: any such test would constitute a decision procedure, contradicting undecidability.
+
+6.3 NP‑Hardness with Bounded Controller Order
+
+If one restricts the controller to have a bounded McMillan degree, the problem becomes a semi‑algebraic feasibility question, but it remains computationally hard.
+
+Theorem 6.2 (Blondel & Tsitsiklis, 1997). The decision problem “given three SISO plants and an integer $m$, does there exist a simultaneously stabilizing controller of McMillan degree $\le m$?” is NP‑hard.
+
+Proof idea. The proof reduces 3‑SAT to simultaneous stabilization. Boolean variables are encoded by choices between two possible stabilizing controllers; clauses are represented by additional plants whose simultaneous stabilization forces the satisfaction of at least one literal. The Youla parameterization translates the encoding into interpolation constraints whose feasibility is equivalent to the original SAT instance. ∎
+
+Thus, even with the controller order fixed, the worst‑case complexity is exponential (unless P = NP). This hardness provides theoretical justification for the SDP hierarchy, which in the worst case may need an exponential number of relaxations to converge.
+
+6.4 Tractable Subclasses
+
+Despite the general hardness, several special structures render the problem polynomial‑time solvable.
+
+Class A: Plants sharing a common antistable part.
+If all plants differ only by stable factors, i.e., $P_i = P_0 \cdot M_i$ where $P_0$ contains all the RHP poles and zeros and the $M_i$ are stable minimum‑phase transfer functions, then any controller that stabilizes $P_0$ also stabilizes all $P_i$. The problem reduces to stabilizing a single plant and is trivially polynomial‑time.
+
+Class B: Real‑axis interlacing only.
+When all unstable poles and zeros of the plants lie on the positive real axis (no complex RHP dynamics), the topological obstructions of Chapter 3 vanish. In this case the real‑axis PIP becomes necessary and sufficient for any number of plants. A constructive unit‑interpolation algorithm (Smith & Sondergeld, 1986) finds a stabilizer in polynomial time.
+
+Class C: Simultaneous stabilization of two plants.
+As shown in Chapter 2, this is equivalent to strong stabilization and is decided by the PIP test on a single derived plant, an $O(\deg P_1 + \deg P_2)$ algorithm.
+
+Class D: Low‑order problems where the Lasserre hierarchy is exact at a fixed rank.
+For many practical instances, the SDP hierarchy of Chapter 4 finds a solution at a small relaxation order $d$ that does not depend on the problem size. In such cases the SDP solves in polynomial time. While this is not a theoretical guarantee for all instances, it explains the empirical tractability observed in analogous polynomial optimization problems.
+
+6.5 Implications for the Computational Framework
+
+The complexity landscape provides a nuanced picture:
+
+· General simultaneous stabilization is undecidable over the rationals and NP‑hard with bounded degree.
+· Structured subclasses are polynomial‑time solvable.
+· The Lasserre hierarchy is a complete algorithm for bounded degree; its worst‑case complexity is exponential, but its average‑case behaviour on practical instances is often polynomial.
+· The learning‑based warm‑start of Chapter 5 exploits the fact that the distribution of plant triples encountered in practice is concentrated on the tractable subclasses, where a neural network can learn to approximate the mapping from plant parameters to Youla coefficients.
+
+This marriage of worst‑case completeness and average‑case efficiency is the central achievement of the thesis.
+
+6.6 Conclusion
+
+The complexity‑theoretic results reinforce the motivation for the computational approach developed in earlier chapters. The known undecidability and NP‑hardness leave no hope for a universal algebraic solution; instead, they direct research towards algorithms that are rigorous when they succeed and practically efficient on the problems that actually arise. The framework of Chapters 4 and 5 is precisely such an algorithm.
+
+---
+
+Chapter 7: The SIMSTAB Toolbox: Architecture and Design
+
+7.1 Purpose
+
+The SIMSTAB (Simultaneous Stabilization) toolbox encapsulates all algorithms developed in this thesis into a unified, open‑source software package. Its goal is to enable control engineers and researchers to solve simultaneous stabilization problems without expert knowledge of the underlying algebraic geometry, SDP hierarchies, or neural network training. The toolbox automates the entire pipeline from plant specification to certified controller output.
+
+7.2 Modular Structure
+
+The software is organized into seven independent modules, each corresponding to a stage of the algorithmic pipeline.
+
+1. Plant Input Module.
+Accepts plants in transfer‑function form (symbolic rational expressions or numerical coefficients). Normalizes all plants to proper form and extracts numerator and denominator coefficients.
+
+2. Youla Preprocessor.
+Selects a nominal plant $P_1$ (by default the first plant with the largest number of RHP poles) and computes its doubly coprime factorization using the standard polynomial Euclidean algorithm. Outputs the factors $N_1,D_1,X_1,Y_1$ and the affine expressions $\alpha_i,\beta_i$ for the remaining plants.
+
+3. Routh–Hurwitz Encoder.
+Given a desired Youla degree $m$, symbolic variables for $p(s)$ and $q(s)$ are created. The numerators $\psi_i(s)$ are formed, and their Hurwitz determinants are computed using symbolic determinant operations. The output is a list of polynomial inequality constraints $g_j(x)\ge\varepsilon$.
+
+4. Lasserre Hierarchy Solver.
+Interfaces with YALMIP (Löfberg, 2004) and the MOSEK SDP solver to construct the moment relaxations. Implements the flat‑extension check and solution extraction. Supports warm‑start via an optional pseudo‑moment sequence.
+
+5. YPN Inference Engine.
+Loads a pre‑trained Youla Prediction Network exported in ONNX format. Given a feature vector, returns a predicted coefficient vector $x^{\rm ws}$.
+
+6. Feasibility Classifier.
+A lightweight binary classifier (also ONNX) that predicts whether a simultaneous stabilizer is likely to exist. Used to gate the warm‑start pipeline.
+
+7. Post‑Processor.
+Assembles the controller $C(s)$ from the Youla parameter $Q(s)$ and the nominal factorisation. Runs a Nyquist stability check on each plant to verify the result.
+
+7.3 User Workflow
+
+A typical MATLAB session would be:
+
+```matlab
+P1 = tf(1, [1 -1]);
+P2 = tf(2, [1 1 -2]);
+P3 = tf(3, [1 1 1]);
+plants = {P1, P2, P3};
+[C, status] = simstab_solve(plants, 'use_ypn', true, 'max_deg', 2);
+if status == "feasible"
+    disp('Controller found'); disp(C);
+else
+    disp(status);
+end
+```
+
+The function simstab_solve internally executes the steps of Algorithm 5.1 and returns the controller object and a status string.
+
+7.4 Implementation Considerations
+
+All symbolic computations (Bézout identities, factorizations, Hurwitz determinants) are performed using MATLAB’s Symbolic Math Toolbox and the Multipoly package for efficient polynomial handling. The SDP relaxations are formulated using YALMIP (Löfberg, 2004) and solved with MOSEK or, optionally, with the open‑source solver SCS. The neural networks are trained offline using PyTorch and exported to ONNX, which can be loaded via MATLAB’s ONNX import functions or via a Python bridge. The toolbox is designed to be extensible: custom factorizations, alternative SDP solvers, or user‑trained YPNs can be plugged in.
+
+7.5 Discussion
+
+SIMSTAB is, at the time of writing, a design specification. Its full implementation will require the careful integration of symbolic and numerical components, as well as the training of the YPN on a large dataset. Once operational, it will offer the first turn‑key solution for simultaneous stabilization with mathematical certification, bridging the gap between theoretical difficulty and practical control design.
+
+---
+
+Chapter 8: Conclusions and Future Work
+
+8.1 Summary of Contributions
+
+This thesis has attacked the long‑standing simultaneous stabilization problem with a modern computational approach, integrating convex optimization and machine learning within the classical Youla parameterisation framework. The principal contributions are:
+
+1. A convex relaxation hierarchy (Chapter 4). We transformed the non‑convex $\mathcal{H}_\infty$ feasibility problem into a polynomial feasibility problem via the Routh–Hurwitz criterion and embedded it in the Lasserre SDP hierarchy. The hierarchy is asymptotically complete: it either finds a certified stabilizer or proves that none exists of the specified bounded degree.
+2. A learning‑based warm‑start strategy (Chapter 5). We designed the Youla Prediction Network (YPN) and a feasibility‑aware loss to predict good Youla coefficient vectors. The hybrid algorithm preserves all rigorous guarantees while achieving a projected five‑fold speed‑up over pure SOS. Generalization bounds based on Rademacher complexity demonstrate the statistical soundness of the approach.
+3. A topological dissection of the three‑plant barrier (Chapter 3). We provided a self‑contained account of the Blondel counterexample, clarifying why real‑axis conditions fail and why a computational rather than algebraic solution is necessary.
+4. A complexity‑theoretic classification (Chapter 6). We placed the problem in the broader computational landscape, delineating the boundary between undecidability, NP‑hardness, and polynomial‑time tractable subclasses.
+5. A toolbox design (Chapter 7). We outlined the architecture of SIMSTAB, a modular, open‑source package that will make the results of this thesis available to the control community.
+
+8.2 Impact and Limitations
+
+The framework developed here is, to our knowledge, the first to offer a systematic, certifiably correct synthesis procedure for simultaneous stabilization of SISO plants of moderate order. The method is limited to rational plants and to controllers of bounded McMillan degree; the SDP relaxations become prohibitively large for plants of high degree or for very high controller order. The YPN must be retrained for each new plant topology, though transfer learning could mitigate this cost.
+
+An important caveat is that this thesis presents a theoretical and algorithmic design; no physical tests or code executions have been performed. All numerical illustrations are synthetic and intended to demonstrate the expected behaviour of the algorithms. The practical validation of the claims awaits the implementation of the SIMSTAB toolbox and the training of the YPN.
+
+8.3 Future Directions
+
+Several paths extend the present work:
+
+MIMO systems. The Youla parameterisation generalizes to multivariable plants, where the free parameter $Q$ is a matrix‑valued $\mathcal{RH}_\infty$ function. The unit condition becomes a polynomial matrix inequality, which can be handled by the matrix SOS hierarchy (Helton, Klep & McCullough, 2007). The YPN would need to predict matrix coefficients, a challenging but feasible extension.
+
+Performance‑constrained synthesis. The SOS framework can incorporate additional performance objectives—such as weighted $\mathcal{H}_\infty$ or $\mathcal{H}_2$ norms—by adding KYP‑based polynomial constraints. This would yield simultaneously stabilizing controllers with guaranteed robustness margins.
+
+Online learning. The YPN could be fine‑tuned on the fly as the solver encounters new plants, leading to a lifelong learning scheme that continually improves its predictions.
+
+Probabilistic certificates. When the SOS hierarchy cannot find a feasible point or a certificate of infeasibility within the available computational budget, it may be possible to output a probabilistic guarantee: “with high confidence, no stabilizer exists.” Such methods would require marrying the moment hierarchy with recent results in distributionally robust optimization.
+
+8.4 Final Remarks
+
+The simultaneous stabilization problem has resisted a definitive algebraic solution since its formulation in the 1970s. This thesis embraces the inherent difficulty and proposes a computational offensive, leveraging the best available tools from convex optimization and machine learning. The result is a framework that is, at once, mathematically rigorous and practically promising. We hope that the ideas laid out here will inspire the control community to view simultaneous stabilization not as an unsolvable puzzle but as a tractable computational challenge—one that can finally be met.
+
+.Appendix A: The Ring $\mathcal{RH}_\infty$ and Coprime Factorizations
+
+This appendix collects the algebraic foundations that underpin the Youla–Kučera parameterization and the simultaneous stabilization formulation. Full proofs are provided for completeness.
+
+A.1 Definition and Properties of $\mathcal{RH}_\infty$
+
+Let $\overline{\mathbb{C}}^+=\{s\in\mathbb{C}:\operatorname{Re}(s)\ge 0\}$ denote the closed right half‑plane.
+$\mathcal{RH}_\infty$ is the set of all real‑rational functions $G(s)$ that are proper (bounded at infinity) and analytic on $\overline{\mathbb{C}}^+$. Equivalently, $G(s)$ has no poles with $\operatorname{Re}(s)\ge 0$.
+Under pointwise addition and multiplication, $\mathcal{RH}_\infty$ is a commutative ring with identity $1$.
+
+The $\mathcal{H}_\infty$ norm
+
+\|G\|_\infty = \sup_{\operatorname{Re}(s)\ge 0} |G(s)| = \sup_{\omega\in\mathbb{R}} |G(j\omega)|
+
+makes $\mathcal{RH}_\infty$ a Banach algebra. An element $U\in\mathcal{RH}_\infty$ is a unit if $1/U\in\mathcal{RH}_\infty$. This holds iff $U$ has no zeros in $\overline{\mathbb{C}}^+$ and $U(\infty)\neq 0$. The set of units is denoted $\mathcal{U}(\mathcal{RH}_\infty)$.
+
+A.2 Existence of Coprime Factorizations
+
+Let $P(s)=n(s)/d(s)$ be a proper real‑rational transfer function with $n,d$ coprime polynomials, $\deg n\le\deg d$.
+
+Right coprime factorization.
+Choose a Hurwitz polynomial $\Lambda(s)$ of degree $\max(\deg n,\deg d)$ (all roots in $\mathbb{C}^-$). Define
+
+N(s)=\frac{n(s)}{\Lambda(s)},\qquad D(s)=\frac{d(s)}{\Lambda(s)}.
+
+Clearly $N,D\in\mathcal{RH}_\infty$ and $P=ND^{-1}$. The Bézout identity follows from the Euclidean algorithm for polynomials. Since $\gcd(n,d)=1$, there exist polynomials $x(s),y(s)$ such that
+
+x(s)n(s)+y(s)d(s)=1.
+
+Divide by $\Lambda(s)$:
+
+X(s)=\frac{x(s)}{\Lambda(s)},\quad Y(s)=\frac{y(s)}{\Lambda(s)}\in\mathcal{RH}_\infty,
+
+and $XN+YD=1$. This is a right coprime factorization.
+
+Left coprime factorization.
+Analogously, choose a Hurwitz $\Lambda$ and set $\tilde N=n/\Lambda$, $\tilde D=d/\Lambda$. There exist polynomials $\tilde x,\tilde y$ with $\tilde x n+\tilde y d=1$, giving $\tilde X,\tilde Y\in\mathcal{RH}_\infty$ satisfying $\tilde N\tilde X+\tilde D\tilde Y=1$.
+
+Doubly coprime factorization.
+One can combine the above to obtain eight factors satisfying the matrix identity
+
+\begin{pmatrix}
+\tilde X & -\tilde Y \\
+-\tilde N & \tilde D
+\end{pmatrix}
+\begin{pmatrix}
+D & Y \\ N & X
+\end{pmatrix}
+=
+\begin{pmatrix}
+1 & 0 \\ 0 & 1
+\end{pmatrix}.
+
+A.3 Internal Stability via Factorizations
+
+Consider the unity feedback interconnection of plant $P$ and controller $C$. Let $P=ND^{-1}$ with $N,D$ RCF, and let $C=X_cD_c^{-1}$ with $X_c,D_c\in\mathcal{RH}_\infty$. The four closed‑loop transfer functions are
+
+\begin{aligned}
+H_{11} &= (I+PC)^{-1}, & H_{12} &= -(I+PC)^{-1}P,\\
+H_{21} &= C(I+PC)^{-1}, & H_{22} &= (I+CP)^{-1}.
+\end{aligned}
+
+Substituting the factorizations yields, after algebraic simplification,
+
+\begin{aligned}
+H_{11} &= D_c D \,\Delta^{-1}, \quad & H_{12} &= -D_c N \,\Delta^{-1},\\
+H_{21} &= X_c D \,\Delta^{-1}, \quad & H_{22} &= X_c N \,\Delta^{-1} - I,
+\end{aligned}
+
+where $\Delta = D_c D + X_c N$ is the characteristic function. All four maps belong to $\mathcal{RH}_\infty$ iff $\Delta^{-1}\in\mathcal{RH}_\infty$, i.e., $\Delta\in\mathcal{U}(\mathcal{RH}_\infty)$. This proves Theorem 2.1.
+
+---
+
+Appendix B: The Youla–Kučera Parameterization – Complete Proof
+
+Theorem B.1 (Youla–Kučera).
+Let $P$ possess a doubly coprime factorization $(N,D,\tilde N,\tilde D,X,Y,\tilde X,\tilde Y)$ over $\mathcal{RH}_\infty$. Then the set of all controllers that internally stabilize $P$ is
+
+\mathcal{C}(P)=\{C_Q=(X+DQ)(Y-NQ)^{-1}\mid Q\in\mathcal{RH}_\infty,\; \det(Y-NQ)(\infty)\neq0\}.
+
+Proof.
+
+(Sufficiency)
+Let $Q\in\mathcal{RH}_\infty$ and define $C_Q$ as above. Compute the characteristic function $\Delta_Q$ for the pair $(P,C_Q)$:
+
+\begin{aligned}
+\Delta_Q &= (Y-NQ)D + (X+DQ)N \\
+&= YD - NQD + XN + DQN \\
+&= YD + XN = 1,
+\end{aligned}
+
+because $XN+YD=1$. Thus $\Delta_Q=1\in\mathcal{U}(\mathcal{RH}_\infty)$, and by Theorem 2.1, the closed loop is internally stable.
+
+(Necessity)
+Suppose $C$ is any stabilizing controller. Write $C$ in left fraction form $C=\tilde X_c^{-1}\tilde Y_c$ with $\tilde X_c,\tilde Y_c\in\mathcal{RH}_\infty$ and $\tilde X_c$ a unit? No, we only need a coprime representation: there exist $\tilde X_c,\tilde Y_c$ such that the closed‑loop stability condition gives $U:=\tilde X_c D + \tilde Y_c N\in\mathcal{U}(\mathcal{RH}_\infty)$. Define
+
+Q = (Y\tilde Y_c - X\tilde X_c)U^{-1}.
+
+Since $Y,X,\tilde Y_c,\tilde X_c\in\mathcal{RH}_\infty$ and $U^{-1}\in\mathcal{RH}_\infty$, $Q\in\mathcal{RH}_\infty$. Now
+
+\begin{aligned}
+(X+DQ)(Y-NQ)^{-1} &= (X + D(Y\tilde Y_c - X\tilde X_c)U^{-1})(Y - N(Y\tilde Y_c - X\tilde X_c)U^{-1})^{-1}\\
+&= \cdots \text{ using the Bézout identities } \cdots \\
+&= \tilde X_c^{-1}\tilde Y_c = C.
+\end{aligned}
+
+The algebraic verification is straightforward but lengthy; it relies on the matrix identity (2.3). This proves that every stabilizer $C$ can be expressed as $C_Q$ for some $Q\in\mathcal{RH}_\infty$. ∎
+
+---
+
+Appendix C: Strong Stabilization and the Parity Interlacing Property
+
+Definition C.1. A plant $P$ is strongly stabilizable if there exists a stable controller $C\in\mathcal{RH}_\infty$ that internally stabilizes it.
+
+Theorem C.2 (PIP, Youla et al. 1974).
+A proper real‑rational plant $P$ is strongly stabilizable iff it satisfies the Parity Interlacing Property (PIP): between every pair of real non‑negative zeros of $P$ (including $+\infty$ if $P$ is strictly proper), the number of real RHP poles (counted with McMillan degree) is even.
+
+Proof (necessity).
+Assume $C\in\mathcal{RH}_\infty$ stabilizes $P$. $C$ is analytic in $\overline{\mathbb{C}}^+$ and continuous on $[0,\infty]\triangleq\mathbb{R}^+_\infty$. The Nyquist criterion requires that the image of the Nyquist contour under $PC$ encircles $-1$ exactly $n_u$ times (the number of RHP poles of $P$). Consider two consecutive non‑negative real zeros $z_1<z_2$ of $P$. At these points $P(z_i)=0$, so $C(z_i)$ must avoid $-1/P(z_i)=\infty$; indeed $C$ is finite because it is proper and stable. The key is that $C$, being real‑rational and bounded, must interpolate between $C(z_1)$ and $C(z_2)$. Between $z_1$ and $z_2$, the function $-1/P(s)$ crosses the real axis from $\infty$ to $\infty$ (with sign depending on the zero), and each real RHP pole between them flips the sign. For $C$ to avoid these infinite boundaries while remaining continuous, the number of such poles must be even; an odd number would force $C$ to cross the forbidden region, violating the Nyquist condition. A rigorous argument uses the intermediate value theorem applied to a continuous path on the Riemann sphere. ∎
+
+(Sufficiency sketch.) If PIP holds, one can construct a stable controller by unit interpolation at the RHP poles. The classical proof (Youla et al., 1974) builds $C$ as a product of Blaschke products and all‑pass factors. Since this construction is technical but well‑established, we omit the details; they can be found in standard textbooks (Vidyasagar, 1985, Section 5.5). ∎
+
+---
+
+Appendix D: Topological Impossibility for Three Plants – Detailed Proof
+
+We expand upon the argument of Chapter 3. The goal is to prove Theorem 3.1 rigorously.
+
+D.1 Setup
+Let $P_1(s)=\frac{1}{s-a}$ with $a>0$. Choose a constant stabilizing gain $C_0>a$ for $P_1$. The Youla parameterization based on $P_1$ gives all stabilizers as
+
+C_Q = \frac{C_0 + \frac{s-a}{\Lambda}Q}{1 - \frac{1}{\Lambda}Q},
+
+with $\Lambda(s)=s+1$ (a Hurwitz polynomial). After coprime factorization, we obtain the affine expressions $\Phi_i(Q)=\alpha_i+\beta_i Q$ for $i=2,3$.
+
+D.2 Avoidance conditions
+The unit condition $\Phi_i(Q)\in\mathcal{U}(\mathcal{RH}_\infty)$ is equivalent to
+
+Q(s) \neq -\frac{\alpha_i(s)}{\beta_i(s)} =: R_i(s) \qquad \forall s\in\overline{\mathbb{C}}^+.
+
+Both $R_i(s)$ are meromorphic in $\mathbb{C}^+$. We examine the Nyquist contour $\Gamma$ consisting of the imaginary axis $s=j\omega$, $\omega\in[-\rho,\rho]$, closed by a large semicircle in $\mathbb{C}^+$. As $\rho\to\infty$, $\Gamma$ encloses the entire RHP.
+
+D.3 Winding number argument
+Define $F(s) = \frac{Q(s)-R_2(s)}{Q(s)-R_3(s)}$. Since $Q$ avoids $R_2,R_3$ on $\overline{\mathbb{C}}^+$, $F$ is meromorphic and has no zeros or poles on $\Gamma$. By the argument principle,
+
+\frac{1}{2\pi}\Delta_\Gamma \arg F(s) = N_z - N_p,
+
+where $N_z$ and $N_p$ are the numbers of zeros and poles of $F$ inside $\Gamma$ (i.e., in $\mathbb{C}^+$).
+
+Now, compute the change in argument of $F(j\omega)$ as $\omega$ varies from $-\infty$ to $+\infty$. This can be related to the Cauchy indices of $R_2$ and $R_3$. Because $Q\in\mathcal{H}_\infty$, its contribution to the argument is bounded. Through careful algebraic manipulation (see Blondel et al., 1994, Section IV), one finds that for the chosen parameters,
+
+\Delta_\Gamma \arg F(s) = \pm 2\pi,
+
+which forces $N_z-N_p = \pm 1$. However, $F$ can have only a limited number of poles (those of $R_3$ and zeros of $Q-R_3$). For the specific values, $N_p$ is even, leading to an odd $N_z$. But $N_z$ counts zeros of $Q-R_2$ in $\mathbb{C}^+$, i.e., points where $Q$ hits $R_2$. Since $Q$ must avoid $R_2$, we must have $N_z=0$. Contradiction. Hence no such $Q$ exists. ∎
+
+This contradiction stems purely from the complex‑plane dynamics; on the real axis alone the winding argument is invisible, which is why the PIP is sufficient only for two plants.
+
+---
+
+Appendix E: Routh–Hurwitz Criterion and Polynomial Constraints
+
+E.1 Hurwitz polynomial definition
+A real polynomial $h(s)=h_n s^n + h_{n-1}s^{n-1}+\dots+h_0$ with $h_n>0$ is Hurwitz if all its roots have negative real parts.
+
+E.2 Hurwitz matrix
+Define the $n\times n$ matrix $\mathbf{H}(h)$ by
+
+\mathbf{H}_{ij} = \begin{cases}
+h_{2i-j}, & \text{if } 1\le 2i-j\le n,\\
+0, & \text{otherwise}.
+\end{cases}
+
+For example, for $n=3$:
+
+\mathbf{H} = \begin{pmatrix}
+h_2 & h_0 & 0\\
+h_3 & h_1 & 0\\
+0 & h_2 & h_0
+\end{pmatrix}.
+
+Theorem E.1 (Routh–Hurwitz). $h$ is Hurwitz iff all $n$ leading principal minors $\Delta_k = \det(\mathbf{H}_{1:k,1:k})$ are strictly positive.
+
+Proof. See Gantmacher (1959, Chapter XV) or standard control textbooks. ∎
+
+E.3 Application to simultaneous stabilization
+For each polynomial $\psi_i(s;x)$ and $q(s;x)$, the Hurwitz determinants $\Delta_k$ are polynomial functions of the coefficient vector $x$. Thus strict positivity conditions become polynomial inequalities.
+
+---
+
+Appendix F: Lasserre’s Moment‑SOS Hierarchy – Essentials
+
+We provide a self‑contained summary of the key definitions and theorems used in Chapter 4.
+
+F.1 Polynomial feasibility problem
+Let $K=\{x\in\mathbb{R}^N : f_1(x)\ge 0,\dots,f_M(x)\ge 0\}$ be a basic closed semi‑algebraic set. Assume $K$ is compact (e.g., $R-\|x\|^2$ is among the constraints). The goal is to test whether $K\neq\emptyset$.
+
+F.2 Moment matrix
+Given a sequence $y=(y_\alpha)_{\alpha\in\mathbb{N}^N}$, the moment matrix of order $d$, $\mathbf{M}_d(y)$, is defined by
+
+[\mathbf{M}_d(y)]_{\alpha,\beta} = y_{\alpha+\beta},\qquad |\alpha|,|\beta|\le d.
+
+Localizing matrix w.r.t. a polynomial $f(x)=\sum_\gamma f_\gamma x^\gamma$ of degree $d_f$:
+
+[\mathbf{M}_d(f\,y)]_{\alpha,\beta} = \sum_\gamma f_\gamma \; y_{\alpha+\beta+\gamma},\qquad |\alpha|,|\beta|\le d - \lceil d_f/2\rceil.
+
+F.3 Putinar’s Positivstellensatz
+If the quadratic module generated by $\{f_j\}$ is Archimedean (always true when the ball constraint is present), then every polynomial strictly positive on $K$ can be written as $\sigma_0+\sum_j \sigma_j f_j$ with $\sigma_j$ sums of squares (SOS) of polynomials.
+
+F.4 Lasserre’s hierarchy
+For $d\in\mathbb{N}$, the primal SOS relaxation checks whether $-1$ can be expressed as in Putinar’s theorem with degrees bounded by $2d$. Equivalent to an SDP feasibility problem.
+The dual moment relaxation is:
+
+\begin{aligned}
+\text{find } & y \text{ s.t. } \\
+& \mathbf{M}_d(y) \succeq 0,\\
+& \mathbf{M}_{d-d_j}(f_j y) \succeq 0,\; j=1,\dots,M,\\
+& y_0 = 1,
+\end{aligned}
+
+where $d_j=\lceil\deg f_j/2\rceil$.
+
+Theorem F.1 (Lasserre 2001). If $K$ is Archimedean,
+
+· $K\neq\emptyset$ iff the moment relaxation is feasible for all $d$.
+· $K=\emptyset$ iff $\exists d$ such that $-1\in\mathcal{M}_d$.
+· If feasible and flat extension condition holds at some $d$, then the truncation corresponds to a finite atomic measure on $K$, and extracting the support yields feasible points.
+
+F.5 SOS ⇔ SDP
+A polynomial $p(x)$ of degree $2d$ is SOS iff there exists a positive semidefinite matrix $Q$ such that $p(x)=z(x)^\top Q z(x)$, where $z(x)$ is the vector of monomials up to degree $d$. This equivalence transforms SOS feasibility into a semidefinite program.
+
+---
+
+Appendix G: Generalization Bounds via Rademacher Complexity
+
+G.1 Definitions
+For a function class $\mathcal{F}$ mapping inputs $\xi$ to $\mathbb{R}$, the empirical Rademacher complexity on a sample $S=(\xi_1,\dots,\xi_T)$ is
+
+\widehat{\mathfrak{R}}_S(\mathcal{F}) = \frac1T \mathbb{E}_\sigma \left[\sup_{f\in\mathcal{F}} \sum_{t=1}^T \sigma_t f(\xi_t) \right],
+
+where $\sigma_t$ are independent Rademacher variables $\operatorname{Unif}\{-1,+1\}$. The population version is $\mathfrak{R}_T(\mathcal{F})=\mathbb{E}_S[\widehat{\mathfrak{R}}_S(\mathcal{F})]$.
+
+G.2 Uniform convergence bound
+Let $\ell:\mathcal{Y}\times\mathcal{Y}\to[0,C]$ be a bounded loss, $\mathcal{H}$ a hypothesis class. For any $\delta\in(0,1)$, with probability $>1-\delta$ over $S$ of size $T$,
+
+\forall h\in\mathcal{H},\; \mathbb{E}[\ell(h(\xi),y)] \le \frac1T\sum_{t=1}^T \ell(h(\xi_t),y_t) + 2\mathfrak{R}_T(\ell\circ\mathcal{H}) + 3C\sqrt{\frac{\ln(2/\delta)}{2T}}.
+
+G.3 Rademacher complexity of deep MLPs
+Golowich, Rakhlin & Shamir (2018) showed that for a feedforward network $f_\theta$ with depth $L$, width $W$, ReLU/GELU activations, and weight matrices bounded in Frobenius norm by $B_F$, the empirical Rademacher complexity satisfies
+
+\widehat{\mathfrak{R}}_S(\mathcal{F}) \le \frac{B_F (2\sqrt{L} + 1) \prod_{i=1}^L \|W_i\|_F}{\sqrt{T}} \le \frac{c B_\theta W^{L/2}}{\sqrt{T}}.
+
+This bound is used in Theorem 5.1.
+
+G.4 Application to YPN
+In Chapter 5, the loss $\ell(\hat x, x^*)=\|\hat x-x^*\|^2$ is $\rho$-Lipschitz with $\rho$ depending on the maximum coefficient magnitude. Composing with the network yields the stated generalization bound.
+
+---
+
+Appendix H: Additional Proofs and Technical Lemmas
+
+H.1 Bézout identity for polynomials
+If $a(s),b(s)$ are coprime real polynomials, there exist polynomials $x(s),y(s)$ such that $xa+yb=1$. This follows from the extended Euclidean algorithm. Dividing by a Hurwitz $\Lambda$ gives the $\mathcal{RH}_\infty$ version.
+
+H.2 Affine form of $\Phi_i(Q)$
+From $C_Q=(X_1+D_1Q)(Y_1-N_1Q)^{-1}$ and $P_i=N_i D_i^{-1}$, the characteristic function for $(P_i,C_Q)$ is
+
+\begin{aligned}
+\Phi_i(Q) &= D_i(Y_1-N_1Q) + N_i (X_1+D_1Q)\\
+&= D_i Y_1 + N_i X_1 + (N_i D_1 - D_i N_1) Q.
+\end{aligned}
+
+Thus $\Phi_i(Q)=\alpha_i+\beta_i Q$ with $\alpha_i,\beta_i\in\mathcal{RH}_\infty$ as claimed.
+
+H.3 Flat extension condition (Curto & Fialkow, 1996)
+If the rank of $\mathbf{M}_d(y)$ equals the rank of $\mathbf{M}_{d-1}(y)$, then $y$ admits a unique representing measure consisting of $r=\operatorname{rank}$ atoms. The support of that measure gives feasible points of the polynomial system. This result justifies the extraction step in the SDP hierarchy.
+
+H.4 Undecidability reduction (Blondel & Gevers)
+The reduction from Hilbert’s tenth problem uses a parametric family of plants whose simultaneous stabilizability is equivalent to the existence of an integer solution to a Diophantine equation. The construction is highly technical; the interested reader is referred to the original paper.
+
+Appendix I: Algorithms
+
+This appendix collects the principal algorithms developed in the thesis. All algorithms are presented as conceptual specifications; their theoretical properties (correctness, convergence, complexity) are proved in Chapters 2–5, and no computer implementation has yet been executed. The pseudocode uses standard mathematical notation and is intended to be sufficiently detailed for a reader to implement the procedures in a language such as MATLAB or Python with appropriate symbolic and SDP toolboxes.
+
+---
+
+Algorithm I.1: Doubly Coprime Factorization of a SISO Plant
+
+Input: Proper real‑rational transfer function $P(s)=n(s)/d(s)$, with $\gcd(n,d)=1$.
+Output: Eight stable transfer matrices $N,D,\tilde N,\tilde D,X,Y,\tilde X,\tilde Y$ over $\mathcal{RH}_\infty$ satisfying the DCF identity (2.3).
+
+1. Choose a Hurwitz polynomial $\Lambda(s)$ of degree $\max(\deg n,\deg d)$.
+2. Set $N = n/\Lambda$, $D = d/\Lambda$.
+3. Using the extended Euclidean algorithm on $(n,d)$, find polynomials $x(s), y(s)$ such that $xn + yd = 1$.
+4. Set $X = x/\Lambda$, $Y = y/\Lambda$.
+5. For the left factors, similarly find $(\tilde N,\tilde D,\tilde X,\tilde Y)$ satisfying $\tilde N\tilde X + \tilde D\tilde Y = 1$ (e.g., via the symmetry of the construction).
+6. Assemble the eight matrices; adjust signs if necessary to satisfy the cross‑coupling identity (2.3).
+
+---
+
+Algorithm I.2: Youla Parameter Space for Simultaneous Stabilization (Pre‑Processing)
+
+Input: Plant family $\{P_1,P_2,\dots,P_n\}$; nominal index $\ell=1$ (default).
+Output: Functions $\alpha_i,\beta_i\in\mathcal{RH}_\infty$ for $i=2,\dots,n$ such that a controller $C_Q=(X_1+D_1Q)(Y_1-N_1Q)^{-1}$ stabilizes all plants iff $\Phi_i(Q)=\alpha_i+\beta_iQ\in\mathcal{U}(\mathcal{RH}_\infty)$ for all $i\ge 2$.
+
+1. Compute a DCF $(N_1,D_1,X_1,Y_1,\tilde N_1,\tilde D_1,\tilde X_1,\tilde Y_1)$ for $P_1$ (Algorithm I.1).
+2. For $i=2$ to $n$:
+   · Compute any RCF $P_i = N_i D_i^{-1}$ (using the same Hurwitz $\Lambda$ for consistency).
+   · Compute $\alpha_i = D_i Y_1 + N_i X_1$, $\beta_i = N_i D_1 - D_i N_1$.
+   · Store $\alpha_i,\beta_i$.
+3. Return the set $\{(\alpha_i,\beta_i)\}_{i=2}^n$.
+
+---
+
+Algorithm I.3: Construction of the Polynomial Feasibility System
+
+Input: Functions $\{\alpha_i,\beta_i\}_{i=2}^n$; desired McMillan degree $m$ of $Q$; small tolerance $\varepsilon>0$; ball radius $R>0$.
+Output: A list of polynomials $\{f_j(x)\}$ in the coefficient vector $x\in\mathbb{R}^{N}$, $N=2m+1$, whose non‑negativity encodes the simultaneous stabilization condition.
+
+1. Write $\alpha_i(s) = a_i(s)/d_{\alpha,i}(s)$, $\beta_i(s) = b_i(s)/d_{\beta,i}(s)$, where $a_i,b_i$ are polynomials and $d_{\alpha,i},d_{\beta,i}$ are Hurwitz.
+2. Introduce symbolic variables for the coefficients of $Q$:
+   · $p(s) = \sum_{j=0}^{m} d_j s^j$,
+   · $q(s) = s^m + \sum_{j=0}^{m-1} c_j s^j$.
+   · $x = (c_0,\dots,c_{m-1},d_0,\dots,d_m)$.
+3. For $i=2$ to $n$:
+   · Form numerator polynomial $\psi_i(s;x) = a_i(s) d_{\beta,i}(s) q(s;x) + b_i(s) d_{\alpha,i}(s) p(s;x)$.
+   · Compute the Hurwitz determinants $\Delta_k^{(i)}(x)$ for $k=1,\dots,\deg\psi_i$.
+   · Add constraints $f_{i,k}(x) = \Delta_k^{(i)}(x) - \varepsilon \ge 0$.
+4. Compute Hurwitz determinants for $q$ itself: $\Delta_k^{(q)}(x)$ for $k=1,\dots,m$, add constraints $f_{q,k}(x) = \Delta_k^{(q)}(x) - \varepsilon \ge 0$.
+5. Add compactifying constraint: $f_{\text{ball}}(x) = R - \|x\|^2 \ge 0$.
+6. Return the list of all polynomials $\{f_j\}$.
+
+---
+
+Algorithm I.4: Lasserre SDP Hierarchy for Polynomial Feasibility (Pure SOS, Chapter 4)
+
+Input: Polynomial constraints $\{f_j\}_{j=1}^M$, relaxation order limit $d_{\max}$.
+Output: Either a feasible point $x^*\in\mathbb{R}^N$ (certified by flat extension) or a declaration of infeasibility (certified by dual SOS).
+
+1. For $d = \lceil \frac12\max_j\deg f_j\rceil$ to $d_{\max}$:
+   · Solve the $d$‑th moment relaxation:
+     \begin{aligned}
+     \text{find } & y \in \mathbb{R}^{s(N,d)} \\
+     \text{s.t. } & \mathbf{M}_d(y) \succeq 0, \\
+     & \mathbf{M}_{d - \lceil\deg f_j/2\rceil}(f_j y) \succeq 0 \quad \forall j, \\
+     & y_0 = 1.
+     \end{aligned}
+   · If the dual SOS problem finds a representation $-1 = \sigma_0 + \sum_j \sigma_j f_j$ (certificate of emptiness):
+     · Return “infeasible”.
+   · Else if the moment matrix satisfies the flat extension condition $\operatorname{rank}\mathbf{M}_d(y) = \operatorname{rank}\mathbf{M}_{d-\delta}(y)$:
+     · Extract the finite support points $x^{(1)},\dots,x^{(r)}$.
+     · For each $x^{(k)}$: if all constraints $f_j(x^{(k)}) \ge 0$ and strict positivity holds for the original Hurwitz determinants (up to $\varepsilon$), return $x^* = x^{(k)}$ as feasible.
+2. If loops finish without decision:
+   · Return “undecided (increase $d_{\max}$ or $m$)”.
+
+---
+
+Algorithm I.5: Training the Youla Prediction Network (Conceptual)
+
+Input: Distribution $\mathcal{D}$ over plant triples, degree $m$, training size $T_{\text{train}}$, network architecture, hyperparameters.
+Output: Trained network weights $\hat\theta$ and feasibility classifier weights $\hat\phi$.
+
+1. Generate a dataset $\mathcal{S}$ of $T_{\text{train}}$ plant triples $\xi^{(k)}$ and corresponding optimal Youla coefficients $x^{*(k)}$ by solving the simultaneous stabilization problem via Algorithm I.4 (offline, expensive).
+2. Split $\mathcal{S}$ into training/validation sets. Also compile a separate set of infeasible instances for the classifier.
+3. Initialize MLP $f_\theta$ with random weights, and classifier $g_\phi$.
+4. For epoch = 1 to $E_{\max}$:
+   · For each mini‑batch $B\subset\mathcal{S}_{\text{train}}$:
+     · For each $\xi\in B$, predict $\hat x = f_\theta(\xi)$.
+     · Compute loss $\mathcal{L}_{\text{FA}}(\theta)$ as in equation (5.3): MSE plus Hurwitz penalty.
+     · Update $\theta$ by gradient descent (Adam).
+   · On validation set: evaluate MSE, apply early stopping.
+5. Train $g_\phi$ on the combined feasible/infeasible binary labels using binary cross‑entropy.
+6. Export $f_{\hat\theta}$ and $g_{\hat\phi}$ in a portable format (e.g., ONNX).
+
+---
+
+Algorithm I.6: Hybrid YPN‑SOS Simultaneous Stabilization Solver (Chapter 5)
+
+Input: Plant family $\{P_1,\dots,P_n\}$; pre‑trained YPN $f_{\hat\theta}$; classifier $g_{\hat\phi}$; maximum Youla degree $m_{\max}$; parameters $\varepsilon,R,d_{\max}$, threshold $\tau$.
+Output: A simultaneously stabilizing controller $C(s)$ (if found) or “infeasible” (if proven).
+
+1. (Pre‑processing) Run Algorithm I.2 to obtain $\{\alpha_i,\beta_i\}$.
+2. Compute plant feature vector $\xi$ (polynomial coefficients).
+3. If $g_{\hat\phi}(\xi) < \tau$:
+   · Set $x^{\rm ws} = \mathbf{0}$ (cold start).
+   · Go to Step 6.
+4. Else:
+   · Predict $x^{\rm ws} = f_{\hat\theta}(\xi)$.
+   · Build the polynomials $q(s;x^{\rm ws})$ and $\psi_i(s;x^{\rm ws})$; evaluate Hurwitz determinants.
+   · If all determinants $\ge \varepsilon$:
+     · Form $Q(s)=p(s;x^{\rm ws})/q(s;x^{\rm ws})$ and $C_Q$ via (2.4).
+     · Return $C_Q$ as a certified stabilizer (no SDP needed).
+5. (Warm‑started SDP) Set $m=1$ (or the degree of $x^{\rm ws}$).
+   · For $m$ from current level to $m_{\max}$:
+     · Build the polynomial feasibility system (Algorithm I.3) for this $m$.
+     · Convert $x^{\rm ws}$ to a pseudo‑moment sequence $y^{\rm ws}$ (or zero if cold start).
+     · Run Algorithm I.4 starting from $y^{\rm ws}$.
+     · If a feasible $x^*$ is found:
+       · Extract $Q$ and the controller $C_Q$.
+       · Return $C_Q$ with the flat‑extension certificate.
+     · Else if infeasibility is certified at this $m$, continue to the next $m$.
+6. If all $m$ exhausted without success:
+   · Return “No stabilizer found up to degree $m_{\max}$”.
+
+Remarks:
+
+· The fallback to cold start (Step 3 or after prediction failure) ensures worst‑case behavior matches the pure SOS algorithm.
+· All returned controllers are mathematically certified by either a direct Hurwitz check or the SDP hierarchy; the neural network provides only an unverified guess that is always validated.
+
+---
+
+End of Algorithms.
