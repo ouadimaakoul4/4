@@ -1,5 +1,5 @@
 
-# 4 Humanity 🌍✨
+# 4 Humanity 
 
 **An open-source hub for Artificial General Intelligence, Advanced Robotics, Space Exploration, and Multiplanetary Civilization.**
 
@@ -7,7 +7,7 @@ Open knowledge. Open future. 🚀
 
 ---
 
-## 🎯 Vision
+## Vision
 
 **"4"** stands for **For Humanity** — a massive open research vault containing architectures, code, experiments, and systems to accelerate safe AGI and humanity’s multiplanetary future.
 
@@ -22,7 +22,7 @@ Open knowledge. Open future. 🚀
 
 ---
 
-## 📁 All Projects & Folders
+##  All Projects & Folders
 
 | Project / Folder                                      | Short Description |
 |------------------------------------------------------|-------------------|
@@ -59,7 +59,7 @@ Open knowledge. Open future. 🚀
 
 ---
 
-## ✨ Highlighted Projects
+## Highlighted Projects
 
 - **AWR‑Mars Foundry Core** — Core infrastructure for self-sustaining Mars colonies
 - **ZENITH** — Next-gen physically-enforced AI safety
@@ -72,7 +72,7 @@ Open knowledge. Open future. 🚀
 
 ---
 
-## 🚀 How to Use
+##  How to Use
 
 This is a **living research hub**. You are free to:
 
@@ -85,7 +85,7 @@ All content is under the **MIT License**.
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome from anyone working on safe AGI, robotics, space settlement, or building a better future for humanity.
 
@@ -95,13 +95,13 @@ Contributions are welcome from anyone working on safe AGI, robotics, space settl
 
 ---
 
-## 📜 License
+##  License
 
-**MIT License** — see the [LICENSE](LICENSE) file for details.
+**MIT License** .
 
 ---
 
-## 🌐 Connect
+##  Connect
 
 - **X / Twitter**: [@ouadi4maakoul](https://x.com/ouadi4maakoul)
 - **GitHub**: [ouadimaakoul4](https://github.com/ouadimaakoul4)
@@ -110,7 +110,3 @@ Contributions are welcome from anyone working on safe AGI, robotics, space settl
 
 **Made with ❤️ for Humanity**
 
-
-
-If you want me to shorten the big table, add more detailed descriptions, or make any changes — just tell me! 🚀
-```
