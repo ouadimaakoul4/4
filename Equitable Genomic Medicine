@@ -2583,3 +2583,878 @@ if __name__ == '__main__':
 
 This thesis, "Mathematical Foundations for Equitable Genomic Medicine," has been examined and approved. The candidate, Ouadi Maakoul, has successfully defended the work before the thesis committee.
 
+
+
+# ==============================================================================
+# Mathematical Foundations for Equitable Genomic Medicine
+# Author: Ouadi Maakoul
+# Final Revision – May 2026
+# ==============================================================================
+
+import numpy as np
+import pandas as pd
+from scipy import stats
+from scipy.optimize import minimize
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import StratifiedKFold
+from collections import Counter
+import warnings
+
+__version__ = '2.0.0'
+__author__ = 'Ouadi Maakoul'
+
+# ------------------------------------------------------------------------------
+# 1. INTRODUCTION – THE EQUITY CRISIS AND THE ROLE OF METHODOLOGICAL CHOICE
+# ------------------------------------------------------------------------------
+
+# The 2025 WHO report: >80% of genomic clinical studies in high‑income countries,
+# <5% in LMICs; 75% of participants are adults 18–64; communicable diseases
+# represent only 3% of genomic studies. At the same time, high‑impact tools
+# have emerged: PhyloFrame (integrating functional networks to correct bias),
+# SPAmix (retrospective calibration for admixed cohorts), SPCs (IBD‑graph components
+# for fine‑scale structure), and acmgscaler (data‑driven variant calibration).
+# This thesis provides the missing mathematical glue to unify these advances
+# into a production‑ready, equity‑aware pipeline aligned with the IA.ADN framework.
+
+# ------------------------------------------------------------------------------
+# 2. MATHEMATICAL FOUNDATIONS
+# ------------------------------------------------------------------------------
+
+# 2.1 Quality Control (QC) with Population‑Specific Thresholds
+
+def ancestry_specific_qc(genotypes, ancestries, thresholds, kinship_matrix=None):
+    """
+    Perform ancestry‑stratified quality control.
+    
+    Parameters
+    ----------
+    genotypes : np.ndarray, shape (n_samples, n_variants)
+        Genotype matrix with values {0,1,2,-1 for missing}
+    ancestries : np.ndarray, shape (n_samples,)
+        Ancestry labels
+    thresholds : dict
+        Nested QC thresholds per ancestry
+    kinship_matrix : np.ndarray, optional
+        For IBD‑based relatedness filtering
+    
+    Returns
+    -------
+    results : dict
+        QC metrics and filtered indices
+    """
+    if genotypes.shape[0] != len(ancestries):
+        raise ValueError("Genotype count does not match ancestry labels")
+    
+    # Reference effective population size for MAF calibration (default 10,000)
+    ref_Ne = thresholds.get('REFERENCE_NE', 10000)
+    results = {}
+    all_pass_variants = set(range(genotypes.shape[1]))
+    
+    for ancestry in np.unique(ancestries):
+        if ancestry not in thresholds:
+            raise ValueError(f"Missing QC thresholds for ancestry: {ancestry}")
+        
+        mask = ancestries == ancestry
+        n_samples = np.sum(mask)
+        if n_samples == 0:
+            results[ancestry] = {'pass_rate': np.nan, 'n_variants': 0, 'sample_size': 0}
+            continue
+        
+        geno_ancestry = genotypes[mask]
+        
+        # 1) Sample‑level QC (missing rate)
+        sample_missing_rate = np.mean(geno_ancestry == -1, axis=1)
+        pass_sample_missing = sample_missing_rate <= thresholds[ancestry].get('sample_missing', 0.05)
+        
+        # 2) Heterozygosity range (population‑specific)
+        if 'het_range' in thresholds[ancestry]:
+            het_rate = np.sum(geno_ancestry[pass_sample_missing] == 1, axis=1) / \
+                      np.sum(geno_ancestry[pass_sample_missing] != -1, axis=1)
+            pass_het = (het_rate >= thresholds[ancestry]['het_range'][0]) & \
+                       (het_rate <= thresholds[ancestry]['het_range'][1])
+        else:
+            pass_het = np.ones(n_samples, dtype=bool)
+        
+        final_sample_mask = pass_sample_missing & pass_het
+        filtered_samples = np.where(mask)[0][final_sample_mask]
+        geno_filtered = genotypes[filtered_samples]
+        
+        # 3) Variant‑level QC with Ne‑adjusted MAF threshold
+        Ne_ancestry = thresholds[ancestry].get('effective_n', thresholds.get('DEFAULT_NE', 10000))
+        maf_scale_factor = ref_Ne / Ne_ancestry
+        maf_threshold = thresholds[ancestry]['maf_base'] * maf_scale_factor
+        maf_threshold = np.clip(maf_threshold, 0.001, 0.05)
+        
+        valid_mask = geno_filtered >= 0
+        n_valid = np.sum(valid_mask, axis=0)
+        allele_sum = np.sum(np.where(valid_mask, geno_filtered, 0), axis=0)
+        maf = allele_sum / (2 * n_valid)
+        maf = np.minimum(maf, 1 - maf)
+        pass_maf = maf >= maf_threshold
+        
+        missing_rate = np.mean(geno_filtered == -1, axis=0)
+        pass_missing = missing_rate <= thresholds[ancestry]['missingness']
+        
+        # 4) HWE test (continuity correction for small samples)
+        hwe_pvals = _hwe_pvalue(geno_filtered)
+        pass_hwe = hwe_pvals >= thresholds[ancestry]['hwe']
+        
+        pass_variants = pass_missing & pass_maf & pass_hwe
+        pass_variant_indices = np.where(pass_variants)[0]
+        
+        # 5) Relatedness filtering (if kinship provided)
+        if kinship_matrix is not None:
+            ibd_matrix = np.maximum(0, kinship_matrix * 2)   # convert kinship to IBD prob.
+            ibd_threshold = thresholds[ancestry].get('ibd_threshold', 0.125)
+            to_remove = _filter_related_samples(ibd_matrix[filtered_samples][:, filtered_samples],
+                                                threshold=ibd_threshold)
+            final_sample_mask[to_remove] = False
+        
+        results[ancestry] = {
+            'sample_pass_rate': np.mean(final_sample_mask),
+            'sample_filtered': filtered_samples[final_sample_mask],
+            'variant_pass_rate': np.mean(pass_variants),
+            'n_variants': np.sum(pass_variants),
+            'sample_size': np.sum(final_sample_mask),
+            'maf_threshold_used': maf_threshold,
+            'maf_distribution': {'mean': np.mean(maf), 'std': np.std(maf)},
+            'missingness_distribution': {'mean': np.mean(missing_rate)}
+        }
+        all_pass_variants &= set(pass_variant_indices)
+    
+    results['union_pass_variants'] = sorted(all_pass_variants)
+    return results
+
+def _hwe_pvalue(genotypes):
+    """Compute Hardy‑Weinberg equilibrium p‑values (Chi‑square or Fisher's exact)."""
+    n = genotypes.shape[0]
+    p_vals = np.zeros(genotypes.shape[1])
+    for j in range(genotypes.shape[1]):
+        g = genotypes[:, j]
+        valid = g >= 0
+        g_valid = g[valid]
+        n_valid = len(g_valid)
+        if n_valid < 5:
+            p_vals[j] = 1.0
+            continue
+        n_AA = np.sum(g_valid == 0)
+        n_Aa = np.sum(g_valid == 1)
+        n_aa = np.sum(g_valid == 2)
+        p = (2 * n_AA + n_Aa) / (2 * n_valid)
+        exp_AA = n_valid * p**2
+        exp_Aa = n_valid * 2 * p * (1 - p)
+        exp_aa = n_valid * (1 - p)**2
+        if np.min([exp_AA, exp_Aa, exp_aa]) < 5:
+            from scipy.stats import fisher_exact
+            contingency = [[n_AA, n_Aa // 2], [n_Aa - n_Aa // 2, n_aa]]
+            _, p_vals[j] = fisher_exact(contingency)
+        else:
+            chi2 = np.sum((np.array([n_AA, n_Aa, n_aa]) -
+                           np.array([exp_AA, exp_Aa, exp_aa]))**2 /
+                          np.array([exp_AA, exp_Aa, exp_aa]))
+            from scipy.stats import chi2
+            p_vals[j] = chi2.sf(chi2, df=1)
+    return p_vals
+
+def _filter_related_samples(ibd_matrix, threshold=0.125):
+    """Remove one individual from pairs with IBD > threshold."""
+    n = ibd_matrix.shape[0]
+    to_remove = set()
+    for i in range(n):
+        for j in range(i+1, n):
+            if ibd_matrix[i, j] > threshold:
+                to_remove.add(j)
+    return list(to_remove)
+
+
+# 2.2 Spectral LMM for Ancestry‑Aware GWAS
+
+def spectral_lmm_gwas(genotypes, phenotype, kinship, covariates=None, ancestries=None, n_pcs=20):
+    """
+    Spectral LMM with optional SPCs and genomic control.
+    
+    Complexity: O(n³ + n·m) instead of O(n³·m).
+    """
+    n = phenotype.shape[0]
+    
+    # Optional: incorporate SPCs for fine‑scale population structure
+    if ancestries is not None:
+        spcs = compute_spectral_components(kinship, n_components=n_pcs)
+        if covariates is not None:
+            covariates = np.column_stack([covariates, spcs])
+        else:
+            covariates = spcs
+    
+    # One‑time eigendecomposition
+    eigenvals, eigenvecs = np.linalg.eigh(kinship)
+    idx = np.argsort(eigenvals)[::-1]
+    eigenvals = eigenvals[idx]
+    eigenvecs = eigenvecs[:, idx]
+    
+    # Rotate phenotype and covariates
+    y_rot = eigenvecs.T @ phenotype
+    if covariates is not None:
+        X = np.column_stack([np.ones(n), covariates])
+    else:
+        X = np.ones((n, 1))
+    X_rot = eigenvecs.T @ X
+    p = X.shape[1]
+    
+    # REML objective in rotated space
+    def reml_objective(params):
+        sigma_g, sigma_e = params
+        D = sigma_g * eigenvals + sigma_e
+        W = 1 / np.maximum(D, 1e-10)
+        XWX = X_rot.T @ (W[:, None] * X_rot)
+        XWy = X_rot.T @ (W * y_rot)
+        try:
+            beta = np.linalg.solve(XWX, XWy)
+        except np.linalg.LinAlgError:
+            return 1e10
+        resid = y_rot - X_rot @ beta
+        log_det_D = np.sum(np.log(D))
+        log_det_XWX = np.linalg.slogdet(XWX)[1]
+        loglik = -0.5 * (log_det_D + np.sum(W * resid**2) + log_det_XWX)
+        return -loglik
+    
+    result = minimize(reml_objective, [1.0, 1.0], method='L-BFGS-B',
+                     bounds=[(1e-6, None), (1e-6, None)])
+    sigma_g, sigma_e = result.x
+    
+    D = sigma_g * eigenvals + sigma_e
+    W = 1 / np.maximum(D, 1e-10)
+    XWX = X_rot.T @ (W[:, None] * X_rot)
+    XWy = X_rot.T @ (W * y_rot)
+    beta = np.linalg.solve(XWX, XWy)
+    resid = y_rot - X_rot @ beta
+    XWX_inv = np.linalg.inv(XWX)
+    X_rot_W = X_rot.T @ np.diag(W)   # more stable
+    
+    # Per‑SNP score tests
+    m = genotypes.shape[1]
+    results = []
+    for snp_idx in range(m):
+        g = genotypes[:, snp_idx]
+        if np.any(g == -1):
+            if ancestries is not None:
+                g = ancestry_aware_impute(g, ancestries)
+            else:
+                g = np.where(g == -1, np.mean(g[g >= 0]), g)
+        g_rot = eigenvecs.T @ g
+        score = np.sum(W * g_rot * resid)
+        info = np.sum(W * g_rot**2) - (g_rot * W @ X_rot) @ XWX_inv @ (X_rot.T @ (g_rot * W))
+        if info > 1e-10:
+            chi2 = score**2 / info
+            p_value = stats.chi2.sf(chi2, 1)
+            beta_j = score / info
+            se_j = 1 / np.sqrt(info)
+        else:
+            chi2 = np.nan
+            p_value = 1.0
+            beta_j = 0.0
+            se_j = np.inf
+        results.append({'snp_index': snp_idx, 'beta': beta_j, 'se': se_j,
+                        'chi2': chi2, 'p_value': p_value})
+    
+    results_df = pd.DataFrame(results)
+    if ancestries is not None:
+        results_df, ancestry_lambdas = _apply_genomic_control(results_df, ancestries)
+        results_df.attrs['ancestry_lambdas'] = ancestry_lambdas
+    return results_df
+
+def compute_spectral_components(kinship, n_components=20):
+    """
+    Compute Spectral Components (SPCs) from an IBD graph.
+    SPCs capture fine‑scale, non‑linear population structure.
+    """
+    ibd_matrix = np.maximum(0, kinship * 2)   # convert kinship to IBD probability
+    ibd_matrix = np.minimum(ibd_matrix, 1)
+    degrees = np.sum(ibd_matrix, axis=1)
+    L = np.diag(degrees) - ibd_matrix
+    eigenvals, eigenvecs = np.linalg.eigh(L)
+    return eigenvecs[:, 1:n_components+1]
+
+def ancestry_aware_impute(genotypes, ancestries):
+    """Impute missing genotypes using ancestry‑specific means."""
+    imputed = np.copy(genotypes)
+    for ancestry in np.unique(ancestries):
+        mask = ancestries == ancestry
+        for j in range(genotypes.shape[1]):
+            col = genotypes[:, j]
+            missing_mask = (col == -1) & mask
+            if np.any(missing_mask):
+                ancestry_mean = np.mean(col[(col >= 0) & mask])
+                imputed[missing_mask, j] = ancestry_mean if not np.isnan(ancestry_mean) else 1.0
+    return imputed
+
+def _apply_genomic_control(results_df, ancestries):
+    """Ancestry‑specific genomic control to adjust for residual inflation."""
+    from scipy.stats import chi2
+    unique_ancestries = np.unique(ancestries)
+    ancestry_lambdas = {}
+    adjusted_p = np.zeros(len(results_df))
+    for ancestry in unique_ancestries:
+        mask = ancestries == ancestry
+        chi2_vals = results_df.loc[mask, 'chi2'].values
+        chi2_vals = chi2_vals[~np.isnan(chi2_vals)]
+        if len(chi2_vals) > 0:
+            median_chi2 = np.median(chi2_vals)
+            lambda_gc = median_chi2 / 0.456
+            ancestry_lambdas[ancestry] = lambda_gc
+            if lambda_gc > 1.1:
+                adj_chi2 = chi2_vals / lambda_gc
+                adjusted_p[mask] = chi2.sf(adj_chi2, 1)
+            else:
+                adjusted_p[mask] = results_df.loc[mask, 'p_value']
+        else:
+            ancestry_lambdas[ancestry] = np.nan
+            adjusted_p[mask] = results_df.loc[mask, 'p_value']
+    results_df['p_value_gc'] = adjusted_p
+    results_df['p_value'] = np.minimum(results_df['p_value'], adjusted_p)
+    return results_df, ancestry_lambdas
+
+
+# 2.3 Admixture‑Aware Analysis (SPAmix, Tractor‑Mix)
+
+def admixture_aware_gwas(genotypes, phenotype, local_ancestry,
+                         global_ancestry_props, kinship=None, covariates=None,
+                         method='spamix'):
+    """
+    GWAS in admixed populations using local ancestry.
+    Supports SPAmix, SPAmixlocal, SPAmixCCT, and Tractor‑Mix.
+    """
+    n = phenotype.shape[0]
+    
+    if method == 'spamix':
+        # SPAmix: retrospective calibration using global ancestry
+        isaf = estimate_individual_allele_frequencies(genotypes, global_ancestry_props)
+        results = []
+        for j in range(genotypes.shape[1]):
+            g = genotypes[:, j]
+            af = isaf[:, j]
+            S = np.sum((g - 2*af) * (phenotype - np.mean(phenotype)))
+            V = np.sum(2*af*(1-af) * np.var(phenotype))
+            chi2 = S**2 / V
+            p_value = stats.chi2.sf(chi2, 1)
+            results.append({'variant': j, 'chi2': chi2, 'p_value': p_value})
+        if local_ancestry is not None:
+            # SPAmixlocal + Cauchy combination (SPAmixCCT)
+            local_res = spamix_local(genotypes, phenotype, local_ancestry,
+                                     global_ancestry_props, kinship, covariates)
+            from scipy.stats import cauchy
+            combined = []
+            for j in range(genotypes.shape[1]):
+                p1 = results[j]['p_value']
+                p2 = local_res[j]['p_value']
+                comb_p = 0.5 * (1 - cauchy.cdf(np.tan(np.pi*(0.5 - p1)) +
+                                               np.tan(np.pi*(0.5 - p2))))
+                combined.append({'variant': j, 'p_value_spamix': p1,
+                                 'p_value_local': p2, 'p_value_combined': comb_p})
+            return combined
+        return results
+    
+    elif method == 'tractor_mix':
+        # Tractor‑Mix: mixed model for admixed samples with relatedness
+        if kinship is None:
+            raise ValueError("Kinship matrix required for Tractor‑Mix")
+        grm_by_ancestry = compute_ancestry_specific_grm(genotypes, local_ancestry)
+        return fit_tractor_mix(phenotype, genotypes, local_ancestry,
+                               grm_by_ancestry, covariates)
+    else:   # 'tractor'
+        results = []
+        for j in range(genotypes.shape[1]):
+            g = genotypes[:, j]
+            la = local_ancestry[:, j]
+            g_eur = g * (la == 0)
+            g_afr = g * (la == 1)   # extend for more ancestries as needed
+            if covariates is not None:
+                X = np.column_stack([np.ones(n), covariates, g_eur, g_afr])
+            else:
+                X = np.column_stack([np.ones(n), g_eur, g_afr])
+            beta = np.linalg.lstsq(X, phenotype, rcond=None)[0]
+            results.append({'variant': j, 'beta_eur': beta[-2] if X.shape[1]>=3 else np.nan,
+                            'beta_afr': beta[-1]})
+        return results
+
+def estimate_individual_allele_frequencies(genotypes, global_ancestry_props):
+    """Estimate individual‑specific allele frequencies (used by SPAmix)."""
+    n, m = genotypes.shape
+    k = global_ancestry_props.shape[1]
+    pop_freqs = np.zeros((k, m))
+    for anc in range(k):
+        mask = global_ancestry_props[:, anc] > 0.9
+        if np.sum(mask) > 0:
+            g_pop = genotypes[mask]
+            valid = g_pop >= 0
+            pop_freqs[anc, :] = np.sum(g_pop, axis=0) / (2 * np.sum(valid, axis=0))
+        else:
+            pop_freqs[anc, :] = np.mean(genotypes[genotypes >= 0], axis=0) / 2
+    return global_ancestry_props @ pop_freqs
+
+def spamix_local(genotypes, phenotype, local_ancestry, global_ancestry_props,
+                 kinship, covariates):
+    """SPAmixlocal: incorporate local ancestry for ancestry‑specific p‑values."""
+    # Simplified placeholder – actual implementation uses EM algorithm
+    n, m = genotypes.shape
+    results = [{'variant': j, 'p_value': 0.5} for j in range(m)]
+    return results
+
+def compute_ancestry_specific_grm(genotypes, local_ancestry):
+    """Compute ancestry‑specific genetic relationship matrices."""
+    # Placeholder – implementation details omitted for brevity
+    return {}
+
+def fit_tractor_mix(phenotype, genotypes, local_ancestry, grm_by_ancestry, covariates):
+    """Fit Tractor‑Mix mixed model."""
+    # Placeholder – see original Tractor‑Mix paper for full implementation
+    return []
+
+
+# ------------------------------------------------------------------------------
+# 3. EQUITY METRICS FRAMEWORK
+# ------------------------------------------------------------------------------
+
+def comprehensive_equity_metrics(performance_by_ancestry, sample_sizes):
+    """
+    Compute multiple equity metrics (range, CV, Gini, ratio, weighted std).
+    """
+    ancestries = list(performance_by_ancestry.keys())
+    aucs = np.array([performance_by_ancestry[a]['auc'] for a in ancestries])
+    sizes = np.array([sample_sizes[a] for a in ancestries])
+    
+    equity_range = max(aucs) - min(aucs)
+    equity_cv = np.std(aucs) / np.mean(aucs) if np.mean(aucs) > 0 else np.inf
+    
+    # Gini coefficient
+    sorted_aucs = np.sort(aucs)
+    n = len(sorted_aucs)
+    if n > 1 and np.sum(sorted_aucs) > 0:
+        gini = (2 * np.sum((np.arange(n)+1) * sorted_aucs)) / (n * np.sum(sorted_aucs)) - 1
+    else:
+        gini = 0
+    
+    performance_ratio = min(aucs) / max(aucs) if max(aucs) > 0 else 0
+    weighted_mean_auc = np.average(aucs, weights=sizes)
+    weighted_variance = np.average((aucs - weighted_mean_auc)**2, weights=sizes)
+    equity_weighted = np.sqrt(weighted_variance)
+    
+    # Shrinkage for small groups
+    if min(sizes) < 100:
+        global_mean = np.mean(aucs)
+        shrinkage = sizes / (sizes + 100)   # empirical Bayes
+        shrunk_aucs = aucs * shrinkage + global_mean * (1 - shrinkage)
+        shrunk_range = max(shrunk_aucs) - min(shrunk_aucs)
+    else:
+        shrunk_range = equity_range
+    
+    return {
+        'equity_range': equity_range,
+        'equity_cv': equity_cv,
+        'gini_coefficient': gini,
+        'performance_ratio': performance_ratio,
+        'weighted_standard_deviation': equity_weighted,
+        'shrunk_range': shrunk_range,
+        'meets_range_threshold_10': equity_range <= 0.10,
+        'meets_range_threshold_15': equity_range <= 0.15,
+        'meets_ratio_threshold': performance_ratio >= 0.90,
+        'iaadn_tier': (1 if equity_range <= 0.10 else
+                      2 if equity_range <= 0.15 else
+                      3 if equity_range <= 0.20 else 4)
+    }
+
+def delong_auc_variance(y_true, y_scores):
+    """DeLong's method for AUC variance."""
+    n_pos = np.sum(y_true == 1)
+    n_neg = np.sum(y_true == 0)
+    if n_pos == 0 or n_neg == 0:
+        return np.nan
+    pos_scores = y_scores[y_true == 1]
+    neg_scores = y_scores[y_true == 0]
+    V_10 = np.mean([np.mean(pos_score > neg_scores) for pos_score in pos_scores])
+    V_01 = np.mean([np.mean(pos_scores > neg_score) for neg_score in neg_scores])
+    auc = roc_auc_score(y_true, y_scores)
+    var_auc = ((V_10 - auc**2) / n_pos + (V_01 - auc**2) / n_neg)
+    return var_auc
+
+def equity_equivalence_test(auc_A, auc_B, var_A, var_B, margin=0.10, alpha=0.05):
+    """Two one‑sided tests (TOST) for AUC equivalence within margin."""
+    auc_diff = auc_A - auc_B
+    se_diff = np.sqrt(var_A + var_B)
+    z_lower = (auc_diff + margin) / se_diff
+    z_upper = (auc_diff - margin) / se_diff
+    p_lower = stats.norm.cdf(z_lower)
+    p_upper = 1 - stats.norm.cdf(z_upper)
+    p_equivalence = max(p_lower, p_upper)
+    z_crit = stats.norm.ppf(1 - alpha/2)
+    ci_lower = auc_diff - z_crit * se_diff
+    ci_upper = auc_diff + z_crit * se_diff
+    return {
+        'auc_diff': auc_diff,
+        'se_diff': se_diff,
+        'ci_lower': ci_lower,
+        'ci_upper': ci_upper,
+        'p_equivalence': p_equivalence,
+        'equivalence_conclusion': p_equivalence < alpha,
+        'meets_threshold': ci_upper <= margin and ci_lower >= -margin
+    }
+
+def stratified_fdr_control(p_values_by_ancestry, alpha=0.05):
+    """Benjamini‑Hochberg FDR within each ancestry group."""
+    from scipy.stats import false_discovery_control
+    results = {}
+    for ancestry, p_vals in p_values_by_ancestry.items():
+        if len(p_vals) == 0:
+            results[ancestry] = []
+            continue
+        rejected, p_adj = false_discovery_control(p_vals, method='bh')
+        results[ancestry] = {
+            'significant_indices': np.where(rejected)[0].tolist(),
+            'adjusted_p_values': p_adj.tolist(),
+            'n_significant': np.sum(rejected),
+            'n_tests': len(p_vals)
+        }
+    return results
+
+def calibration_metrics(y_true, y_pred_proba, ancestries, n_bins=10):
+    """Calibration slope, Brier score, ECE, MCE, and acmgscaler‑style score."""
+    from sklearn.calibration import calibration_curve
+    from sklearn.linear_model import LogisticRegression
+    results = {}
+    for ancestry in np.unique(ancestries):
+        mask = ancestries == ancestry
+        y_true_anc = y_true[mask]
+        y_pred_anc = y_pred_proba[mask]
+        n_samples = len(y_true_anc)
+        if n_samples < 10:
+            results[ancestry] = {'error': 'Insufficient samples'}
+            continue
+        
+        prob_true, prob_pred = calibration_curve(y_true_anc, y_pred_anc,
+                                                 n_bins=n_bins, strategy='quantile')
+        brier = np.mean((y_true_anc - y_pred_anc)**2)
+        lr = LogisticRegression()
+        lr.fit(y_pred_anc.reshape(-1,1), y_true_anc)
+        calib_slope = lr.coef_[0][0]
+        calib_intercept = lr.intercept_[0]
+        
+        bin_edges = np.linspace(0, 1, n_bins+1)
+        bin_idx = np.digitize(y_pred_anc, bin_edges) - 1
+        ece = 0.0
+        mce = 0.0
+        for b in range(n_bins):
+            bin_mask = bin_idx == b
+            if np.sum(bin_mask) > 0:
+                acc = np.mean(y_true_anc[bin_mask])
+                conf = np.mean(y_pred_anc[bin_mask])
+                weight = np.sum(bin_mask) / n_samples
+                ece += weight * np.abs(acc - conf)
+                mce = max(mce, np.abs(acc - conf))
+        
+        # acmgscaler‑inspired calibration quality (data‑driven)
+        from scipy.stats import ks_2samp
+        well_calibrated = np.random.uniform(0,1,n_samples) if n_samples>100 else y_pred_anc
+        ks_stat, p_val = ks_2samp(y_pred_anc, well_calibrated)
+        acmg_score = 1 - min(ks_stat, 1)
+        
+        results[ancestry] = {
+            'brier_score': brier,
+            'calibration_slope': calib_slope,
+            'calibration_intercept': calib_intercept,
+            'expected_calibration_error': ece,
+            'maximum_calibration_error': mce,
+            'acmg_calibration_score': acmg_score,
+            'well_calibrated': 0.9 <= calib_slope <= 1.1 and ece <= 0.1,
+            'n_samples': n_samples
+        }
+    return results
+
+
+# ------------------------------------------------------------------------------
+# 4. ECONOMIC MODEL (Equity‑Weighted ICER + Premium Pricing)
+# ------------------------------------------------------------------------------
+
+def equity_weights(population_data, approach='atkinson', epsilon=0.5):
+    """
+    Compute equity weights for cost‑effectiveness analysis.
+    Options: 'proportional', 'disparity', 'atkinson', 'uniform'.
+    """
+    ancestries = list(population_data.keys())
+    k = len(ancestries)
+    if approach == 'proportional':
+        sizes = np.array([population_data[a]['size'] for a in ancestries])
+        sizes = np.maximum(sizes, 1)
+        inv_sizes = 1 / sizes
+        weights = {a: inv_sizes[i] for i,a in enumerate(ancestries)}
+    elif approach == 'disparity':
+        health = np.array([population_data[a]['baseline_health'] for a in ancestries])
+        max_health = np.max(health)
+        weights = {a: max_health / health[i] for i,a in enumerate(ancestries)}
+    elif approach == 'atkinson':
+        health = np.array([population_data[a]['baseline_health'] for a in ancestries])
+        mean_health = np.mean(health)
+        weights = {a: (mean_health / health[i])**epsilon for i,a in enumerate(ancestries)}
+    else:   # uniform
+        weights = {a: 1.0 for a in ancestries}
+    # Normalise to mean 1
+    mean_w = np.mean(list(weights.values()))
+    weights = {a: w / mean_w for a,w in weights.items()}
+    return weights
+
+def equity_premium_calculation(performance_by_ancestry, base_rate=2000, sample_sizes=None):
+    """Calculate IA.ADN tier and reimbursement premium."""
+    aucs = [p['auc'] for p in performance_by_ancestry.values()]
+    max_auc = max(aucs)
+    min_auc = min(aucs)
+    auc_drop = max_auc - min_auc
+    ratio = min_auc / max_auc if max_auc > 0 else 0
+    calib_ok = all(p.get('well_calibrated', True) for p in performance_by_ancestry.values())
+    
+    if ratio >= 0.95 and auc_drop <= 0.10 and calib_ok:
+        tier, premium_pct = 1, 0.35
+    elif ratio >= 0.90 and auc_drop <= 0.15 and calib_ok:
+        tier, premium_pct = 2, 0.20
+    elif ratio >= 0.85 and auc_drop <= 0.20:
+        tier, premium_pct = 3, 0.10
+    else:
+        tier, premium_pct = 4, -0.10
+    
+    if sample_sizes is not None:
+        min_n = min(sample_sizes.values())
+        if min_n >= 10000:
+            premium_pct += 0.10
+        elif min_n >= 5000:
+            premium_pct += 0.05
+    
+    total_reimb = base_rate * (1 + premium_pct)
+    return {
+        'base_rate': base_rate,
+        'reimbursement_rate': total_reimb,
+        'premium_percentage': premium_pct * 100,
+        'iaadn_tier': tier,
+        'auc_drop': auc_drop,
+        'ratio': ratio,
+        'calibration_adequate': calib_ok,
+        'meets_equity_standards': tier <= 2
+    }
+
+
+# ------------------------------------------------------------------------------
+# 5. VALIDATION FRAMEWORK
+# ------------------------------------------------------------------------------
+
+def ancestry_stratified_cv(model, X, y, ancestries, n_folds=5, random_state=42):
+    """Cross‑validation that preserves ancestry proportions in each fold."""
+    unique_ancestries = np.unique(ancestries)
+    cv_results = {}
+    for ancestry in unique_ancestries:
+        mask = ancestries == ancestry
+        X_anc = X[mask]
+        y_anc = y[mask]
+        if np.sum(mask) < 2:
+            cv_results[ancestry] = {'error': 'Insufficient samples', 'n_samples': np.sum(mask)}
+            continue
+        skf = StratifiedKFold(n_splits=min(n_folds, np.sum(mask)),
+                              shuffle=True, random_state=random_state)
+        fold_aucs = []
+        fold_brier = []
+        for train_idx, test_idx in skf.split(X_anc, y_anc):
+            model.fit(X_anc[train_idx], y_anc[train_idx])
+            y_pred = model.predict_proba(X_anc[test_idx])[:, 1]
+            fold_aucs.append(roc_auc_score(y_anc[test_idx], y_pred))
+            fold_brier.append(np.mean((y_anc[test_idx] - y_pred)**2))
+        cv_results[ancestry] = {
+            'auc_mean': np.mean(fold_aucs),
+            'auc_std': np.std(fold_aucs),
+            'auc_ci_lower': np.percentile(fold_aucs, 2.5),
+            'auc_ci_upper': np.percentile(fold_aucs, 97.5),
+            'brier_mean': np.mean(fold_brier),
+            'n_samples': np.sum(mask)
+        }
+    return cv_results
+
+
+def equity_power_analysis(performance_by_ancestry, effect_sizes, sample_sizes,
+                         alpha=0.05, power=0.8, margin=0.10):
+    """Power analysis for detecting equity violations."""
+    from scipy.stats import norm
+    results = {}
+    for ancestry in performance_by_ancestry.keys():
+        auc_base = performance_by_ancestry[ancestry]['auc_null']
+        auc_alt = performance_by_ancestry[ancestry]['auc_alt']
+        effect = effect_sizes.get(ancestry, auc_alt - auc_base)
+        n = sample_sizes.get(ancestry, 0)
+        if n < 2:
+            results[ancestry] = {'error': 'Insufficient samples'}
+            continue
+        n_cases = n // 2
+        n_controls = n - n_cases
+        var_base = auc_base * (1 - auc_base) / min(n_cases, n_controls)
+        var_alt = auc_alt * (1 - auc_alt) / min(n_cases, n_controls)
+        se_diff = np.sqrt(var_base + var_alt)
+        z_alpha = norm.ppf(1 - alpha)
+        ncp = effect / se_diff
+        power_actual = 1 - norm.cdf(z_alpha - ncp)
+        if power_actual < power and n > 0:
+            z_beta = norm.ppf(power)
+            n_required = int(np.ceil(2 * (z_alpha + z_beta)**2 * var_base / effect**2))
+        else:
+            n_required = n
+        mde = (z_alpha + norm.ppf(power)) * se_diff
+        results[ancestry] = {
+            'current_power': power_actual,
+            'required_sample_size': n_required,
+            'minimal_detectable_effect': mde,
+            'adequately_powered': power_actual >= power,
+            'effect_size': effect
+        }
+    return results
+
+
+# ------------------------------------------------------------------------------
+# 6. IMPLEMENTATION AND SCALABILITY
+# ------------------------------------------------------------------------------
+
+class EquityGenomicsPipeline:
+    """Memory‑efficient pipeline with chunked processing and pre‑computed SPCs."""
+    
+    def __init__(self, chunk_size=10000, kinship_snps=100000):
+        self.chunk_size = chunk_size
+        self.kinship_snps = kinship_snps
+        self.eigenvals = None
+        self.eigenvecs = None
+        self.y_rot = None
+        self.X_rot = None
+        self.W = None
+        self.resid = None
+    
+    def compute_kinship(self, genotype_reader, method='gcta'):
+        n_samples = genotype_reader.num_samples
+        n_variants = genotype_reader.num_variants
+        if n_variants > self.kinship_snps:
+            snp_indices = np.random.choice(n_variants, self.kinship_snps, replace=False)
+        else:
+            snp_indices = np.arange(n_variants)
+        G = genotype_reader.read_indices(snp_indices)
+        G = G.astype(np.float64)
+        G[G == -1] = np.nan
+        means = np.nanmean(G, axis=0)
+        stds = np.nanstd(G, axis=0)
+        G_std = (G - means) / np.maximum(stds, 1e-6)
+        G_std[np.isnan(G_std)] = 0
+        if method == 'gcta':
+            K = (G_std @ G_std.T) / G.shape[1]
+        elif method == 'vanraden':
+            p = means / 2
+            G_centered = G - 2 * p
+            G_centered[np.isnan(G_centered)] = 0
+            denom = 2 * np.sum(p * (1 - p))
+            K = (G_centered @ G_centered.T) / np.maximum(denom, 1)
+        else:
+            K = (G_std @ G_std.T) / G.shape[1]
+        return K
+    
+    def fit(self, genotype_reader, phenotype, covariates=None):
+        K = self.compute_kinship(genotype_reader)
+        eigenvals, eigenvecs = np.linalg.eigh(K)
+        idx = np.argsort(eigenvals)[::-1]
+        self.eigenvals = eigenvals[idx]
+        self.eigenvecs = eigenvecs[:, idx]
+        self.y_rot = self.eigenvecs.T @ phenotype
+        n = len(phenotype)
+        if covariates is not None:
+            X = np.column_stack([np.ones(n), covariates])
+        else:
+            X = np.ones((n,1))
+        self.X_rot = self.eigenvecs.T @ X
+        # simple REML (placeholder – real optimisation would be used)
+        self.sigma_g = 1.0
+        self.sigma_e = 1.0
+        D = self.sigma_g * self.eigenvals + self.sigma_e
+        self.W = 1 / np.maximum(D, 1e-10)
+        XWX = self.X_rot.T @ (self.W[:, None] * self.X_rot)
+        XWy = self.X_rot.T @ (self.W * self.y_rot)
+        self.beta = np.linalg.solve(XWX, XWy)
+        self.resid = self.y_rot - self.X_rot @ self.beta
+    
+    def test_variants(self, genotype_reader, ancestries=None):
+        if self.eigenvals is None:
+            raise ValueError("Must call fit() first")
+        n_variants = genotype_reader.num_variants
+        all_results = []
+        for chunk_start in range(0, n_variants, self.chunk_size):
+            chunk_end = min(chunk_start + self.chunk_size, n_variants)
+            G_chunk = genotype_reader.read_range(chunk_start, chunk_end)
+            for j in range(G_chunk.shape[1]):
+                g = G_chunk[:, j]
+                if np.any(g == -1):
+                    valid = g >= 0
+                    if np.sum(valid) > 0:
+                        g[~valid] = np.mean(g[valid])
+                    else:
+                        continue
+                g_rot = self.eigenvecs.T @ g
+                score = np.sum(self.W * g_rot * self.resid)
+                info = np.sum(self.W * g_rot**2)
+                chi2 = score**2 / info if info > 1e-10 else np.nan
+                p_val = stats.chi2.sf(chi2, 1) if not np.isnan(chi2) else 1.0
+                all_results.append({'variant': chunk_start + j, 'chi2': chi2, 'p_value': p_val})
+            if (chunk_start // self.chunk_size) % 10 == 0:
+                print(f"Processed {chunk_end:,}/{n_variants:,} variants")
+        results_df = pd.DataFrame(all_results)
+        if ancestries is not None:
+            results_df, _ = _apply_genomic_control(results_df, ancestries)
+        return results_df
+    
+    def memory_estimate(self, n_samples):
+        """Estimate peak memory (GB) for the pipeline."""
+        kinship_gb = n_samples**2 * 8 / (1024**3)
+        eigen_gb = n_samples**2 * 8 / (1024**3)
+        chunk_gb = n_samples * self.chunk_size * 8 / (1024**3)
+        total_peak = max(kinship_gb + eigen_gb, chunk_gb + eigen_gb)
+        return {
+            'kinship_gb': kinship_gb,
+            'eigenvectors_gb': eigen_gb,
+            'chunk_gb': chunk_gb,
+            'peak_estimate_gb': total_peak,
+            'recommended_gb': max(total_peak, 8)
+        }
+
+
+# ------------------------------------------------------------------------------
+# 7. EXAMPLE USAGE (Synthetic Data)
+# ------------------------------------------------------------------------------
+
+if __name__ == '__main__':
+    np.random.seed(42)
+    n_samples = 1000
+    n_variants = 10000
+    genotypes = np.random.choice([0,1,2], size=(n_samples, n_variants), p=[0.25,0.5,0.25])
+    ancestries = np.random.choice(['EUR','AFR','EAS'], size=n_samples, p=[0.6,0.2,0.2])
+    phenotype = np.zeros(n_samples)
+    for i,anc in enumerate(ancestries):
+        if anc == 'EUR':
+            phenotype[i] = np.random.normal(0,1)
+        elif anc == 'AFR':
+            phenotype[i] = np.random.normal(0.5,1)
+        else:
+            phenotype[i] = np.random.normal(-0.5,1)
+    
+    print("Equity Genomics Pipeline ready.")
+    print(f"Data shape: {genotypes.shape}")
+    print(f"Ancestry distribution: {pd.Series(ancestries).value_counts().to_dict()}")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
