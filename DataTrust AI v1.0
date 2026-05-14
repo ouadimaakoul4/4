@@ -1,0 +1,1266 @@
+# DataTrust AI v1.0: A Metadata‑Native Data Quality Control Plane – Final Design Specification
+
+*This document presents the final design for an open‑source data quality control plane. No part of this design has been implemented, tested, or deployed. All components are described as design proposals. Version 1.0 defines a focused, implementable MVP and includes complete architecture, testing strategy, and operational guidance. No appendices – all content is integrated.*
+
+**Version:** 1.0 (Final)  
+**Status:** Unimplemented – Open for contribution under MIT License
+
+---
+
+## Abstract
+
+Data quality failures impose substantial economic costs, yet existing solutions either extract data from its storage location for validation – incurring prohibitive movement overhead – or repurpose batch‑oriented testing frameworks for streaming workloads, leading to unacceptable latency and architectural friction. This design proposes a metadata‑native control plane that pushes quality validation into warehouse execution engines, enforces quality through latency‑ and cost‑tiered mechanisms, and maintains human oversight over all AI‑assisted operations. **Version 1.0 defines an MVP targeting Snowflake + dbt + heuristic cost model.** All extensions (streaming validation, multi‑warehouse compilers, lineage correlator, LLM assistance) are specified but deferred.
+
+---
+
+## 1. Introduction
+
+### 1.1 Motivation
+
+Contemporary data quality management suffers from three structural problems. First, most validation tools require data to be extracted from its storage location, scanned, and then written back – a pattern that does not scale to petabyte‑scale warehouses. Second, the streaming quality landscape is fragmented: no widely adopted framework provides sub‑second schema validation, near‑time semantic checks, and asynchronous repair within a single coherent model. Third, AI‑assisted quality automation (rule generation, anomaly detection, repair) is often placed on the critical path, creating unacceptable risks of hallucination, cost explosion, and compliance violation.
+
+DataTrust AI proposes an alternative: a control plane that orchestrates validation without moving data, tiers enforcement by economic and operational constraints, and treats AI as an advisory assistant subject to human approval.
+
+### 1.2 Design Principles
+
+The architecture is guided by six principles.
+
+**Validate where data lives.** Quality checks are expressed in the native capability language of each data platform – Data Metric Functions on Snowflake, CloudDQ on BigQuery, expectations on Databricks – and executed without extracting data from its storage location.
+
+**Tiered enforcement.** Validation is decomposed into three tiers that reflect different latency and cost budgets: streaming schema checks (<200 ms, stateless), warehouse‑native semantic checks (1–5 min, stateful aggregates), and asynchronous repair (5–30 min, including LLM‑assisted imputation for high‑value datasets).
+
+**Human‑in‑the‑loop AI.** All LLM‑generated rules, repairs, or anomaly explanations are presented as suggestions. Production deployment requires explicit human approval, shadow‑mode validation, and an auditable approval trail.
+
+**Business‑aligned metrics.** Data quality is expressed not as technical scores but as estimated economic impact – the expected cost of an incident given downstream dependencies, resolution time, and business criticality.
+
+**Embedded observability.** Quality signals are published to existing BI tools, data catalogs, and SRE monitoring systems, not to a separate dashboard that competes for user attention.
+
+**Incremental adoptability.** Teams may adopt the control plane one tier at a time, starting with a single warehouse platform and no AI dependency, adding capabilities as operational maturity increases.
+
+### 1.3 MVP Scope (Phase 1)
+
+The first public release implements only:
+
+- Canonical rule compiler targeting **Snowflake Data Metric Functions (DMFs)** and **dbt tests**
+- Git‑backed rule store (YAML)
+- Heuristic quality cost model (configurable $/hour factor)
+- Manual lineage tagging (YAML) for basic downstream reach
+- Quarantine table for violated rows
+- dbt exposures to push cost metrics to BI tools (Looker, Tableau)
+
+**Explicitly out of scope for MVP:**
+- Tier 1 streaming validation (Kafka/Flink)
+- Tier 3 LLM‑assisted repair
+- Full lineage correlator with OpenLineage and ranking
+- Multi‑warehouse compilers (BigQuery, Databricks)
+- Active learning profiler with LLM suggestions
+- Probabilistic (Monte Carlo) cost model
+- Cross‑table referential integrity
+- Unstructured data
+- Automatic remediation
+
+Extensions for later phases are fully specified in this document but not required for MVP.
+
+---
+
+## 2. Architecture Overview
+
+### 2.1 Component Diagram (ASCII)
+
+```
++----------------+       +---------------------+       +------------------+
+|   Git Repo     |       |   DataTrust CLI     |       |   Snowflake      |
+|  (rules/*.yaml)|------>|  - Parser (LARK)    |------>|  - DMFs          |
++----------------+       |  - Validator        |       |  - Quarantine    |
+                         |  - Generator        |       |  - Metrics table |
+                         +---------------------+       +------------------+
+                                    |                           |
+                                    | (also outputs)            | (dbt run)
+                                    v                           v
+                         +---------------------+       +------------------+
+                         |   dbt project       |       |  Cost Model      |
+                         |  - schema.yml       |       |  (heuristic)     |
+                         |  - tests/           |       |  - reads lineage |
+                         +---------------------+       |  - writes cost   |
+                                    |                    +------------------+
+                                    | (dbt run)                  |
+                                    v                            v
+                         +---------------------+       +------------------+
+                         |   BI Tool           |<------|  metrics table   |
+                         |  (Looker/Tableau)   |       |  (via dbt)       |
+                         +---------------------+       +------------------+
+```
+
+**Data flow:**
+1. Data steward commits canonical rule YAML to Git.
+2. CI/CD pipeline runs DataTrust CLI to compile rules into Snowflake DMF SQL and dbt test YAML.
+3. dbt executes DMFs as post‑hook tests, writing violations to quarantine table.
+4. Cost model reads manual lineage tags and quarantine violations, computes expected incident cost, writes to metrics table.
+5. BI tool visualises cost metrics.
+
+### 2.2 Tiered Validation (Full Design)
+
+Although MVP implements only Tier 2 (warehouse‑native semantic), the full three‑tier architecture is specified below.
+
+**Tier 1 – Streaming Schema Validation**
+- Operates on ingestion stream (Kafka Streams, Flink).
+- Stateless per‑record checks: field presence, type, length, enum, regex.
+- Latency target: <200 ms p99.
+- Failure modes: backpressure (exponential backoff, suspend target), schema cache invalidation (async refresh, max inconsistency window 5 sec), DLQ retry hazard (max 3 retries, then poison topic).
+- Invalid records go to dead‑letter queue; valid records forwarded to warehouse.
+
+**Tier 2 – Warehouse‑Native Semantic Validation**
+- Executes business rules inside Snowflake (or later BigQuery/Databricks) using DMFs.
+- Latency budget: 1–5 minutes.
+- Supports aggregate checks (null rates, distinct counts, freshness) and row‑level constraints.
+- Violations written to quarantine table; `validated_only` view excludes unvalidated data.
+
+**Tier 3 – Asynchronous Repair**
+- Processes quarantined records with statistical imputation (MICE, KNN) or LLM‑assisted textual repair (for high‑value, low‑volume datasets).
+- Latency budget: 5–30 minutes.
+- Repair queue prioritised by expected economic return (from cost model).
+- LLM repairs require human approval, daily spending cap, and confidence scoring.
+
+**Consistency semantics:**
+
+| Tier | Delivery Semantics | Latency (design) | Visibility of Unvalidated Data |
+|------|--------------------|------------------|-------------------------------|
+| Tier 1 | At‑least‑once | <200 ms | Invalid records go to DLQ; not visible |
+| Tier 2 | Eventual consistency | 1–5 min | Unvalidated data may be visible in base tables |
+| Tier 3 | Best‑effort | 5–30 min | Quarantined data not visible until repaired |
+
+Three view types exposed: `table` (may include unvalidated data), `validated_only` (materialised after Tier 2), `quarantine` (awaiting repair).
+
+---
+
+## 3. Unified Rule Abstraction
+
+### 3.1 Canonical Rule Format
+
+Rules are stored as YAML version `datatrust.rule.v1`. Example:
+
+```yaml
+rule_id: "cmp_orders_null_check"
+version: "1.0.0"
+target:
+  platform: snowflake
+  table: "tpch.orders"
+  columns: ["ship_date"]
+quality_dimension: completeness
+predicate: "ship_date IS NOT NULL"
+severity: 3
+enabled: true
+shadow_mode: false
+owner: "data@company.com"
+description: "Orders must have a ship date"
+```
+
+**Fields:**
+- `rule_id`: globally unique identifier
+- `version`: semantic version for change tracking
+- `target`: warehouse platform, fully qualified table name, optional column list
+- `quality_dimension`: completeness, uniqueness, conformity, consistency, accuracy
+- `predicate`: Boolean expression in restricted SQL‑92 (grammar below)
+- `severity`: 1 (warning) to 5 (blocking)
+- `enabled`: boolean
+- `shadow_mode`: if true, log violations without blocking
+- `owner`: contact email
+- `description`: human‑readable explanation
+
+### 3.2 Portability Classes
+
+**Class P1 – Fully portable.** Rules using only the grammar below (comparisons, logical ops, `IS NULL`, `LIKE`, `IN` with literals, aggregates `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` without `DISTINCT`). Examples: null rate, range checks, cross‑column comparisons.
+
+**Class P2 – Partially portable.** Rules with windowed aggregates or rolling time windows. Semantically equivalent but syntax differs.
+
+**Class P3 – Not portable.** Rules depending on warehouse‑specific UDFs, stored procedures, or custom frameworks.
+
+MVP accepts only P1 rules; P2/P3 are rejected with clear error messages.
+
+### 3.3 Grammar for Canonical Predicate (P1)
+
+```
+predicate      ::= expression | expression logical_op predicate | "NOT" predicate | "(" predicate ")"
+expression     ::= column_ref comp_op literal
+                 | column_ref "IS NULL"
+                 | column_ref "IS NOT NULL"
+                 | column_ref "IN" "(" literal_list ")"
+                 | column_ref "LIKE" string_literal
+comp_op        ::= "=" | "<>" | "<" | ">" | "<=" | ">="
+logical_op     ::= "AND" | "OR"
+literal_list   ::= literal ( "," literal )*
+literal        ::= integer_literal | decimal_literal | string_literal | "TRUE" | "FALSE" | "NULL"
+aggregate      ::= "COUNT" "(" "*" ")" | "COUNT" "(" column_ref ")"
+                 | "SUM" "(" column_ref ")" | "AVG" "(" column_ref ")"
+                 | "MIN" "(" column_ref ")" | "MAX" "(" column_ref ")"
+column_ref     ::= identifier | identifier "." identifier
+integer_literal ::= [ "-" ] digit+
+decimal_literal ::= [ "-" ] digit+ "." digit*
+string_literal  ::= "'" ( [^'] )* "'"
+identifier      ::= letter ( letter | digit | "_" )*
+digit           ::= "0"..."9"
+letter          ::= "a"..."z" | "A"..."Z"
+```
+
+**Excluded:** `CASE`, `COALESCE`, window functions, subqueries, `BETWEEN`, date/time arithmetic, `DISTINCT` in aggregates.
+
+### 3.4 Rule Compiler (MVP)
+
+The compiler is implemented in Python with three modules:
+
+- **Parser:** LARK grammar (based on above) → AST.
+- **Validator:** Checks AST against allowed grammar, target table schema (via Snowflake `INFORMATION_SCHEMA`), and portability class P1.
+- **Generator:** AST → Snowflake DMF SQL (using `CREATE DATA METRIC FUNCTION ...`) and dbt test YAML (using `not_null`, `accepted_values`, `dbt_expectations` macros).
+
+**Output example (Snowflake DMF):**
+```sql
+CREATE DATA METRIC FUNCTION IF NOT EXISTS null_rate_ship_date()
+RETURNS NUMBER AS
+   SELECT SUM(CASE WHEN ship_date IS NULL THEN 1 ELSE 0 END) / COUNT(*)
+   FROM tpch.orders;
+```
+
+**Output example (dbt test):**
+```yaml
+version: 2
+models:
+  - name: orders
+    columns:
+      - name: ship_date
+        tests:
+          - not_null:
+              severity: error
+```
+
+The compiler also generates a dbt macro that invokes the DMF and compares the result against a severity‑dependent threshold (configurable per rule).
+
+---
+
+## 4. Quality Cost Model (MVP: Heuristic Only)
+
+### 4.1 Heuristic Mode
+
+Until 50 historical incidents with resolved financial impact are available, the model uses:
+
+`Quality Cost = Severity(1–5) × Downstream Reach(asset count) × Hours Open × $500`
+
+- **Severity:** 1 (cosmetic), 2 (minor, internal reporting), 3 (moderate, affects some downstream), 4 (major, revenue‑critical), 5 (critical, compliance breach).
+- **Downstream Reach:** Number of dashboards, ML models, reverse‑ETL pipelines depending on the dataset (retrieved from manual lineage tags).
+- **Hours Open:** Time from first violation to resolution (from quarantine timestamps).
+- **$500/hour:** Configurable parameter (see calibration guidance below).
+
+### 4.2 Calibration Guidance
+
+To adjust the hourly factor:
+1. Select three past incidents with known financial impact.
+2. Compute heuristic cost using default $500.
+3. Calculate actual average cost per hour.
+4. Set factor = actual average cost per hour (e.g., if actual average = $2,000/hour, set factor = 2000).
+5. Document factor in configuration (`cost_model.factor`).
+
+### 4.3 Integration
+
+The cost model runs as a dbt macro after each quality check, writing results to a table `metrics.quality_cost_daily`. A dbt exposure pushes this table to BI tools (Looker, Tableau, Metabase) via native connectors.
+
+**Limitations (explicit):**
+- Estimates only the cost of *detected* incidents. Undetected degradation is not modelled.
+- Does not account for incident clustering (multiple violations from same root cause counted separately).
+- Heuristic assumes linear relationships; probabilistic mode (Phase 4) will improve accuracy.
+
+---
+
+## 5. Lineage Correlator (MVP: Manual Tagging + Temporal Correlation)
+
+### 5.1 MVP Implementation
+
+The full lineage correlator (OpenLineage + scoring) is deferred to Phase 5. MVP provides:
+
+- **Manual lineage tags:** YAML files mapping datasets to downstream assets (dashboards, models). Example:
+  ```yaml
+  dataset: "tpch.orders"
+  downstream_assets:
+    - type: dashboard
+      name: "Revenue Dashboard"
+      owner: "finance@company.com"
+    - type: ml_model
+      name: "demand_forecast"
+  ```
+- **Temporal correlation:** When a quality violation occurs, the system lists all upstream changes (schema, pipeline runs) within ±30 minutes of the anomaly, based on manual tags. No scoring or ranking; the steward reviews the list manually.
+
+### 5.2 Full Design (Future)
+
+The full correlator will collect lineage via OpenLineage runtime, query log parsing, and manual tags. It will rank hypotheses using:
+
+`Score = w₁ × time_proximity + w₂ × data_volume_change + w₃ × schema_change_severity`
+
+Default weights: `w₁=0.5, w₂=0.3, w₃=0.2`. Temporal proximity decays exponentially (half‑life 5 min). Data volume change is log‑ratio clamped to [-3,3]. Schema change severity: 0 (no change), 1 (add column), 3 (modify type), 5 (drop column). If top three scores are within 20%, a bounded counterfactual search is invoked.
+
+---
+
+## 6. Active Learning Profiler (MVP: Statistical Baseline Only)
+
+### 6.1 MVP Implementation
+
+Only Stage 1 of the three‑stage pipeline is implemented:
+
+- For each column in a target table, compute distributional statistics (null rate, distinct count, min/max, mean, standard deviation, frequency distribution) using warehouse SQL.
+- Present these statistics to the data steward, who manually writes canonical rules.
+
+No LLM suggestion, no feedback learning.
+
+### 6.2 Full Design (Future)
+
+Stage 2 will send statistical baselines (with PII hashed) to an LLM (GPT‑4o‑mini) to generate candidate rules in canonical YAML. Stage 3 will present candidates in an approval queue; after 200 labelled examples, a classifier will pre‑approve rules with >90% predicted acceptance probability. **Limitation:** The classifier learns steward biases, not objective correctness.
+
+**LLM cost estimate (full design):** For 8,000 rule suggestions, using GPT‑4o‑mini at 500 input + 500 output tokens each: total 8M tokens. Cost = (4M input × $0.15/1M) + (4M output × $0.60/1M) = $0.60 + $2.40 = **$3.00/month**. Using GPT‑4o: $10 + $40 = $50/month. Actual usage likely lower; MVP avoids this cost.
+
+---
+
+## 7. Security, Governance and Compliance (MVP)
+
+### 7.1 Role‑Based Access Control
+
+Aligned with Snowflake native roles:
+- **Data Steward:** `OWNER` on rule tables, can approve/modify rules.
+- **Data Engineer:** `USAGE` on rule tables, view lineage, no approval.
+- **Consumer:** Read-only on `metrics.quality_cost_daily`.
+
+No separate user database.
+
+### 7.2 PII Protection (MVP)
+
+Before any sample data leaves Snowflake for profiling:
+- **High‑cardinality columns** (email, user_id, free text): hashed with SHA‑256 + rotating daily salt. Mapping stored in encrypted vault (Snowflake `EXTERNAL` stage with key management).
+- **Low‑cardinality columns** (gender, country, age buckets): **excluded from profiling** unless steward explicitly marks them as safe (`pii_safe: true` in rule YAML).
+
+No data is sent to LLM in MVP. Full design will require additional privacy review.
+
+### 7.3 Immutable Audit Trail
+
+All rule changes, approvals, shadow mode results, and repair operations are tracked via:
+- Git history (source of truth for rule definitions).
+- Snowflake `CHANGES` clause on quarantine and metrics tables.
+
+### 7.4 Compliance Tagging
+
+Rules may contain a `compliance` field:
+```yaml
+compliance:
+  - "GDPR Article 5(1)(d)"
+  - "HIPAA 164.308(a)(5)(ii)(B)"
+```
+No automated evidence collection in MVP; manual audit.
+
+---
+
+## 8. Implementation Roadmap
+
+| Phase | Focus | Deliverable | Status |
+|-------|-------|-------------|--------|
+| **1 (MVP)** | Snowflake + dbt + heuristic cost | Canonical rule compiler, quarantine table, cost model, manual lineage | **This specification** |
+| 2 | Tier 1 streaming | Kafka/Flink schema validation with failure modes | Specified |
+| 3 | Active learning (LLM) | Statistical baseline + LLM suggestion + approval queue | Specified |
+| 4 | Probabilistic cost | Monte Carlo with incident clustering | Specified |
+| 5 | Lineage correlator | OpenLineage + hybrid ranking | Specified |
+| 6 | Multi‑warehouse | BigQuery CloudDQ, Databricks expectations compilers | Specified |
+| 7 | Control plane resilience | Health checks, staleness detection, circuit breakers | Specified |
+
+All code released under MIT License. No timeline provided.
+
+---
+
+## 9. Testing Strategy (MVP)
+
+### 9.1 Synthetic Test Suite
+
+- **50 canonical rules** covering every production in the grammar (null checks, range, `IN`, `LIKE`, aggregates).
+- Each rule compiled and executed against a small Snowflake test database (100 rows, 10 columns) with known pass/fail rows.
+- **Expected outcome:** compiler generates correct SQL; DMF results match expected violation counts.
+
+### 9.2 Public Dataset: TPC-DI
+
+- Scale factor 1 (∼10M rows across tables).
+- Quality rules derived from TPC-DI data consistency requirements (e.g., referential integrity, uniqueness, completeness).
+- Compare compiled DMF outputs to manually verified violation counts.
+
+### 9.3 Performance Benchmarks
+
+- Compilation time: <1 second per rule.
+- DMF execution on 10M row table (Snowflake X‑Small warehouse): <2 minutes.
+- **Targets, not validated yet.**
+
+### 9.4 Test Harness
+
+- `pytest` + Snowflake Python connector + `dbt-core`.
+- CI pipeline (GitHub Actions) runs tests on every commit.
+
+---
+
+## 10. Repository Structure and Contribution Guide
+
+```
+datatrust-ai/
+├── README.md
+├── LICENSE (MIT)
+├── docs/
+│   ├── design_v1.0.md (this document)
+│   └── architecture.puml (PlantUML diagram)
+├── compiler/
+│   ├── parser/          (LARK grammar)
+│   ├── validator/       (schema + grammar checks)
+│   ├── generators/
+│   │   ├── snowflake_dmf.py
+│   │   └── dbt_test.py
+│   └── cli.py
+├── rules/               (canonical YAML examples)
+├── tests/
+│   ├── synthetic/
+│   ├── tpcdi/
+│   └── performance/
+├── cost_model/
+│   ├── heuristic.py
+│   └── config.yaml
+├── lineage/             (stub for Phase 5)
+└── adapters/            (future: bigquery, databricks)
+```
+
+**First contributions welcome:**
+- Implement LARK grammar (compiler/parser/).
+- Write Snowflake DMF generator.
+- Build pytest harness.
+- Write sample rules for TPC-DI.
+
+**Contribution workflow:**
+1. Fork repo.
+2. Create branch `feature/description`.
+3. Write tests for new functionality.
+4. Implement feature.
+5. Run synthetic test suite.
+6. Submit PR.
+
+---
+
+## 11. Integration with Existing Tools
+
+DataTrust AI is **not** a replacement for existing quality tools. It is a **compiler and orchestration layer** that:
+
+- Outputs **dbt tests** (compatible with Great Expectations via `dbt_expectations`).
+- Can later emit **SodaCL** and **Monte Carlo** API calls.
+- Will use **OpenLineage** for lineage (Phase 5) and can push to **Atlan** or **DataHub**.
+
+**Positioning:** *"Define quality rules once in a canonical format. Execute them natively in Snowflake, BigQuery, or Databricks. Understand the economic impact of data incidents. Keep humans in control."*
+
+---
+
+## 12. Open Research Questions (To Be Answered by Implementation)
+
+1. **Compiler completeness:** What fraction of real P1 rules (per grammar) compile correctly to Snowflake DMFs?
+2. **Performance:** Does DMF execution on 10M rows meet 2‑minute target on X‑Small warehouse?
+3. **Cost model calibration:** After 50 incidents, does heuristic with adjusted factor outperform default $500/hour?
+4. **Quarantine scalability:** At what write rate does the quarantine table become a bottleneck (with clustering on `violated_at`)?
+5. **LLM cost realism:** In Phase 3, does actual LLM token usage stay within $3–$50/month for typical rule generation?
+
+---
+
+## 13. Conclusion
+
+DataTrust AI v1.0 is a complete, implementable design for a metadata‑native data quality control plane. It narrows scope to an achievable MVP (Snowflake + dbt + heuristic cost model), provides concrete grammar, compiler architecture, testing strategy, and operational guidance. All extensions are fully specified but deferred. The design is open for community contribution under the MIT License.
+
+**DataTrust AI v1.0 – Final design specification. Unimplemented. Open for contribution.**
+
+Here are the essential UML diagrams for DataTrust AI v1.0, focusing on the core MVP architecture and the rule compilation flow. All diagrams are described in text with standard UML notation.
+
+---
+
+## Diagram 1: Component Diagram (MVP Architecture)
+
+Shows the main components and their interfaces.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              DataTrust AI v1.0 (MVP)                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌──────────────┐    ┌───────────────────┐    ┌─────────────────────────┐   │
+│  │   Git Repo   │    │   DataTrust CLI   │    │      Snowflake DB       │   │
+│  │              │    │                   │    │                         │   │
+│  │ ┌──────────┐ │    │ ┌───────────────┐ │    │ ┌─────────────────────┐ │   │
+│  │ │ rules/   │ │───▶│ │ Rule Compiler │ │───▶│ │ DMFs (quality funcs)│ │   │
+│  │ │ *.yaml   │ │    │ └───────────────┘ │    │ └─────────────────────┘ │   │
+│  └──────────────┘    │                   │    │ ┌─────────────────────┐ │   │
+│                      │ ┌───────────────┐ │    │ │ Quarantine Table    │ │   │
+│                      │ │ Cost Model    │ │───▶│ │ (violations)        │ │   │
+│                      │ │ (heuristic)   │ │    │ └─────────────────────┘ │   │
+│                      │ └───────────────┘ │    │ ┌─────────────────────┐ │   │
+│                      │                   │    │ │ Metrics Table       │ │   │
+│                      │ ┌───────────────┐ │    │ │ (cost per incident) │ │   │
+│                      │ │ Lineage Reader│ │───▶│ └─────────────────────┘ │   │
+│                      │ │ (manual tags) │ │    │                         │   │
+│                      │ └───────────────┘ │    └─────────────────────────┘   │
+│                      └───────────────────┘                    ▲             │
+│                                │                              │             │
+│                                │ (dbt run)                    │ (dbt)       │
+│                                ▼                              │             │
+│                      ┌───────────────────┐    ┌─────────────────────────┐   │
+│                      │   dbt Project     │    │       BI Tool           │   │
+│                      │                   │    │   (Looker/Tableau)      │   │
+│                      │ ┌───────────────┐ │    │                         │   │
+│                      │ │ schema.yml    │ │───▶│ ┌─────────────────────┐ │   │
+│                      │ │ dbt tests     │ │    │ │ Cost Dashboard      │ │   │
+│                      │ └───────────────┘ │    │ └─────────────────────┘ │   │
+│                      └───────────────────┘    └─────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Legend: ──▶ data flow,  ...▶  execution flow
+```
+
+---
+
+## Diagram 2: Sequence Diagram – Rule Compilation and Execution
+
+Shows the end‑to‑end flow from rule commit to cost visualisation.
+
+```
+Developer/Git          DataTrust CLI         Snowflake            dbt            BI Tool
+     │                      │                    │                  │                │
+     │  1. commit rule      │                    │                  │                │
+     │  (YAML)              │                    │                  │                │
+     ├─────────────────────▶│                    │                  │                │
+     │                      │                    │                  │                │
+     │                      │  2. compile rule   │                  │                │
+     │                      │  (LARK parser,     │                  │                │
+     │                      │   validator)       │                  │                │
+     │                      │                    │                  │                │
+     │                      │  3. generate DMF   │                  │                │
+     │                      │  SQL + dbt YAML    │                  │                │
+     │                      │                    │                  │                │
+     │                      │  4. deploy to      │                  │                │
+     │                      │  Snowflake         │                  │                │
+     │                      ├───────────────────▶│                  │                │
+     │                      │                    │                  │                │
+     │                      │  5. run dbt test   │                  │                │
+     │                      ├────────────────────┼─────────────────▶│                │
+     │                      │                    │                  │                │
+     │                      │                    │  6. execute DMF  │                │
+     │                      │                    │  (inside         │                │
+     │                      │                    │   warehouse)     │                │
+     │                      │                    ◀──────────────────│                │
+     │                      │                    │                  │                │
+     │                      │                    │  7. violations   │                │
+     │                      │                    │  → quarantine    │                │
+     │                      │                    │                  │                │
+     │                      │  8. compute cost   │                  │                │
+     │                      │  (heuristic +      │                  │                │
+     │                      │   manual lineage)  │                  │                │
+     │                      │                    │                  │                │
+     │                      │  9. write metrics  │                  │                │
+     │                      ├───────────────────▶│                  │                │
+     │                      │                    │                  │                │
+     │                      │                    │ 10. dbt exposure │                │
+     │                      │                    ├──────────────────┼───────────────▶│
+     │                      │                    │                  │                │
+     │                      │                    │                  │  11. render    │
+     │                      │                    │                  │  dashboard     │
+     │                      │                    │                  │                │
+```
+
+---
+
+## Diagram 3: Class Diagram – Rule Compiler Core
+
+Shows the main classes and relationships for the compiler.
+
+```
+┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐
+│   RuleParser    │       │   RuleValidator │       │   RuleGenerator │
+├─────────────────┤       ├─────────────────┤       ├─────────────────┤
+│ +parse(file)    │───▶   │ +validate(ast)  │───▶   │ +generate(ast)  │
+│ -grammar: Lark  │       │ -schema_checker │       │ -dmf_builder    │
+│ -lexer          │       │ -portability    │       │ -dbt_builder    │
+└─────────────────┘       └─────────────────┘       └─────────────────┘
+         │                          │                          │
+         │                          │                          │
+         ▼                          ▼                          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                         ASTNode (abstract)                      │
+├─────────────────────────────────────────────────────────────────┤
+│ +accept(visitor)                                                │
+│ ▲          ▲          ▲          ▲          ▲                   │
+│ │          │          │          │          │                   │
+├─┼──────────┼──────────┼──────────┼──────────┼───────────────────┤
+│ │          │          │          │          │                   │
+│ ▼          ▼          ▼          ▼          ▼                   │
+│Predicate  ColumnRef  Literal    Operator   Aggregate            │
+│ -left      -name      -value     -type      -function           │
+│ -right     -table     -datatype  -precedence -argument          │
+│ -op                                                 (etc.)      │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                      CanonicalRule (YAML)                       │
+├─────────────────────────────────────────────────────────────────┤
+│ -rule_id: string                                                │
+│ -version: string                                                │
+│ -target: Target                                                 │
+│ -predicate: string                                              │
+│ -severity: int                                                  │
+│ -enabled: bool                                                  │
+│ -owner: string                                                  │
+│ +to_dmf_sql(): string                                           │
+│ +to_dbt_yaml(): string                                          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Diagram 4: State Diagram – Rule Lifecycle
+
+Shows the states a rule passes through from creation to retirement.
+
+```
+                        ┌─────────────┐
+                        │   Draft     │
+                        │ (YAML file) │
+                        └──────┬──────┘
+                               │ commit to Git
+                               ▼
+                        ┌─────────────┐
+                        │  Validated  │
+                        │ (CI passes) │
+                        └──────┬──────┘
+                               │ deploy
+                               ▼
+                        ┌─────────────┐
+                 ┌─────▶│   Shadow    │
+                 │      │  (logging   │
+                 │      │   only)     │
+                 │      └──────┬──────┘
+                 │             │ promote (after N runs)
+                 │             ▼
+                 │      ┌─────────────┐
+                 │      │  Enforced   │
+                 │      │ (blocks on  │
+                 │      │  violation) │
+                 │      └──────┬──────┘
+                 │             │ disable / error
+                 │             ▼
+                 │      ┌─────────────┐
+                 └──────│  Deprecated │
+                        │ (disabled)  │
+                        └─────────────┘
+```
+
+# DataTrust AI v1.0 – Important Code (MVP Implementation)
+
+Below is the essential, runnable code for the DataTrust AI MVP compiler and cost model. This is **illustrative** – it demonstrates the core logic as specified in the design. No external dependencies beyond Python 3.9+ and PyYAML. The code is not production‑hardened but shows exactly how the compiler works.
+
+All code is placed in a single file for clarity, but in a real repository it would be split as per the repository structure.
+
+---
+
+## File: `datatrust_compiler.py`
+
+```python
+#!/usr/bin/env python3
+"""
+DataTrust AI v1.0 – Canonical Rule Compiler for Snowflake DMF + dbt tests.
+MVP implementation: parses canonical YAML rules, validates grammar,
+generates Snowflake Data Metric Function SQL and dbt test YAML.
+"""
+
+import re
+import yaml
+import sys
+from dataclasses import dataclass
+from typing import List, Dict, Any, Optional
+from enum import Enum
+
+# ----------------------------------------------------------------------
+# 1. AST Nodes for the restricted SQL-92 predicate language
+# ----------------------------------------------------------------------
+
+class Node:
+    pass
+
+@dataclass
+class ColumnRef(Node):
+    name: str
+    table_alias: Optional[str] = None
+
+    def __str__(self):
+        if self.table_alias:
+            return f"{self.table_alias}.{self.name}"
+        return self.name
+
+@dataclass
+class Literal(Node):
+    value: Any
+    type: str  # 'int', 'float', 'string', 'bool', 'null'
+
+    def __str__(self):
+        if self.type == 'string':
+            return f"'{self.value}'"
+        if self.type == 'null':
+            return 'NULL'
+        return str(self.value)
+
+@dataclass
+class Comparison(Node):
+    left: ColumnRef
+    op: str   # '=', '<>', '<', '>', '<=', '>='
+    right: Literal
+
+    def __str__(self):
+        return f"{self.left} {self.op} {self.right}"
+
+@dataclass
+class IsNull(Node):
+    column: ColumnRef
+    negated: bool = False   # True for IS NOT NULL
+
+    def __str__(self):
+        return f"{self.column} IS {'NOT ' if self.negated else ''}NULL"
+
+@dataclass
+class InList(Node):
+    column: ColumnRef
+    values: List[Literal]
+
+    def __str__(self):
+        vals = ", ".join(str(v) for v in self.values)
+        return f"{self.column} IN ({vals})"
+
+@dataclass
+class Like(Node):
+    column: ColumnRef
+    pattern: Literal   # string literal
+
+    def __str__(self):
+        return f"{self.column} LIKE {self.pattern}"
+
+@dataclass
+class Aggregate(Node):
+    func: str    # COUNT, SUM, AVG, MIN, MAX
+    arg: str     # '*' or column name
+    distinct: bool = False   # not supported in P1, but placeholder
+
+    def __str__(self):
+        if self.arg == '*':
+            return f"{self.func}(*)"
+        return f"{self.func}({self.arg})"
+
+@dataclass
+class LogicalExpr(Node):
+    left: Node
+    op: str   # 'AND', 'OR'
+    right: Node
+
+    def __str__(self):
+        return f"({self.left} {self.op} {self.right})"
+
+@dataclass
+class NotExpr(Node):
+    child: Node
+
+    def __str__(self):
+        return f"NOT ({self.child})"
+
+# ----------------------------------------------------------------------
+# 2. Parser – recursive descent over tokenized input
+#    Grammar is defined in the design (Section 3.3)
+# ----------------------------------------------------------------------
+
+class TokenType(Enum):
+    IDENT = 1
+    NUMBER = 2
+    STRING = 3
+    OPERATOR = 4
+    LPAREN = 5
+    RPAREN = 6
+    COMMA = 7
+    KEYWORD = 8
+    EOF = 9
+
+@dataclass
+class Token:
+    type: TokenType
+    value: Any
+    line: int
+    col: int
+
+class Lexer:
+    def __init__(self, source: str):
+        self.source = source
+        self.pos = 0
+        self.line = 1
+        self.col = 1
+
+    def peek(self) -> Optional[Token]:
+        save_pos = self.pos
+        save_line = self.line
+        save_col = self.col
+        tok = self.next_token()
+        self.pos = save_pos
+        self.line = save_line
+        self.col = save_col
+        return tok
+
+    def next_token(self) -> Token:
+        while self.pos < len(self.source) and self.source[self.pos].isspace():
+            if self.source[self.pos] == '\n':
+                self.line += 1
+                self.col = 1
+            else:
+                self.col += 1
+            self.pos += 1
+        if self.pos >= len(self.source):
+            return Token(TokenType.EOF, None, self.line, self.col)
+
+        ch = self.source[self.pos]
+        # Identifiers and keywords
+        if ch.isalpha() or ch == '_':
+            start = self.pos
+            while self.pos < len(self.source) and (self.source[self.pos].isalnum() or self.source[self.pos] == '_'):
+                self.pos += 1
+            word = self.source[start:self.pos]
+            # Keywords (case-insensitive)
+            upper = word.upper()
+            if upper in ('IS', 'NULL', 'NOT', 'IN', 'LIKE', 'AND', 'OR'):
+                return Token(TokenType.KEYWORD, upper, self.line, self.col)
+            return Token(TokenType.IDENT, word, self.line, self.col)
+
+        # Numbers
+        if ch.isdigit() or (ch == '-' and self.pos+1 < len(self.source) and self.source[self.pos+1].isdigit()):
+            start = self.pos
+            if ch == '-':
+                self.pos += 1
+            while self.pos < len(self.source) and self.source[self.pos].isdigit():
+                self.pos += 1
+            if self.pos < len(self.source) and self.source[self.pos] == '.':
+                self.pos += 1
+                while self.pos < len(self.source) and self.source[self.pos].isdigit():
+                    self.pos += 1
+                num = self.source[start:self.pos]
+                return Token(TokenType.NUMBER, float(num), self.line, self.col)
+            num = self.source[start:self.pos]
+            return Token(TokenType.NUMBER, int(num), self.line, self.col)
+
+        # Strings
+        if ch == "'":
+            start = self.pos
+            self.pos += 1
+            while self.pos < len(self.source) and self.source[self.pos] != "'":
+                if self.source[self.pos] == '\n':
+                    self.line += 1
+                    self.col = 1
+                self.pos += 1
+            if self.pos >= len(self.source):
+                raise SyntaxError(f"Unterminated string at line {self.line}")
+            self.pos += 1
+            value = self.source[start+1:self.pos-1]
+            return Token(TokenType.STRING, value, self.line, self.col)
+
+        # Operators and punctuation
+        if ch in ('=', '<', '>', '!', '(', ')', ','):
+            self.pos += 1
+            if ch == '!' and self.pos < len(self.source) and self.source[self.pos] == '=':
+                self.pos += 1
+                return Token(TokenType.OPERATOR, '!=', self.line, self.col)
+            if ch in ('<', '>') and self.pos < len(self.source) and self.source[self.pos] == '=':
+                self.pos += 1
+                return Token(TokenType.OPERATOR, ch+'=', self.line, self.col)
+            if ch == '(':
+                return Token(TokenType.LPAREN, '(', self.line, self.col)
+            if ch == ')':
+                return Token(TokenType.RPAREN, ')', self.line, self.col)
+            if ch == ',':
+                return Token(TokenType.COMMA, ',', self.line, self.col)
+            return Token(TokenType.OPERATOR, ch, self.line, self.col)
+
+        raise SyntaxError(f"Unexpected character '{ch}' at line {self.line} col {self.col}")
+
+class Parser:
+    def __init__(self, source: str):
+        self.lexer = Lexer(source)
+        self.current = self.lexer.next_token()
+
+    def consume(self, expected_type=None, expected_value=None):
+        tok = self.current
+        if expected_type is not None and tok.type != expected_type:
+            raise SyntaxError(f"Expected {expected_type}, got {tok.type} at line {tok.line}")
+        if expected_value is not None and tok.value != expected_value:
+            raise SyntaxError(f"Expected '{expected_value}', got '{tok.value}' at line {tok.line}")
+        self.current = self.lexer.next_token()
+        return tok
+
+    def parse(self) -> Node:
+        return self.parse_logical()
+
+    def parse_logical(self) -> Node:
+        node = self.parse_primary()
+        while self.current.type == TokenType.KEYWORD and self.current.value in ('AND', 'OR'):
+            op = self.current.value
+            self.consume()
+            right = self.parse_primary()
+            node = LogicalExpr(node, op, right)
+        return node
+
+    def parse_primary(self) -> Node:
+        if self.current.type == TokenType.KEYWORD and self.current.value == 'NOT':
+            self.consume()
+            child = self.parse_primary()
+            return NotExpr(child)
+        if self.current.type == TokenType.LPAREN:
+            self.consume()
+            node = self.parse_logical()
+            self.consume(TokenType.RPAREN)
+            return node
+        return self.parse_condition()
+
+    def parse_condition(self) -> Node:
+        # Column reference
+        col = self.parse_column_ref()
+        # IS NULL / IS NOT NULL
+        if self.current.type == TokenType.KEYWORD and self.current.value == 'IS':
+            self.consume()
+            neg = False
+            if self.current.type == TokenType.KEYWORD and self.current.value == 'NOT':
+                neg = True
+                self.consume()
+            self.consume(TokenType.KEYWORD, 'NULL')
+            return IsNull(col, neg)
+        # LIKE
+        if self.current.type == TokenType.KEYWORD and self.current.value == 'LIKE':
+            self.consume()
+            pattern = self.parse_literal()
+            if pattern.type != 'string':
+                raise SyntaxError("LIKE pattern must be a string literal")
+            return Like(col, pattern)
+        # IN
+        if self.current.type == TokenType.KEYWORD and self.current.value == 'IN':
+            self.consume()
+            self.consume(TokenType.LPAREN)
+            values = []
+            while True:
+                values.append(self.parse_literal())
+                if self.current.type == TokenType.COMMA:
+                    self.consume()
+                    continue
+                break
+            self.consume(TokenType.RPAREN)
+            return InList(col, values)
+        # Comparison operators
+        if self.current.type == TokenType.OPERATOR:
+            op = self.current.value
+            if op in ('=', '<>', '<', '>', '<=', '>='):
+                self.consume()
+                right = self.parse_literal()
+                return Comparison(col, op, right)
+        raise SyntaxError(f"Unexpected token {self.current} after column")
+
+    def parse_column_ref(self) -> ColumnRef:
+        ident = self.consume(TokenType.IDENT).value
+        if self.current.type == TokenType.OPERATOR and self.current.value == '.':
+            self.consume()
+            table = ident
+            col = self.consume(TokenType.IDENT).value
+            return ColumnRef(col, table)
+        return ColumnRef(ident)
+
+    def parse_literal(self) -> Literal:
+        tok = self.current
+        if tok.type == TokenType.NUMBER:
+            self.consume()
+            if isinstance(tok.value, int):
+                return Literal(tok.value, 'int')
+            return Literal(tok.value, 'float')
+        if tok.type == TokenType.STRING:
+            self.consume()
+            return Literal(tok.value, 'string')
+        if tok.type == TokenType.KEYWORD and tok.value == 'NULL':
+            self.consume()
+            return Literal(None, 'null')
+        if tok.type == TokenType.KEYWORD and tok.value == 'TRUE':
+            self.consume()
+            return Literal(True, 'bool')
+        if tok.type == TokenType.KEYWORD and tok.value == 'FALSE':
+            self.consume()
+            return Literal(False, 'bool')
+        raise SyntaxError(f"Expected literal, got {tok}")
+
+# ----------------------------------------------------------------------
+# 3. Validator – checks against allowed grammar and table schema
+#    (simplified for MVP – only grammar check, no Snowflake schema)
+# ----------------------------------------------------------------------
+
+class Validator:
+    def __init__(self, rule_yaml: dict):
+        self.rule = rule_yaml
+
+    def validate(self) -> List[str]:
+        errors = []
+        # Check required fields
+        for field in ['rule_id', 'version', 'target', 'predicate', 'severity']:
+            if field not in self.rule:
+                errors.append(f"Missing required field: {field}")
+        if errors:
+            return errors
+
+        # Check severity range
+        severity = self.rule['severity']
+        if not isinstance(severity, int) or severity < 1 or severity > 5:
+            errors.append("Severity must be integer between 1 and 5")
+
+        # Check platform
+        platform = self.rule['target'].get('platform')
+        if platform != 'snowflake':
+            errors.append(f"MVP only supports 'snowflake' platform, got '{platform}'")
+
+        # Parse and validate predicate grammar
+        predicate_str = self.rule['predicate']
+        try:
+            parser = Parser(predicate_str)
+            ast = parser.parse()
+            # Additional checks: no aggregates in row-level rules? Not enforced here.
+        except SyntaxError as e:
+            errors.append(f"Predicate syntax error: {str(e)}")
+
+        # In MVP, we only accept P1 rules (no aggregates, no window functions etc.)
+        # Our parser already rejects anything outside the grammar.
+        return errors
+
+# ----------------------------------------------------------------------
+# 4. Generators – Snowflake DMF and dbt test YAML
+# ----------------------------------------------------------------------
+
+class SnowflakeDMFGenerator:
+    @staticmethod
+    def generate(rule: dict, ast: Node) -> str:
+        rule_id = rule['rule_id']
+        target = rule['target']
+        table = target['table']
+        # For DMF, we produce a function that computes violation count.
+        # Simplified: generate SQL that returns number of violating rows.
+        # In real DMF, you'd create a metric function that returns a scalar.
+        # Here we output a placeholder SQL statement.
+        predicate_sql = SnowflakeDMFGenerator._ast_to_sql(ast)
+        ddl = f"""
+-- DataTrust AI generated DMF for rule {rule_id}
+CREATE OR REPLACE DATA METRIC FUNCTION {rule_id}_violation_count()
+RETURNS NUMBER AS
+$$
+    SELECT COUNT(*) FROM {table} WHERE NOT ({predicate_sql})
+$$;
+"""
+        return ddl
+
+    @staticmethod
+    def _ast_to_sql(node: Node) -> str:
+        if isinstance(node, ColumnRef):
+            return str(node)
+        if isinstance(node, Literal):
+            return str(node)
+        if isinstance(node, Comparison):
+            return f"{node.left} {node.op} {node.right}"
+        if isinstance(node, IsNull):
+            return str(node)
+        if isinstance(node, InList):
+            return str(node)
+        if isinstance(node, Like):
+            return str(node)
+        if isinstance(node, LogicalExpr):
+            return f"({node.left} {node.op} {node.right})"
+        if isinstance(node, NotExpr):
+            return f"NOT ({node.child})"
+        raise ValueError(f"Unsupported AST node: {type(node)}")
+
+class DbtTestGenerator:
+    @staticmethod
+    def generate(rule: dict, ast: Node) -> dict:
+        rule_id = rule['rule_id']
+        target = rule['target']
+        column_name = target['columns'][0] if target.get('columns') else None
+        # dbt generic test for not_null or accepted_values etc.
+        if isinstance(ast, IsNull) and ast.negated:
+            # IS NOT NULL -> dbt not_null test
+            return {
+                "version": 2,
+                "models": [
+                    {
+                        "name": target['table'].split('.')[-1],
+                        "columns": [
+                            {
+                                "name": column_name,
+                                "tests": [{"not_null": {"severity": "ERROR"}}]
+                            }
+                        ]
+                    }
+                ]
+            }
+        # Fallback: generic test using dbt_utils.expression_is_true
+        predicate_sql = SnowflakeDMFGenerator._ast_to_sql(ast)
+        return {
+            "version": 2,
+            "tests": [
+                {
+                    "name": f"test_{rule_id}",
+                    "description": rule.get('description', ''),
+                    "severity": "ERROR" if rule['severity'] >= 3 else "WARN",
+                    "expression": predicate_sql,
+                    "model": target['table'].split('.')[-1]
+                }
+            ]
+        }
+
+# ----------------------------------------------------------------------
+# 5. CLI main – load YAML, validate, generate outputs
+# ----------------------------------------------------------------------
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: datatrust_compiler.py <rule.yaml>")
+        sys.exit(1)
+    yaml_file = sys.argv[1]
+    with open(yaml_file, 'r') as f:
+        rule = yaml.safe_load(f)
+
+    # Validate
+    validator = Validator(rule)
+    errors = validator.validate()
+    if errors:
+        print("Validation errors:")
+        for err in errors:
+            print(f"  - {err}")
+        sys.exit(1)
+
+    # Parse predicate to AST
+    parser = Parser(rule['predicate'])
+    ast = parser.parse()
+
+    # Generate outputs
+    dmf_sql = SnowflakeDMFGenerator.generate(rule, ast)
+    dbt_yaml = DbtTestGenerator.generate(rule, ast)
+
+    print("=== Snowflake DMF SQL ===\n")
+    print(dmf_sql)
+    print("\n=== dbt test YAML ===\n")
+    print(yaml.dump(dbt_yaml, sort_keys=False))
+
+if __name__ == "__main__":
+    main()
+```
+
+---
+
+## File: `cost_model.py` (Heuristic cost calculator)
+
+```python
+#!/usr/bin/env python3
+"""
+DataTrust AI v1.0 – Heuristic Quality Cost Model
+Estimates cost of a data quality incident using configurable $/hour factor.
+"""
+
+import sys
+import yaml
+from datetime import datetime
+
+def load_manual_lineage(lineage_file: str) -> dict:
+    """Load manual lineage tags: mapping from dataset to downstream asset count."""
+    with open(lineage_file, 'r') as f:
+        lineage = yaml.safe_load(f)
+    result = {}
+    for entry in lineage:
+        dataset = entry['dataset']
+        result[dataset] = len(entry.get('downstream_assets', []))
+    return result
+
+def compute_cost(severity: int, downstream_reach: int, hours_open: float, factor: float = 500.0) -> float:
+    """
+    Compute heuristic cost.
+    severity: 1-5
+    downstream_reach: count of assets depending on dataset
+    hours_open: decimal hours (e.g., 2.5)
+    factor: $ per hour per downstream asset
+    """
+    return severity * downstream_reach * hours_open * factor
+
+def main():
+    if len(sys.argv) != 4:
+        print("Usage: cost_model.py <rule.yaml> <lineage.yaml> <incident_hours>")
+        sys.exit(1)
+
+    rule_file = sys.argv[1]
+    lineage_file = sys.argv[2]
+    hours_open = float(sys.argv[3])
+
+    with open(rule_file, 'r') as f:
+        rule = yaml.safe_load(f)
+
+    severity = rule['severity']
+    target_table = rule['target']['table']
+
+    lineage = load_manual_lineage(lineage_file)
+    downstream_reach = lineage.get(target_table, 0)
+
+    # configurable factor; could read from env or config file
+    factor = 500.0
+
+    cost = compute_cost(severity, downstream_reach, hours_open, factor)
+    print(f"Estimated cost for incident on {target_table}: ${cost:.2f}")
+    print(f" (severity={severity}, downstream_reach={downstream_reach}, hours={hours_open}, factor=${factor}/hr)")
+
+if __name__ == "__main__":
+    main()
+```
+
+---
+
+## Example Rule YAML: `rules/orders_not_null.yaml`
+
+```yaml
+rule_id: "orders_ship_date_not_null"
+version: "1.0.0"
+target:
+  platform: snowflake
+  table: "tpch.orders"
+  columns: ["ship_date"]
+quality_dimension: completeness
+predicate: "ship_date IS NOT NULL"
+severity: 3
+enabled: true
+shadow_mode: false
+owner: "data-engineering@example.com"
+description: "All orders must have a ship date"
+```
+
+## Example Manual Lineage: `lineage.yaml`
+
+```yaml
+- dataset: "tpch.orders"
+  downstream_assets:
+    - type: dashboard
+      name: "Revenue Dashboard"
+    - type: ml_model
+      name: "shipment_delay_predictor"
+    - type: reverse_etl
+      name: "Salesforce Sync"
+- dataset: "tpch.customer"
+  downstream_assets:
+    - type: dashboard
+      name: "Customer Lifetime Value"
+```
+
+## How to Run
+
+```bash
+# Install PyYAML if not present
+pip install pyyaml
+
+# Compile rule
+python datatrust_compiler.py rules/orders_not_null.yaml
+
+# Estimate incident cost (e.g., incident lasted 2.5 hours)
+python cost_model.py rules/orders_not_null.yaml lineage.yaml 2.5
+```
+
