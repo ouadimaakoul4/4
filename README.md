@@ -99,7 +99,7 @@ Contributions are welcome!
 
 ##  License
 
-**MIT License** — see the [LICENSE](LICENSE) file for details.
+**MIT License** .
 
 ---
 
@@ -113,5 +113,3 @@ Contributions are welcome!
 **Made with ❤️ for Humanity**
 
 
-Want me to make the paper description longer or move it higher? Just say! 🚀
-```
