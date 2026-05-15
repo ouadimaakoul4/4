@@ -3,9 +3,7 @@
 
 **An open-source hub for Artificial General Intelligence, Advanced Robotics, Space Exploration, and Multiplanetary Civilization.**
 
-Open knowledge. Open future. 🚀
-
----
+Open knowledge. Open future. 
 
 ## Vision
 
@@ -20,7 +18,6 @@ Open knowledge. Open future. 🚀
 - Space Technologies & Multiplanetary Infrastructure
 - Distributed, Planetary & Stellar Intelligence Systems
 
----
 
 ##  All Projects & Folders
 
@@ -57,7 +54,6 @@ Open knowledge. Open future. 🚀
 - **Equitable Genomic Medicine**
 - **Transformer-Based Framework for Predicting CRISPR**
 
----
 
 ## Highlighted Projects
 
@@ -70,8 +66,6 @@ Open knowledge. Open future. 🚀
 - **OBRU** — Open bio-robotics
 - **Bounded Compassion AGI** — Ethical AGI development
 
----
-
 ##  How to Use
 
 This is a **living research hub**. You are free to:
@@ -83,8 +77,6 @@ This is a **living research hub**. You are free to:
 
 All content is under the **MIT License**.
 
----
-
 ## Contributing
 
 Contributions are welcome from anyone working on safe AGI, robotics, space settlement, or building a better future for humanity.
@@ -93,20 +85,16 @@ Contributions are welcome from anyone working on safe AGI, robotics, space settl
 2. Create a feature branch
 3. Submit a Pull Request
 
----
 
 ##  License
 
 **MIT License** .
-
----
 
 ##  Connect
 
 - **X / Twitter**: [@ouadi4maakoul](https://x.com/ouadi4maakoul)
 - **GitHub**: [ouadimaakoul4](https://github.com/ouadimaakoul4)
 
----
 
 **Made with ❤️ for Humanity**
 
