@@ -1,5 +1,4 @@
 
-```markdown:disable-run
 # 4 Humanity 
 
 **An open-source hub for Artificial General Intelligence, Advanced Robotics, Space Exploration, and Multiplanetary Civilization.**
