@@ -776,4 +776,187 @@ The condition (A4) in Theorem 4.1 requires that the sequence \(\{\hat{d}_{\text{
 
 The amortization gap \(\varepsilon_{\text{amort}}\) is the KL divergence between the true filtering posterior and the best approximation within the inference network class. This gap can be estimated using importance sampling (Burda et al., 2016). In our preliminary analysis, the inference network achieves a marginal log‑likelihood within 0.05 nats of a fine‑tuned particle filter, suggesting the gap is small.
 
+## Appendix H — Algorithm Pseudocode and Architecture Diagram
 
+### H.1 AHLF Training Algorithm
+
+**Algorithm 1: AHLF Training (One Epoch)**
+
+```
+Input: Training dataset D = { (y_{1:T}^{(i)}, a_{1:T-1}^{(i)}, z_{1:T}^{*(i)}, m_{1:T}^{*(i)} ) }_{i=1}^{N}
+       Initial parameters ψ (inference), θ (generative)
+       Hyperparameters: β (KL weight), learning rate η, batch size B
+Output: Updated ψ, θ
+
+1: Shuffle D
+2: for each mini-batch of B trajectories do
+3:   Initialize total loss L_total = 0
+4:   for each trajectory in mini-batch do
+5:     s_0 ← 0 (or learned initial state)
+6:     for t = 1 to T do
+7:       // ---- Sensor Fusion Encoder ----
+8:       h_t^v ← SparseConvEncoder(v_t)
+9:       h_t^τ ← TactileMLP(τ_t ⊙ mask(τ_t))
+10:      h_t^p ← Linear(p_t)
+11:      α ← σ(MLP([c_t, mean(τ_t), p_t]))
+12:      h_t_fused ← α · CrossAttention(h_t^v, h_t^τ) + (1-α)·h_t^v
+13:      h_t ← Concat(h_t_fused, h_t^p)
+14:
+15:      // ---- Temporal Summary ----
+16:      s_t ← TCN(h_{1:t})   // causal, produces s_t ∈ ℝ^128
+17:
+18:      // ---- Posterior ----
+19:      q_mode ← Sigmoid(Linear(s_t))
+20:      for mode m ∈ {0,1} do
+21:        w_k^{(m)}, μ_k^{(m)}, Σ_k^{(m)} ← MixtureHead_m(s_t)  // K components
+22:      end for
+23:
+24:      // ---- Sample from posterior (reparameterization) ----
+25:      m_t_sample ∼ q_mode
+26:      z_t_sample ∼ q(z_t | s_t, m_t_sample)   // sample from selected mixture
+27:
+28:      // ---- Generative model evaluation ----
+29:      // Dynamics prior (using z_{t-1} and m_{t-1} from previous step)
+30:      if t == 1 then
+31:        p_dyn_prior ← initial_prior
+32:      else
+33:        p_mode_prior ← Sigmoid(w_m^T[z_{t-1_sample}; a_{t-1}] + b_m)
+34:        if m_t_sample == 0 then
+35:          μ_prior ← z_{t-1_sample} + Δt·f_cont(z_{t-1_sample}, a_{t-1})
+36:        else
+37:          μ_prior ← z_{t-1_sample} + f_disc(z_{t-1_sample}, a_{t-1})
+38:        end if
+39:        p_dyn_prior ← N(μ_prior, Σ_mode)   // Σ_mode learned
+40:      end if
+41:
+42:      // Observation likelihood
+43:      log_p_v ← log p(v_t | z_t_sample)   // via renderer
+44:      log_p_τ ← log p(τ_t | z_t_sample, m_t_sample)   // via tactile decoder
+45:      log_obs ← log_p_v + log_p_τ
+46:
+47:      // Loss contributions for step t
+48:      recon_loss ← -log_obs
+49:      kl_dyn ← KL( q(z_t|s_t,m_t_sample) || p_dyn_prior )
+50:      kl_mode ← KL( q_mode || p_mode_prior )   // discrete KL
+51:      L_traj ← L_traj + recon_loss + β·(kl_dyn + kl_mode)
+52:    end for
+53:    L_total ← L_total + L_traj / T
+54:  end for
+55:  L_total ← L_total / B
+56:  // Backpropagate
+57:  Compute gradients of L_total w.r.t. ψ and θ
+58:  Update ψ, θ using AdamW(η)
+59: end for
+```
+
+*Note:* The ground‑truth states \(z_t^*\) and modes \(m_t^*\) are **not** used to compute the loss; they are only used for evaluation. The training is entirely unsupervised from observations, using the reparameterized samples.
+
+---
+
+### H.2 AHLF Online Inference Algorithm
+
+**Algorithm 2: AHLF Inference (Per‑Step Filtering)**
+
+```
+Input: History buffer h_{0:t-1}, current observation y_t, action a_{t-1},
+       Previous posterior summary s_{t-1}, previous state sample z_{t-1},
+       RLS state (θ̂_{t-1}, P_{t-1}), adaptive conformal quantile Q̂_{t-1}
+Output: Updated posterior q(z_t, m_t), predicted contact mode m̂_t,
+        updated RLS estimate θ̂_t, P_t, updated conformal quantile Q̂_t
+
+1: // Encode current observation
+2: h_t^v ← SparseConvEncoder(v_t)
+3: h_t^τ ← TactileMLP(τ_t ⊙ mask(τ_t))
+4: h_t^p ← Linear(p_t)
+5: α ← σ(MLP([c_t, mean(τ_t), p_t]))
+6: h_t_fused ← α·CrossAttention(h_t^v, h_t^τ) + (1-α)·h_t^v
+7: h_t ← Concat(h_t_fused, h_t^p)
+8:
+9: // Append to history buffer and run TCN (incremental)
+10: s_t ← TCN(h_{0:t})   // efficiently computed via streaming conv
+11:
+12: // Posterior prediction
+13: q_mode ← Sigmoid(Linear(s_t))
+14: m̂_t ← argmax(q_mode)
+15: for mode m ∈ {0,1} do
+16:   w_k^{(m)}, μ_k^{(m)}, Σ_k^{(m)} ← MixtureHead_m(s_t)
+17: end for
+18: q(z_t | s_t) ← Mixture of Gaussians using parameters for m̂_t
+19:
+20: // If contact detected and RLS update due (every T_θ steps)
+21: if m̂_t == 1 and (t mod T_θ == 0) then
+22:   d̂_contact ← extract contact vertices from E_q[z_t]   // posterior mean
+23:   F̂ ← K(θ̂_{t-1}) · d̂_contact
+24:   H_t ← ∇_θ F̂ at θ̂_{t-1}   // autodiff
+25:   K_t ← P_{t-1} H_t^T (R + H_t P_{t-1} H_t^T)^{-1}
+26:   θ̂_t ← θ̂_{t-1} + K_t (F_obs - F̂)
+27:   P_t ← (1/γ)(I - K_t H_t) P_{t-1}
+28: else
+29:   θ̂_t ← θ̂_{t-1}, P_t ← P_{t-1}
+30: end if
+31:
+32: // Adaptive conformal update (if ground truth available for calibration)
+33: // In deployment, this step uses a user-defined score if needed;
+34: // for calibration runs, we have z_t^*.
+35: if z_t^* available then
+36:   S_t ← min_k sqrt((z_t^* - μ_k^{(m̂_t)})^T Σ_k^{-1} (z_t^* - μ_k^{(m̂_t)}))
+37:   err ← 1 if S_t > Q̂_{t-1} else 0
+38:   Q̂_t ← Q̂_{t-1} + η·(err - (1-α))
+39: else
+40:   Q̂_t ← Q̂_{t-1}
+41: end if
+42:
+43: return posterior q(z_t|s_t), m̂_t, θ̂_t, P_t, Q̂_t, updated history
+```
+
+*Note:* During normal deployment without ground truth, the conformal quantile \(Q̂_t\) can remain fixed after initial calibration, or the adaptive update can use surrogate feedback (e.g., consistency of dynamics predictions).
+
+---
+
+### H.3 Architecture Diagram — Detailed Description
+
+**Figure H.1: AHLF Architecture Overview (full training diagram)**  
+The figure should be drawn as a block diagram with three main horizontal sections representing the **Inference Network**, **Generative Model**, and **Loss Computation**.
+
+#### Top section: Inference Network (amortized posterior)
+- **Inputs:** RGB-D image \(v_t\), tactile array \(\tau_t\), proprioception \(p_t\), and action \(a_{t-1}\).
+- **Sensor Fusion Encoder** block:
+  - Three parallel encoders: *SparseConv (Minkowski)* → \(h_t^v\); *Tactile MLP* → \(h_t^\tau\); *Proprio Linear* → \(h_t^p\).
+  - *Gate MLP* takes \([c_t, \bar{\tau}_t, p_t]\) → \(\alpha\).
+  - *CrossAttention* module (Q from \(h_t^v\), K/V from \(h_t^\tau\)) multiplied by \(\alpha\).
+  - Summation with \((1-\alpha)h_t^v\).
+  - Concatenation with \(h_t^p\) to produce \(h_t \in \mathbb{R}^{288}\).
+- **Temporal Encoder** block:
+  - A sequence of three dilated causal conv layers (kernel=3, dil=1,2,4; 64 ch) processing \(h_{1:t}\).
+  - Output \(s_t \in \mathbb{R}^{128}\).
+- **Posterior Head** block:
+  - *Mode head*: Linear → sigmoid → \(q(m_t|s_t)\).
+  - Two separate *Mixture Heads* (for \(m=0,1\)), each outputting weights \(w_k\), means \(\mu_k\), covariances \(\Sigma_k\) for \(K\) components.
+  - Overall posterior: \(q(z_t|s_t) = \sum_m q(m|s_t) \sum_k w_k^{(m)} \mathcal{N}(\mu_k^{(m)}, \Sigma_k^{(m)})\).
+
+#### Middle section: Generative Model (dynamics and observation)
+- **Dynamics Model** block:
+  - Two sub‑networks: \(f_{\text{cont}}\) and \(f_{\text{disc}}\) (MLPs with spectral norm).
+  - Takes \(z_{t-1}, a_{t-1}\) and the sampled mode \(m_t\) to predict \(p(z_t|z_{t-1}, a_{t-1}, m_t)\).
+  - *Regime transition*: Sigmoid of linear combination of \([z_{t-1}, a_{t-1}]\) gives \(p(m_t|m_{t-1}, z_{t-1}, a_{t-1})\).
+- **Observation Decoders** block:
+  - *RGB-D Renderer*: Deforms mesh using \(z_t\) (pose + vertex displacements) and renders via PyTorch3D rasterizer, producing depth and color images.
+  - *Tactile Decoder*: MLP maps contact vertex displacements and material params \(\theta\) to predicted taxel values; heteroscedastic variance output.
+
+#### Bottom section: Loss Computation
+- **Reconstruction loss**: Negative log‑likelihood of actual observations \(v_t, \tau_t\) under the decoder distributions.
+- **KL divergence**:
+  - Dynamics KL: \(D_{\text{KL}}(q(z_t|s_t) \| p(z_t|z_{t-1},a_{t-1},m_t))\).
+  - Mode KL: \(D_{\text{KL}}(q(m_t|s_t) \| p(m_t|m_{t-1},z_{t-1},a_{t-1}))\).
+- Both losses are averaged over the trajectory and batch.
+
+*Arrows:* The inference network takes only observations and actions; the generative model takes samples from the posterior; the loss connects them. During training, gradients flow through the reparameterized samples and the Gumbel‑Softmax for modes.
+
+#### Optional: RLS and Conformal sub‑blocks
+Two smaller modules outside the neural network loop:
+- **RLS Co‑Estimator**: receives posterior mean deformation at contact and measured wrench, updates \(\hat{\theta}\) and \(P\), feeds back to dynamics model and tactile decoder.
+- **Adaptive Conformal**: uses true state (if available) to update quantile \(Q_t\); otherwise fixed.
+
+---
+
+These algorithm listings and the architecture diagram description form the final technical specification of AHLF, completing the dissertation.
