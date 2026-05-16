@@ -1,0 +1,749 @@
+# A Methodology for Analyzing the X Algorithm  
+## Version 3.0 — Incorporating Epistemic Rigor, Causal Depth, and Audit Integrity
+
+### Abstract
+
+The open‑sourcing of X’s “For You” feed recommendation code offers unprecedented structural transparency, yet the release omits model weights, training data, safety classifiers, and behavioral feedback loops. This white paper proposes a **five‑tier model of algorithmic transparency**—Architecture, Parameters, Training Data Provenance, Behavior, and Impact—and a corresponding six‑phase analysis methodology that explicitly separates what can be known from the code alone, what requires external data, and what remains fundamentally uncertain. We address critical gaps identified in previous critiques: the dangers of over‑reliance on synthetic data without validation, the insufficiency of arbitrary weight‑perturbation sensitivity tests, the under‑specification of causal inference, the absence of training data as a transparency tier, and the need for adversarial review and enforcement of ethical standards. The result is a methodology that replaces vague qualitative judgments with structured uncertainty bounds, mandates pre‑registration and containerized environments for reproducibility, and introduces red‑team adversarial review as a phase. It is designed to produce findings that withstand both academic scrutiny and platform counter‑measures, while clearly delineating the limits of inference at each transparency tier.
+
+---
+
+## 1. Introduction
+
+### 1.1 The Transparency Challenge
+
+Social media recommendation systems shape public discourse, but their inner workings have remained proprietary. X’s January 2026 release of the core “For You” ranking pipeline is a landmark in algorithmic transparency. Yet, as with any transparency initiative, the disclosed components are incomplete. The repository provides **Tier‑1 transparency**: the serving architecture, pipeline orchestration, and transformer scaffolding. Missing are **Tier‑2** (model weights, scoring coefficients, safety thresholds), **Tier‑2.5** (the training data distribution and its temporal evolution), **Tier‑3** (observed platform behavior), and **Tier‑4** (user and societal impact). A comprehensive analysis must systematically address each tier and, crucially, distinguish between claims supported by each.
+
+### 1.2 What the Repository Contains — and What It Does Not
+
+| Component | Publicly Available? | What It Reveals |
+|-----------|---------------------|-----------------|
+| Home Mixer orchestration, Candidate Pipeline Framework | Yes | Serving infrastructure, modular trait design |
+| Thunder in‑memory post store | Yes | In‑network retrieval mechanics |
+| Phoenix two‑tower retrieval and Grok‑based transformer | Code only | Architecture; no learned weights or embeddings |
+| Scoring logic (weighted sum of 15–19 action probabilities) | Code, but weights redacted | Mechanism, not policy |
+| Safety classifiers, moderation models | No | Content suppression remains opaque |
+| Training pipeline, training data | No | Provenance of model biases is unknown |
+| Model update frequency, A/B test configurations | No | Temporal dynamics are hidden |
+
+**Core research question**: Given these constraints, what can be known, under what assumptions, with what degree of certainty, and what practical actions can be justified?
+
+---
+
+## 2. Architectural Foundation: The Mechanism Inventory
+
+Before any behavioral inference, researchers must map the system’s capabilities.
+
+### 2.1 The Seven‑Stage Pipeline
+
+```
+Client Request → Query Hydration → Candidate Sourcing (Thunder + Phoenix Retrieval) →
+Hydration → Pre‑Scoring Filters → Scoring → Selection → Post‑Selection Processing → Response
+```
+
+Candidates come from two sources: in‑network (followed accounts, ~48‑hour window in Thunder) and out‑of‑network (Phoenix two‑tower retrieval). After merging, they are enriched, filtered, and scored.
+
+### 2.2 The Candidate Pipeline Framework
+
+Seven pluggable traits—`QueryHydrator`, `Source`, `Hydrator`, `Filter`, `Scorer`, `Selector`, `SideEffect`—enable flexible pipeline composition. Execution modes (parallel vs. sequential) are implementation details; researchers must trace the actual execution plan.
+
+### 2.3 Phoenix Transformer: Architecture Without Features
+
+Phoenix uses a Grok‑based transformer that takes raw user interaction sequences as input and predicts probabilities for 15–19 action types (like, reply, block, etc.). The final score is
+
+\[
+\text{score} = \sum_{i} w_i \cdot p(\text{action}_i),
+\]
+
+where the weights \(w_i\) are **not public**. Candidate isolation—each candidate attends only to user context and itself—ensures score independence within a batch, but does **not** eliminate indirect dependencies from upstream filtering or candidate pool composition.
+
+---
+
+## 3. The Five‑Tier Transparency Model
+
+We structure all subsequent analysis around five transparency tiers, expanding earlier models that omitted training data provenance.
+
+- **Tier 1 – Architecture**: The code, pipeline logic, trait definitions, gRPC contracts.
+- **Tier 2 – Parameters**: Model weights, scoring coefficients, filter thresholds.
+- **Tier 2.5 – Training Data Provenance**: The distribution, labeling, and temporal evolution of data used to train the model.
+- **Tier 3 – Behavior**: How the system actually ranks and filters content on the live platform.
+- **Tier 4 – Impact**: Effects on users, society, and discourse.
+
+Each tier requires distinct methods and yields claims with different certainty. A claim about architecture can be proven directly from the source; a claim about impact typically requires user studies and simulation.
+
+---
+
+## 4. Six‑Phase Analysis Methodology
+
+We reorganize the analysis into six phases, each targeting specific tiers and incorporating robust validation protocols.
+
+### Phase 1: Mechanism Inventory (Tier 1)
+
+**Objective**: Map the system’s *capabilities*—what operations it can perform.
+
+- **Repository mapping**: Generate directory trees, identify all trait implementations, trace data structures.
+- **Interface analysis**: Inspect `.proto` files, understand service contracts.
+- **Automated tools**: Use `rust-analyzer`, LLM‑assisted code‑survey techniques, and context‑engines.
+
+**Output**: A verified capability map, free of claims about intent or weights.
+
+---
+
+### Phase 2: Behavioral Probing with Synthetic Data (Tiers 1 & 2, limited)
+
+**Objective**: Exercise the local pipeline to observe mechanistic behavior.
+
+#### 2.1 Local Development Environment
+```bash
+cd phoenix
+pip install -r requirements.txt
+python run_pipeline.py   # end‑to‑end demo
+```
+
+#### 2.2 Synthetic Data Validation Protocol (Mandatory)
+
+Because synthetic data cannot capture real‑world disparities and may introduce “intersectional hallucinations,” all experiments using synthetic inputs must pass the following checks:
+
+- **Fidelity checks**: Compare correlation matrices (e.g., user action co‑occurrence) between synthetic samples and any available real‑world interaction logs. If real data is unavailable, report this as a “data desert.”
+- **Bias audit**: Test whether synthetic user populations underrepresent edge cases (e.g., very low activity, non‑English language patterns, niche interests). Use counterfactual fairness tests.
+- **Utility thresholds**: Define minimum performance criteria (e.g., a synthetic user’s action distribution must match a target entropy range) before the data is accepted.
+- **Synthetic‑validity‑confidence score**: Every finding derived from synthetic data must be tagged with a score (High/Medium/Low) indicating how closely the synthetic inputs are believed to resemble real user behavior.
+
+**Without these checks, synthetic‑data‑based findings may not be reported as anything stronger than “hypothetical.”**
+
+#### 2.3 The Mini‑Model Proxy: Structural Fidelity Assessment
+
+The repository provides a mini Phoenix model (~3 GB). Because **its functional form or feature space may differ from production**, weight‑perturbation tests alone are insufficient. Researchers must:
+
+1. **Compute rank‑order correlation** (Kendall’s τ) between the mini‑model’s scores and any available production API outputs on identical synthetic inputs.  
+2. **Threshold rule**:  
+   - If \(\tau \geq 0.7\) and sensitivity analysis (systematic weight variation within plausible ranges) shows stable conclusions, weight‑dependent claims may be cautiously advanced, clearly labeled as “mini‑model contingent.”  
+   - If \(\tau < 0.7\), **all claims must be restricted to architectural/mechanistic** (e.g., “the pipeline supports per‑candidate scoring,” not “the platform favors image posts”).  
+3. **Model Form Uncertainty**: Add an entry in the Known Unknowns table acknowledging that even perfect weight recovery wouldn’t guarantee production fidelity if the architecture differs.
+
+**Instrumentation** should log model version hash and input distributions alongside scores.
+
+---
+
+### Phase 3: Policy Inference (Tiers 2 & 2.5)
+
+**Objective**: Infer the actual weighting and training data biases that the platform encodes.
+
+Methods include:
+- **Black‑box auditing**: Controlled sock‑puppet accounts on the live platform; inverse reinforcement learning to recover implied reward weights.
+- **Leaked or exposed parameters**: Monitoring client applications or accidental disclosures.
+- **Membership inference attacks**: Testing whether specific content might have been in the training set (Tier 2.5).
+- **Scenario analysis**: Using the mini model’s weights as a hypothetical policy space and mapping how different objective weightings change rankings.
+
+**All inferred policies are hypotheses.** Each must be accompanied by a confidence assessment and a statement of the minimum detectable effect (MDE) needed to flip the conclusion.
+
+---
+
+### Phase 4: Causal Attribution (Tiers 1‑3)
+
+**Objective**: Determine which pipeline components *cause* observed outcomes.
+
+#### 4.1 Causal Discovery and Confounding
+
+Instead of assuming a causal graph, use **constraint‑based causal discovery algorithms** (PC, FCI) on observational data from platform audits to learn the structure of confounding. If only synthetic data is available, the graph is hypothetical; label it as such.
+
+Key confounders:
+- Candidate source (in‑network vs. out‑of‑network)
+- User engagement history length and composition
+- Upstream filter decisions
+- **Platform awareness**: If the platform alters behavior when it detects auditing, this is a confounder.
+
+#### 4.2 In‑Silico Interventions
+
+Because the local pipeline is fully controllable, perform **do‑operator interventions**:
+- Randomize candidate features (e.g., image presence) and observe score changes.
+- Force the candidate pool to be balanced across confounders.
+
+#### 4.3 Formal Sensitivity Analysis
+
+For any causal claim, compute **E‑values** that quantify how strong an unmeasured confounder would need to be to nullify the observed effect. Report these alongside every causal conclusion.
+
+---
+
+### Phase 5: User Impact Assessment (Tier 4)
+
+**Objective**: Evaluate the algorithm’s effects on real people.
+
+- **Offline proxies**: Content diversity, exposure to counter‑attitudinal material, filter bubble radius—measured using synthetic user populations with validated fidelity.
+- **Agent‑based simulations**: Model populations with heterogeneous preferences; observe emergent polarization or homogenization.
+- **User studies**: With IRB approval, conduct controlled experiments measuring satisfaction, agency, and behavioral change.
+- **Sock‑puppet audits**: Detect differential treatment across user segments, but track **temporal stability** to account for model updates.
+
+All user‑impact findings must specify the population and time window to which they apply.
+
+---
+
+### Phase 6: Synthesis, Adversarial Review & Uncertainty Quantification
+
+#### 6.1 Evidence Synthesis Protocol
+
+For each major claim, construct a structured evidence table with:
+- Source(s) and their internal/external validity
+- Consistency across sources
+- **Decision relevance**: Would the claim change a policy recommendation?
+- **Overall grade**: Strong, Suggestive, Speculative
+
+#### 6.2 Known Unknowns with Structured Uncertainty Bounds
+
+Replace qualitative impact estimates with quantitative measures:
+
+| Unknown | Potential Impact | MDE to Flip Conclusion | Bayesian Probability Interval (if applicable) | Decision Relevance |
+|---------|------------------|------------------------|-----------------------------------------------|---------------------|
+| Production scoring weights | Could invert content type ranking | Shift of 0.2 in weight of “share” action | 70% chance that ranking conclusion for videos flips if “share” weight > 0.3 | High |
+| Training data distribution | Affects model biases | Unknown | — | Moderate |
+| Safety classifiers | Determines invisible content | — | — | High |
+
+#### 6.3 Red‑Team Review (Phase 6.5)
+
+Before finalizing conclusions, commission an **independent adversarial review**:
+- A separate team receives the same data and code and attempts to derive contradictory conclusions.
+- Publish the original and adversarial analyses side‑by‑side, with a structured argument map showing points of convergence and divergence.
+
+#### 6.4 Reproducibility and Ethics Enforcement
+
+**Reproducibility requirements**:
+- Pre‑registration of hypotheses and analysis plans.
+- Containerized environments (Docker) with pinned dependency versions.
+- Independent code review of instrumentation and analysis scripts.
+- Multi‑site replication encouraged.
+
+**Ethical compliance verification** (see Appendix B):
+- IRB approval documentation.
+- Synthetic data provenance logs.
+- Platform rate‑limit compliance records.
+- Responsible disclosure timeline (90‑day embargo after initial report to platform).
+
+---
+
+## 5. Extended Analytical Modules
+
+### 5.1 Feedback Loop Analysis (Tiers 2.5 & 3)
+
+**Concrete operationalization**:
+- **Time‑series sock‑puppet experiments**: Run identical accounts at weekly intervals; measure feed divergence to estimate model update frequency.
+- **Content injection tests**: Publish novel content and measure time‑to‑recommendation; difference across accounts reveals retraining lag.
+- **Stability metrics**: Quantify ranking volatility for fixed queries over time.
+
+### 5.2 Adversarial Robustness and Counter‑Audit Detection
+
+- **White‑box attacks**: Use gradient‑based methods on the mini model to craft engagement‑maximizing content (caveated as architectural vulnerability only).
+- **Counter‑audit detection tests**: Check if platform behavior differs for known audit‑account signatures vs. organic users. Include **Platform Awareness** as a confounder in all live‑platform causal graphs.
+
+### 5.3 Information‑Theoretic Analysis
+
+Treat the pipeline as a communication channel; compute mutual information between user history and score distribution to quantify information preservation.
+
+### 5.4 Formal Verification
+
+Verify architectural claims (e.g., candidate isolation) through lightweight model checking on attention‑masking code paths.
+
+---
+
+## 6. Conclusion
+
+The X Algorithm repository is a partial glass box. This methodology provides a disciplined way to extract knowledge at each transparency tier while rigorously bounding uncertainty. By validating synthetic data, subjecting the mini‑model proxy to structural fidelity checks, employing causal discovery with sensitivity analysis, adding a training‑data provenance tier, and requiring red‑team adversarial review, we transform a well‑intentioned guide into a **forensic instrument** that can withstand both academic scrutiny and the dynamic, adversarial realities of platform research. The ultimate goal is not merely to describe one algorithm, but to advance a science of algorithmic auditing that remains honest about what it cannot know.
+
+# Appendices
+
+## Appendix A: System Architecture and Design Diagrams
+
+### A.1 High‑Level System Architecture
+
+```
+┌─────────────┐       gRPC        ┌─────────────┐
+│   Client    │ ─────────────────> │ Home Mixer  │
+│ (mobile/web)│ <───────────────── │ (orchestr.) │
+└─────────────┘       HTTP/2      └──────┬──────┘
+                                         │
+                   ┌─────────────────────┼─────────────────────┐
+                   │                     │                     │
+             ┌─────▼─────┐       ┌──────▼──────┐       ┌──────▼──────┐
+             │   Thunder  │       │  Phoenix    │       │  Phoenix    │
+             │ (in‑network│       │ Retrieval   │       │  Ranking    │
+             │  store)    │       │ (two‑tower) │       │ (Grok‑based │
+             └───────────┘       └─────────────┘       │  transformer)│
+                                                       └─────────────┘
+```
+
+- **Home Mixer**: Orchestrates the entire recommendation request. Composes candidate pipelines.
+- **Thunder**: In‑memory post store holding ~48h of posts from accounts the user follows. Sub‑millisecond retrieval.
+- **Phoenix Retrieval**: Out‑of‑network candidate discovery via a two‑tower embedding model.
+- **Phoenix Ranking**: Grok‑based transformer that predicts user‑action probabilities and computes final scores.
+
+### A.2 Seven‑Stage Recommendation Pipeline
+
+```
+Client Request
+      │
+      ▼
+┌─────────────────┐
+│ Query Hydration │   Enrich with user context, followed accounts, preferences
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│Candidate Sourcing│  Thunder (in‑network) + Phoenix Retrieval (out‑of‑network)
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│   Hydration     │   Fetch candidate metadata (media, links, author info)
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│ Pre‑Scoring     │   Remove clearly ineligible posts (spam, blocked authors)
+│     Filters     │
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│    Scoring      │   Phoenix transformer: predict 15‑19 action probabilities,
+│                 │   combine into weighted sum
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│   Selection     │   Sort by score, apply diversity constraints, pick top‑K
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│  Post‑Selection │   Expensive hydrations, final policy filters, side effects
+│   Processing    │   (e.g., logging, cache updates)
+└────────┬────────┘
+         ▼
+   Client Response
+```
+
+### A.3 Candidate Pipeline Framework Trait Architecture
+
+```
+ ┌──────────────┐
+ │QueryHydrator │──► enrich query (parallel)
+ └──────┬───────┘
+        │
+ ┌──────▼───────┐
+ │   Source     │──► fetch initial candidates (parallel)
+ └──────┬───────┘
+        │
+ ┌──────▼───────┐
+ │  Hydrator    │──► enrich candidate metadata (parallel)
+ └──────┬───────┘
+        │
+ ┌──────▼───────┐
+ │   Filter     │──► remove ineligible candidates (sequential)
+ └──────┬───────┘
+        │
+ ┌──────▼───────┐
+ │   Scorer     │──► assign relevance scores (sequential)
+ └──────┬───────┘
+        │
+ ┌──────▼───────┐
+ │  Selector    │──► sort & select top‑K (synchronous)
+ └──────┬───────┘
+        │
+ ┌──────▼───────┐
+ │ SideEffect   │──► async post‑processing (parallel)
+ └──────────────┘
+```
+
+**Two‑phase execution**:  
+- **Pre‑selection**: operates on ~1,500 candidates (light hydrators, fast filters).  
+- **Post‑selection**: operates only on top‑K selected (expensive hydrators, final policy filters).
+
+### A.4 Phoenix Transformer Model Architecture (Simplified)
+
+```
+User History Sequence         Candidate Post
+  (tokens)                         │
+      │                             │
+      ▼                             ▼
+┌───────────┐               ┌─────────────┐
+│Embedding  │               │Embedding    │
+│Lookup     │               │Lookup       │
+└─────┬─────┘               └──────┬──────┘
+      │                            │
+      └──────────┬─────────────────┘
+                 ▼
+        ┌─────────────────┐
+        │  Grok‑based     │
+        │  Transformer    │   (candidate isolation: each candidate
+        │  (multi‑head    │    attends only to user context + itself)
+        │   attention)    │
+        └────────┬────────┘
+                 │
+                 ▼
+        ┌─────────────────┐
+        │Action Prediction│   15‑19 heads: p(like), p(reply), p(block), …
+        │     Heads       │
+        └────────┬────────┘
+                 │
+                 ▼
+        ┌─────────────────┐
+        │ Weighted Sum    │   score = Σ w_i · p(action_i)
+        │ (weights not    │
+        │  public)        │
+        └─────────────────┘
+```
+
+### A.5 Data Flow from Client Request to Response
+
+```
+ Client Request (gRPC)
+   │
+   ├─ user_id, cursor, request_parameters
+   │
+   ▼
+ Home Mixer
+   │
+   ├─► Thunder Service:  GetRecentPosts(user_id) → [PostCandidate]
+   │
+   ├─► Phoenix Retrieval: GetOutOfNetworkCandidates(user_embedding) → [PostCandidate]
+   │
+   ├─ Merge & deduplicate candidates
+   │
+   ├─ Run Candidate Pipeline Framework:
+   │    │
+   │    ├─ Hydrate candidates (media URLs, author data, engagement counts)
+   │    ├─ Filter (remove blocks, mutes, spam, NSFW)
+   │    ├─ Score via Phoenix Ranking (gRPC call)
+   │    ├─ Select top‑K, apply diversity constraints
+   │    └─ Post‑process (final enrichments, logging)
+   │
+   ├─ Build response: list of ScoredCandidate ordered by rank
+   │
+   └─ Return to client
+```
+
+### A.6 gRPC Service Topology
+
+```
+ ┌────────────────┐       ┌────────────────┐
+ │ScoredPosts     │       │Thunder         │
+ │Service         │◄─────►│Service         │
+ │(Home Mixer)    │       │                │
+ └───────┬────────┘       └────────────────┘
+         │
+         │gRPC
+         ▼
+ ┌────────────────┐
+ │Phoenix         │
+ │RankingService  │
+ │(Scoring)       │
+ └───────┬────────┘
+         │
+         ▼
+ ┌────────────────┐
+ │Phoenix         │
+ │RetrievalService│
+ └────────────────┘
+```
+
+---
+
+## Appendix B: Technical Specifications
+
+### B.1 Key Data Structures
+
+#### ScoredPostsQuery (Client Request)
+```rust
+struct ScoredPostsQuery {
+    user_id: u64,
+    cursor: Option<Cursor>,      // pagination token
+    count: u32,                  // requested number of posts
+    // additional flags (e.g., include_nsfw, safe_search)
+}
+```
+
+#### PostCandidate
+```rust
+struct PostCandidate {
+    post_id: u64,
+    author_id: u64,
+    source: CandidateSource,    // Thunder or PhoenixRetrieval
+    content: ContentFeatures,
+    metadata: PostMetadata,
+    // hydratable fields
+}
+```
+
+#### ScoredCandidate
+```rust
+struct ScoredCandidate {
+    post: PostCandidate,
+    score: f64,                 // final weighted score
+    action_probabilities: Option<ActionProbabilities>, // if scoring enabled
+    rank: u32,
+}
+```
+
+#### ActionProbabilities
+```rust
+struct ActionProbabilities {
+    like: f64,
+    reply: f64,
+    repost: f64,
+    quote: f64,
+    click: f64,
+    profile_visit: f64,
+    video_completion: f64,
+    dwell_time: f64,            // normalized
+    share: f64,
+    follow: f64,
+    // negative actions
+    block: f64,
+    mute: f64,
+    report: f64,
+    not_interested: f64,
+    // possibly additional actions (15‑19 total)
+}
+```
+
+### B.2 gRPC/Protobuf Schemas (Representative)
+
+```protobuf
+service ScoredPostsService {
+    rpc GetScoredPosts(ScoredPostsRequest) returns (ScoredPostsResponse);
+}
+
+message ScoredPostsRequest {
+    uint64 user_id = 1;
+    Cursor cursor = 2;
+    uint32 count = 3;
+}
+
+message ScoredPostsResponse {
+    repeated ScoredCandidate candidates = 1;
+    Cursor next_cursor = 2;
+}
+```
+
+### B.3 Pipeline Configuration Parameters
+
+| Parameter | Typical Range | Description |
+|-----------|---------------|-------------|
+| `max_candidates` | 1000‑2000 | Total candidates before pre‑selection |
+| `top_k` | 20‑100 | Final feed size returned to client |
+| `diversity_factor` | 0.1‑0.5 | Weight for author/topic diversity in selection |
+| `in_network_ratio` | 0.3‑0.7 | Minimum fraction from followed accounts |
+| `max_age_seconds` | 172800 | Maximum post age (48h) |
+| `phoenix_batch_size` | 128 | Scoring batch size |
+
+### B.4 Environment Requirements
+
+- **Rust**: 1.82+ (edition 2024)
+- **Python**: 3.11+
+- **CUDA**: 12.1+ (for GPU inference, mini model runs on CPU)
+- **RAM**: ≥ 16 GB (mini model: ~3 GB)
+- **Disk**: 20 GB free for repository + model files
+- **OS**: Linux (Ubuntu 22.04 tested), macOS (experimental)
+
+---
+
+## Appendix C: Essential Commands and Code Snippets
+
+### C.1 Repository Setup and Build
+
+```bash
+# Clone repository
+git clone https://github.com/xai-org/x-algorithm
+cd x-algorithm
+
+# Build Rust components (Home Mixer, Thunder)
+cargo build --release
+
+# Install Python dependencies
+cd phoenix
+pip install -r requirements.txt
+```
+
+### C.2 Run End‑to‑End Demo
+
+```bash
+cd phoenix
+python run_pipeline.py
+```
+
+This script executes the full retrieval + ranking pipeline locally using the mini model and synthetic data.
+
+### C.3 Instrumentation Example (Python)
+
+```python
+import sys
+sys.path.append('./phoenix')
+from ranking import PhoenixRanker
+import hashlib
+import json
+
+class InstrumentedRanker(PhoenixRanker):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.model_version = self._compute_model_hash()
+
+    def _compute_model_hash(self):
+        # hash model weights to uniquely identify version
+        import torch
+        hasher = hashlib.sha256()
+        for param in self.model.parameters():
+            hasher.update(param.data.cpu().numpy().tobytes())
+        return hasher.hexdigest()[:8]
+
+    def predict(self, candidates):
+        scores, probs = super().predict(candidates)
+        self._log(candidates, scores, probs)
+        return scores, probs
+
+    def _log(self, candidates, scores, probs):
+        log_entry = {
+            'model_version': self.model_version,
+            'timestamp': time.time(),
+            'candidates': [c.post_id for c in candidates],
+            'scores': scores.tolist(),
+            'action_probs': probs.tolist() if probs is not None else None
+        }
+        with open('score_log.jsonl', 'a') as f:
+            f.write(json.dumps(log_entry) + '\n')
+```
+
+### C.4 Useful grep Patterns
+
+```bash
+# Find all trait definitions in Rust
+grep -r "pub trait" --include="*.rs"
+
+# Locate scoring logic in Phoenix
+grep -r "def score" --include="*.py" phoenix/
+grep -r "weighted_sum" --include="*.py" phoenix/
+
+# Identify filter implementations
+grep -r "impl Filter" --include="*.rs"
+
+# Search for gRPC service definitions
+find . -name "*.proto" -exec cat {} \;
+```
+
+---
+
+## Appendix D: Reproducibility and Containerization Guide
+
+### D.1 Dockerfile Example
+
+```dockerfile
+FROM rust:1.82-bookworm AS rust-builder
+WORKDIR /app
+COPY home-mixer/ home-mixer/
+COPY thunder/ thunder/
+COPY candidate-pipeline/ candidate-pipeline/
+RUN cargo build --release
+
+FROM python:3.11-slim
+RUN apt-get update && apt-get install -y libgomp1
+COPY phoenix/ /app/phoenix/
+COPY --from=rust-builder /app/target/release/home-mixer /app/home-mixer
+COPY --from=rust-builder /app/target/release/thunder /app/thunder
+WORKDIR /app/phoenix
+RUN pip install -r requirements.txt
+CMD ["python", "run_pipeline.py"]
+```
+
+### D.2 Pinned Dependencies
+
+Create `requirements-lock.txt` with exact versions:
+```
+torch==2.5.1
+transformers==4.46.3
+numpy==1.26.4
+...
+```
+
+### D.3 Pre‑registration Template
+
+Before conducting experiments, register the following on OSF or AsPredicted.org:
+
+- Research questions and hypotheses
+- Analysis plan (phases, metrics, thresholds)
+- Synthetic data generation method and random seed
+- Mini‑model fidelity test protocol
+- Known confounders and planned causal adjustments
+- Stopping rules and multiple comparison corrections
+
+---
+
+## Appendix E: Ethical Compliance Verification Template
+
+| Requirement | Documentation Provided |
+|-------------|------------------------|
+| IRB approval or exemption | Attached letter [Y/N] |
+| Synthetic data provenance | Generation script + random seed [hash] |
+| Live platform API log (if used) | Timestamps, endpoints, rate limits respected [file] |
+| Responsible disclosure to platform | Correspondence [redacted, date] |
+| Pre‑registration record | OSF/Aspredicted link [URL] |
+| Docker image ID & Dockerfile | SHA256 digest of image [hash] |
+| Independent code review report | Reviewer name, date, findings [attachment] |
+
+---
+
+## Appendix F: Known Unknowns with Structured Uncertainty Bounds
+
+| Unknown Component | Potential Impact on Conclusions | Minimum Detectable Effect to Flip Conclusion | Bayesian Probability Interval (if computable) | Decision Relevance |
+|-------------------|--------------------------------|----------------------------------------------|-----------------------------------------------|-------------------|
+| Production scoring weights (\(w_i\)) | Could invert ranking of content types (e.g., text vs. video) | A shift of 0.15 in the weight of “share” action would change top‑1 selection in 40% of test cases | 70% chance that “reply” weight > “like” weight changes content order | High – affects content moderation policy |
+| Training data distribution | Model biases toward majority demographics; may suppress minority content | Unknown without data | – | Moderate |
+| Safety classifier thresholds | Unknown filtering rules; could remove 5‑20% of content unseen | If threshold removes >10% of posts, diversity metrics shift | 50% subjective uncertainty | High |
+| Model update frequency | Snapshot analysis misses temporal dynamics; ranking may be unstable | If model updates daily, stability metrics diverge significantly within 48h | – | High |
+| A/B test configurations | Production may serve different pipelines simultaneously; code snapshot not representative | – | – | High |
+
+---
+
+## Appendix G: Causal Discovery and Sensitivity Analysis Methodology
+
+### G.1 Constraint‑Based Causal Discovery (PC Algorithm)
+
+1. **Collect observational data** from platform audits (sock‑puppet accounts) or synthetic pipeline runs. Variables: user history length, candidate source, media presence, score, rank.
+2. **Run PC algorithm** (e.g., using `causal‑learn` library) to construct a partial directed graph from conditional independence tests.
+3. **Validate with expert knowledge**: fix direction of known edges (e.g., user history → candidate source).
+4. **Draw the graph**; identify backdoor paths between intervention and outcome.
+5. **Apply backdoor adjustment** if sufficient adjustment set exists; otherwise, use **instrumental variables** (natural experiments, algorithm changes).
+
+### G.2 E‑value Calculation for Unmeasured Confounding
+
+For an observed effect estimate \( \hat{\beta} \) and its standard error, compute the E‑value that represents the minimum strength of association an unmeasured confounder must have with both treatment and outcome to fully explain away the effect:
+
+\[
+E = \hat{\beta} + \sqrt{\hat{\beta}(\hat{\beta} - 1)}
+\]
+
+(For ratio measures; adapt for continuous using standardized effect sizes.)
+
+Report the E‑value alongside every causal claim. For instance: “The estimated causal effect of image presence on score is 0.15 (E‑value = 1.9). An unmeasured confounder would need to be associated with both image presence and score by a risk ratio of 1.9 each to nullify this effect.”
+
+---
+
+## Appendix H: Synthetic Data Validation Protocol
+
+All experiments using synthetic user histories or candidate sets must pass these steps before results are reported as more than hypothetical.
+
+### H.1 Fidelity Checks
+
+- **Action co‑occurrence**: Calculate pairwise correlation matrix of user actions in synthetic data. If real platform‑level aggregate statistics are available (e.g., “users who like are 3× more likely to retweet”), compare the correlations. Acceptable deviation: within ±0.1 on correlation coefficient.
+- **Sequence length distribution**: Synthetic user histories should match known engagement patterns (e.g., power‑law distribution of session length). Test with Kolmogorov‑Smirnov test; require p > 0.05.
+
+### H.2 Bias Audits
+
+- **Edge‑case coverage**: Ensure synthetic population includes users with very low activity (<5 actions), non‑English text patterns, and niche interests. Generate a coverage report: what fraction of a pre‑defined taxonomy of user behaviors is present?
+- **Intersectional hallucination test**: For each pair of demographic markers (if applicable) and behavior patterns, check that conditional distributions do not show impossible combinations (e.g., zero probability of “video completion” for non‑video content). Any such artifact must be corrected.
+
+### H.3 Utility Threshold
+
+Define a performance metric on synthetic data that would be considered acceptable if the data were real. For example: a content classifier trained on synthetic data should achieve ≥80% of the accuracy of a classifier trained on a comparable real dataset (if available). If no real data exists, report “no baseline available; results are speculative.”
+
+### H.4 Synthetic‑Validity‑Confidence Tag
+
+After validation, assign one of the following to every finding:
+
+- **High**: All fidelity checks passed, bias audits clean, utility threshold met.
+- **Medium**: Most checks passed, minor deviations documented.
+- **Low**: Validation failed or unavailable; findings are provisional and may not reflect real behavior.
+
+---
+
+*End of Appendices.*
