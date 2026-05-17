@@ -118,7 +118,8 @@ Contributions are highly welcome!
 
 ## License
 
-**MIT License** .
+MIT License .
+
 ---
 
 ## Connect
@@ -131,6 +132,3 @@ Contributions are highly welcome!
 **Made with ❤️ for Humanity**
 
 
-
-If you still see a specific folder missing, just paste its **exact name** here and I’ll add it immediately! 🚀
-```
