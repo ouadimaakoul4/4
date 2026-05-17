@@ -2,7 +2,7 @@
 
 **An open-source hub for Artificial General Intelligence, Advanced Robotics, Space Exploration, and Multiplanetary Civilization.**
 
-Open knowledge. Open future. 🚀
+Open knowledge. Open future. 
 
 ---
 
