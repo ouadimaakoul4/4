@@ -1,13 +1,12 @@
-
 # 4 Humanity 
 
 **An open-source hub for Artificial General Intelligence, Advanced Robotics, Space Exploration, and Multiplanetary Civilization.**
 
-Open knowledge. Open future. 
+Open knowledge. Open future. 🚀
 
 ---
 
-##  Vision
+## Vision
 
 **"4"** stands for **For Humanity** — a massive open research vault of code, architectures, mathematical papers, theoretical works, and systems built to accelerate **safe AGI** and humanity’s transition into a **multiplanetary species**.
 
@@ -31,7 +30,7 @@ Open knowledge. Open future.
 | **AWR-MARS**                                                 | Mars Colonization |
 | **COSMOCAT**                                                 | Space & Cosmology |
 | **Lunar Electromagnetic Mass Driver for Cislunar Logistics** | Space Infrastructure |
-| **GAIA Sentinel** / **GAIA**                                 | Planetary AI |
+| **GAIA Sentinel**                                            | Planetary AI |
 | **MARS _AI**                                                 | Mars AI Systems |
 | **ZENITH**                                                   | AI Safety & Verification |
 | **AGI_CODE**                                                 | AGI Core Research |
@@ -50,11 +49,12 @@ Open knowledge. Open future.
 | **DECAF-S**                                                  | Decoupled AI Frameworks |
 | **CS_SS**                                                    | Cognitive & Symbolic Systems |
 | **Adaptive Capsule-Based Artificial Intelligence**           | AI Architectures |
+| **Adaptive Causal Koopman–SINDy World‑Model from Sparse Sensors** | World Modeling |
 | **Adaptive Cognitive Budgeting**                             | Cognitive Systems |
-| **Stable Recursive Intelligence** / **Stable_Recursive_Intelligence** | Recursive Intelligence |
+| **Stable Recursive Intelligence**                            | Recursive Intelligence |
 | **Resonant Physics-Native Intelligence**                     | Physics-Native AI |
 | **Non-Commutative Geometry of Intelligence**                 | Theoretical Intelligence |
-| **Beyond Pólya & Schur**                                     | **Mathematical Paper** |
+| **Beyond Pólya & Schur**                                     | Mathematical Paper |
 | **Equitable Genomic Medicine**                               | Genomics |
 | **Transformer-Based Framework for Predicting CRISPR**        | Biology / AI |
 | **OpenEV Blueprint v1.0-rc**                                 | OpenEV Blueprint |
@@ -68,13 +68,19 @@ Open knowledge. Open future.
 | **Emergent Spacetime from Quantum Fisher Information**       | Theoretical Physics |
 | **Controlled Planetary Decoherence**                         | Advanced Physics |
 | **AI-Driven Autonomous Defense for Banking Software Supply Chains** | Applied AI Security |
+| **A Conservation‑Guaranteed Hybrid Co‑Simulation Framework for Mars Habitat Life Support** | Mars Life Support |
+| **Amortized Hybrid Latent Filtering for Deformable Object Manipulation** | Robotics |
+| **CASCADING INTELLIGENCE**                                   | Extraterrestrial Settlement |
+| **The X Algorithm White Book**                               | Algorithm Research |
+| **Geopolitical Power in the Age of Artificial Intelligence** | Geopolitics & AI |
+| **Toward an Adaptive Resolution of the Blockchain Trilemma** | Blockchain |
+| **Embedded Inference, Structural Ignorance, and Testable Error Floors** | Inference Theory |
+| **Martian Environment, System Requirements, and the Bootstrap Inequality** | Mars Systems |
 | **B**                                                        | Base Systems |
-
-*(and many more specialized modules...)*
 
 ---
 
-##  Highlighted Projects
+## Highlighted Projects
 
 - **AWR‑Mars Foundry Core** — Core infrastructure for self-sustaining Mars colonies
 - **ZENITH** — Hardware-enforced AI safety
@@ -86,37 +92,36 @@ Open knowledge. Open future.
 
 ---
 
-##  Key Papers & Theoretical Works
+## Key Papers & Theoretical Works
 
 - **[Beyond Pólya & Schur: A Corrected and Extended Theory of Linear Positivity Preservers for Real Polynomials](https://github.com/ouadimaakoul4/4/blob/main/Beyond_P%C3%B3lya__Schur__A_Corrected_and_Extended_Theory_of_Linear_Positivity_Preservers_for_Real_Polynomials.pdf)**
 
 ---
 
-##  How to Use
+## How to Use
 
-This is a **living research hub**. You are encouraged to explore, fork, study, and build upon any project.
+This is a **living research hub**. Feel free to explore, fork, study, and build upon any project.
 
 All content is under the **MIT License**.
 
 ---
 
-##  Contributing
+## Contributing
 
 Contributions are highly welcome!
 
-1. Fork the repository
-2. Create a feature branch
+1. Fork the repository  
+2. Create a feature branch  
 3. Submit a Pull Request
 
 ---
 
-##  License
+## License
 
 **MIT License** .
-
 ---
 
-##  Connect
+## Connect
 
 - **X / Twitter**: [@ouadi4maakoul](https://x.com/ouadi4maakoul)
 - **GitHub**: [ouadimaakoul4](https://github.com/ouadimaakoul4)
@@ -124,3 +129,8 @@ Contributions are highly welcome!
 ---
 
 **Made with ❤️ for Humanity**
+
+
+
+If you still see a specific folder missing, just paste its **exact name** here and I’ll add it immediately! 🚀
+```
