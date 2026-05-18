@@ -1,12 +1,13 @@
+
 # 4 Humanity 
 
 **An open-source hub for Artificial General Intelligence, Advanced Robotics, Space Exploration, and Multiplanetary Civilization.**
 
-Open knowledge. Open future. 
+Open knowledge. Open future. 🚀
 
 ---
 
-## Vision
+##  Vision
 
 **"4"** stands for **For Humanity** — a massive open research vault of code, architectures, mathematical papers, theoretical works, and systems built to accelerate **safe AGI** and humanity’s transition into a **multiplanetary species**.
 
@@ -17,12 +18,12 @@ Open knowledge. Open future.
 - Cognitive Architectures & Symbolic Reasoning
 - Advanced Robotics & Bio-Robotics
 - Mars Settlement & In-Situ Resource Utilization (ISRU)
-- Space Technologies & Cislunar/Mars Infrastructure
+- Space Technologies & Cislunar Infrastructure
 - Ethical, Compassionate & Equitable Systems
 
 ---
 
-## All Projects & Folders
+##  All Projects & Folders
 
 | Project / Folder                                              | Category |
 |--------------------------------------------------------------|----------|
@@ -51,10 +52,11 @@ Open knowledge. Open future.
 | **Adaptive Capsule-Based Artificial Intelligence**           | AI Architectures |
 | **Adaptive Causal Koopman–SINDy World‑Model from Sparse Sensors** | World Modeling |
 | **Adaptive Cognitive Budgeting**                             | Cognitive Systems |
-| **Stable Recursive Intelligence**                            | Recursive Intelligence |
+| **Stable Recursive Intelligence** / **Stable_Recursive_Intelligence** | Recursive Intelligence |
 | **Resonant Physics-Native Intelligence**                     | Physics-Native AI |
 | **Non-Commutative Geometry of Intelligence**                 | Theoretical Intelligence |
 | **Beyond Pólya & Schur**                                     | Mathematical Paper |
+| **The Geometry of Confinement**                              | Mathematical Paper |
 | **Equitable Genomic Medicine**                               | Genomics |
 | **Transformer-Based Framework for Predicting CRISPR**        | Biology / AI |
 | **OpenEV Blueprint v1.0-rc**                                 | OpenEV Blueprint |
@@ -76,11 +78,15 @@ Open knowledge. Open future.
 | **Toward an Adaptive Resolution of the Blockchain Trilemma** | Blockchain |
 | **Embedded Inference, Structural Ignorance, and Testable Error Floors** | Inference Theory |
 | **Martian Environment, System Requirements, and the Bootstrap Inequality** | Mars Systems |
+| **Augmenting Human Intelligence in the AI Era**              | Human-AI Augmentation |
+| **AI-Guided Symbolic Optimization of Noisy Intermediate-Scale Quantum Circuits** | Quantum AI |
+| **Slingstone** / **OTG** / **QAC°** / **SAOA** / **MSAT_AIADN** / **DRONE-PC-SRGI-SPEC-006** | Specialized Modules |
+| **TO_OUR_GOD**                                               | Special |
 | **B**                                                        | Base Systems |
 
 ---
 
-## Highlighted Projects
+##  Highlighted Projects
 
 - **AWR‑Mars Foundry Core** — Core infrastructure for self-sustaining Mars colonies
 - **ZENITH** — Hardware-enforced AI safety
@@ -92,13 +98,14 @@ Open knowledge. Open future.
 
 ---
 
-## Key Papers & Theoretical Works
+##  Key Papers
 
 - **[Beyond Pólya & Schur: A Corrected and Extended Theory of Linear Positivity Preservers for Real Polynomials](https://github.com/ouadimaakoul4/4/blob/main/Beyond_P%C3%B3lya__Schur__A_Corrected_and_Extended_Theory_of_Linear_Positivity_Preservers_for_Real_Polynomials.pdf)**
+- **[The Geometry of Confinement](https://github.com/ouadimaakoul4/4/blob/main/The%20Geometry%20of%20Confinement.pdf)**
 
 ---
 
-## How to Use
+##  How to Use
 
 This is a **living research hub**. Feel free to explore, fork, study, and build upon any project.
 
@@ -106,7 +113,7 @@ All content is under the **MIT License**.
 
 ---
 
-## Contributing
+##  Contributing
 
 Contributions are highly welcome!
 
@@ -116,13 +123,13 @@ Contributions are highly welcome!
 
 ---
 
-## License
+##  License
 
-MIT License .
+**MIT License** .
 
 ---
 
-## Connect
+##  Connect
 
 - **X / Twitter**: [@ouadi4maakoul](https://x.com/ouadi4maakoul)
 - **GitHub**: [ouadimaakoul4](https://github.com/ouadimaakoul4)
@@ -130,5 +137,4 @@ MIT License .
 ---
 
 **Made with ❤️ for Humanity**
-
 
