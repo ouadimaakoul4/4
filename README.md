@@ -3,13 +3,13 @@
 
 **An open-source hub for Artificial General Intelligence, Advanced Robotics, Space Exploration, and Multiplanetary Civilization.**
 
-Open knowledge. Open future. 🚀
+Open knowledge. Open future. 
 
 ---
 
-##  Vision
+## 🎯 Vision
 
-**"4"** stands for **For Humanity** — a massive open research vault of code, architectures, mathematical papers, theoretical works, and systems built to accelerate **safe AGI** and humanity’s transition into a **multiplanetary species**.
+**"4"** stands for **For Humanity** — a massive open research vault containing code, architectures, mathematical papers, theoretical works, and systems designed to accelerate **safe AGI** and humanity’s transition into a **multiplanetary species**.
 
 ### Core Focus Areas
 - Artificial General Intelligence (AGI)
@@ -18,12 +18,12 @@ Open knowledge. Open future. 🚀
 - Cognitive Architectures & Symbolic Reasoning
 - Advanced Robotics & Bio-Robotics
 - Mars Settlement & In-Situ Resource Utilization (ISRU)
-- Space Technologies & Cislunar Infrastructure
+- Space Technologies & Cislunar Logistics
 - Ethical, Compassionate & Equitable Systems
 
 ---
 
-##  All Projects & Folders
+## 📁 All Projects & Folders
 
 | Project / Folder                                              | Category |
 |--------------------------------------------------------------|----------|
@@ -31,13 +31,14 @@ Open knowledge. Open future. 🚀
 | **AWR-MARS**                                                 | Mars Colonization |
 | **COSMOCAT**                                                 | Space & Cosmology |
 | **Lunar Electromagnetic Mass Driver for Cislunar Logistics** | Space Infrastructure |
+| **ACOUSTIC-TRIBOELECTRIC-ELECTROSTATIC SEPARATION OF WATER ICE FROM LUNAR REGOLITH** | Lunar Resources |
 | **GAIA Sentinel**                                            | Planetary AI |
 | **MARS _AI**                                                 | Mars AI Systems |
 | **ZENITH**                                                   | AI Safety & Verification |
 | **AGI_CODE**                                                 | AGI Core Research |
 | **CogDynamics++**                                            | Cognitive Architectures |
 | **MII** / **MII-PU** / **MII_LOGICAL_ARCHITECTUE**           | Multi-Intelligence Integration |
-| **SRI** / **sri_vc**                                         | Symbolic Reasoning Intelligence |
+| **SRI** / **Stable Recursive Intelligence**                  | Symbolic & Recursive Intelligence |
 | **SAF_AI_AGENT**                                             | Safe AI Agents |
 | **OBRU**                                                     | Open Bio-Robotics |
 | **AETHERFLOW**                                               | Intelligence Flow |
@@ -52,11 +53,11 @@ Open knowledge. Open future. 🚀
 | **Adaptive Capsule-Based Artificial Intelligence**           | AI Architectures |
 | **Adaptive Causal Koopman–SINDy World‑Model from Sparse Sensors** | World Modeling |
 | **Adaptive Cognitive Budgeting**                             | Cognitive Systems |
-| **Stable Recursive Intelligence** / **Stable_Recursive_Intelligence** | Recursive Intelligence |
 | **Resonant Physics-Native Intelligence**                     | Physics-Native AI |
 | **Non-Commutative Geometry of Intelligence**                 | Theoretical Intelligence |
 | **Beyond Pólya & Schur**                                     | Mathematical Paper |
 | **The Geometry of Confinement**                              | Mathematical Paper |
+| **The Multiplanetary Man**                                   | Visionary Paper |
 | **Equitable Genomic Medicine**                               | Genomics |
 | **Transformer-Based Framework for Predicting CRISPR**        | Biology / AI |
 | **OpenEV Blueprint v1.0-rc**                                 | OpenEV Blueprint |
@@ -73,15 +74,14 @@ Open knowledge. Open future. 🚀
 | **A Conservation‑Guaranteed Hybrid Co‑Simulation Framework for Mars Habitat Life Support** | Mars Life Support |
 | **Amortized Hybrid Latent Filtering for Deformable Object Manipulation** | Robotics |
 | **CASCADING INTELLIGENCE**                                   | Extraterrestrial Settlement |
-| **The X Algorithm White Book**                               | Algorithm Research |
-| **Geopolitical Power in the Age of Artificial Intelligence** | Geopolitics & AI |
-| **Toward an Adaptive Resolution of the Blockchain Trilemma** | Blockchain |
-| **Embedded Inference, Structural Ignorance, and Testable Error Floors** | Inference Theory |
-| **Martian Environment, System Requirements, and the Bootstrap Inequality** | Mars Systems |
+| **HUMANOGY BRAIN v5.0**                                      | Human Enhancement |
+| **COGNITIVE ENHANCEMENT PROTOCOL 2026**                      | Cognitive Enhancement |
 | **Augmenting Human Intelligence in the AI Era**              | Human-AI Augmentation |
 | **AI-Guided Symbolic Optimization of Noisy Intermediate-Scale Quantum Circuits** | Quantum AI |
-| **Slingstone** / **OTG** / **QAC°** / **SAOA** / **MSAT_AIADN** / **DRONE-PC-SRGI-SPEC-006** | Specialized Modules |
+| **Asymptotic‑Preserving Hypergraph Memory Networks**         | Advanced AI |
+| **Advanced Compact High‑Field REBCO Architectures for Precision Spectroscopy** | Physics Tech |
 | **TO_OUR_GOD**                                               | Special |
+| **Slingstone** / **OTG** / **QAC°** / **SAOA** / **MSAT_AIADN** / **DRONE-PC-SRGI-SPEC-006** | Specialized Modules |
 | **B**                                                        | Base Systems |
 
 ---
@@ -102,6 +102,7 @@ Open knowledge. Open future. 🚀
 
 - **[Beyond Pólya & Schur: A Corrected and Extended Theory of Linear Positivity Preservers for Real Polynomials](https://github.com/ouadimaakoul4/4/blob/main/Beyond_P%C3%B3lya__Schur__A_Corrected_and_Extended_Theory_of_Linear_Positivity_Preservers_for_Real_Polynomials.pdf)**
 - **[The Geometry of Confinement](https://github.com/ouadimaakoul4/4/blob/main/The%20Geometry%20of%20Confinement.pdf)**
+- **[The Multiplanetary Man](https://github.com/ouadimaakoul4/4/blob/main/The%20Multiplanetary%20Man.pdf)**
 
 ---
 
