@@ -157,7 +157,7 @@ collection of interconnected projects that span:
 
 ---
 
-## 🚀 Mars Living Systems Simulator (MLSS 4.1)
+##  Mars Living Systems Simulator (MLSS 4.1)
 
 The **Mars Living Systems Simulator (MLSS 4.1)** is a fully browser‑based,
 professional‑grade digital twin of a Martian colony, rigorously grounded in
@@ -220,7 +220,7 @@ repository.*
 
 ---
 
-## 🧪 How to Use
+##  How to Use
 
 This is a **living research hub**. Every folder contains code, papers, or
 specifications that can be explored independently.
@@ -236,7 +236,7 @@ specifications that can be explored independently.
 
 ---
 
-## 🤝 Contributing
+##  Contributing
 
 Contributions are highly welcome! Whether it's code, papers, specifications,
 or ideas — please feel free to participate.
@@ -252,10 +252,9 @@ to change.
 
 ---
 
-## 📜 License
+##  License
 
-This project is licensed under the **MIT License** — see the
-[LICENSE](LICENSE) file for details.
+This project is licensed under the **MIT License** .
 
 ---
 
@@ -263,11 +262,11 @@ This project is licensed under the **MIT License** — see the
 
 - **X / Twitter:** [@ouadi4maakoul](https://x.com/ouadi4maakoul)
 - **GitHub:** [ouadimaakoul4](https://github.com/ouadimaakoul4)
-- **LinkedIn:** [Ouadi Maakoul]((https://www.linkedin.com/in/ouadi4maakoul/))
+- **LinkedIn:** [Ouadi Maakoul](https://www.linkedin.com/in/ouadi4maakoul/)
 
 ---
 
-## 🙏 Acknowledgments
+##  Acknowledgments
 
 This work builds upon and is inspired by:
 
