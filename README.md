@@ -288,6 +288,4 @@ This work builds upon and is inspired by:
 </p>
 ```
 
----
 
-This README is ready to push. If you'd like me to tweak any section—such as adding a specific project description, adjusting the tone, or including a screenshot placeholder—just let me know.
