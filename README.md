@@ -263,7 +263,7 @@ This project is licensed under the **MIT License** — see the
 
 - **X / Twitter:** [@ouadi4maakoul](https://x.com/ouadi4maakoul)
 - **GitHub:** [ouadimaakoul4](https://github.com/ouadimaakoul4)
-- **LinkedIn:** [Ouadi Maakoul](https://www.linkedin.com/in/ouadi-maakoul/)
+- **LinkedIn:** [Ouadi Maakoul]((https://www.linkedin.com/in/ouadi4maakoul/))
 
 ---
 
