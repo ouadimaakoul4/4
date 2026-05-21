@@ -286,6 +286,6 @@ This work builds upon and is inspired by:
   <strong>Made with ❤️ for Humanity</strong><br/>
   <sub>Principal Architect & Lead Engineer: Ouadi Maakoul</sub>
 </p>
-```
+
 
 
