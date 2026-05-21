@@ -3,7 +3,7 @@
 <br />
 <div align="center">
   <a href="https://github.com/ouadimaakoul4/4">
-    <img src="https://via.placeholder.com/120/000000/FFFFFF?text=4" alt="4 Humanity Logo" width="120" height="120">
+    
   </a>
 
   <h1>4 Humanity</h1>
