@@ -2,9 +2,6 @@
 <!-- PROJECT LOGO -->
 <br />
 <div align="center">
-  <a href="https://github.com/ouadimaakoul4/4">
-    
-  </a>
 
   <h1>4 Humanity</h1>
 
