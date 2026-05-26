@@ -963,5 +963,397 @@ For numerical stability, use \( \epsilon = 0.01 \). Scaling 1/0.5 brings typical
 
 All features are computed at each inference step. The scaling factors have been chosen such that the inputs to the capsule primitives are roughly in the range [-1, 1], aiding training stability.
 
-*End of Appendices*
+# PC‑SRGI Autonomous Drone – ASCII Diagrams v4.1
+
+---
+
+## 1. SYSTEM ARCHITECTURE OVERVIEW
+
+```
+╔══════════════════════════════════════════════════════════════════════════╗
+║                    PC‑SRGI AUTONOMOUS DRONE v4.1                        ║
+╠══════════════════════════════════════════════════════════════════════════╣
+║                                                                          ║
+║   ┌──────────────────────────────────────────────────────────────────┐   ║
+║   │                HIGH‑LEVEL COMPUTE (Jetson Orin Nano 8GB)         │   ║
+║   │  ┌─────────────────┐   shared   ┌───────────────────────────┐   │   ║
+║   │  │  Rust Inference  │◄──memory──►│  Python Training / PySR   │   │   ║
+║   │  │  Engine (500 Hz) │           │  (offline only)            │   │   ║
+║   │  │  TensorRT ONNX   │           └───────────────────────────┘   │   ║
+║   │  │  CAN‑FD driver   │                                            │   ║
+║   │  │  Power monitor   │                                            │   ║
+║   │  └────────┬────────┘                                            │   ║
+║   └───────────┼──────────────────────────────────────────────────────┘   ║
+║               │ CAN‑FD (5 Mbps)                                          ║
+║   ┌───────────▼──────────────────────────────────────────────────────┐   ║
+║   │           LOW‑LEVEL FLIGHT CONTROLLER (STM32H743)                │   ║
+║   │  EKF Sensor Fusion │ Control Mixer │ Watchdog │ Safety Monitor   │   ║
+║   └──┬──────┬──────┬───┴──────────────────────────────────┬─────────┘   ║
+║      │      │      │                                       │             ║
+║   IMU/GPS  Baro  Flow                               4× ESC + Motor       ║
+║   INA226  MS5611 PMW3901                            BLHeli_32 48kHz      ║
+║                                                                          ║
+╚══════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+## 2. HARDWARE COMPUTE STACK
+
+```
+┌──────────────────────────────────────────────────────┐
+│             HARDWARE LAYERS                          │
+│                                                      │
+│  ┌────────────────────────────────────────────────┐  │
+│  │   LAYER 1 – HIGH‑LEVEL AI (5–15 W)             │  │
+│  │   NVIDIA Jetson Orin Nano 8 GB                 │  │
+│  │   1024 CUDA cores │ 32 Tensor Cores │ 40 TOPS  │  │
+│  │   INA219 power monitor (I²C)                   │  │
+│  │   Passive copper heatsink + propwash cooling   │  │
+│  └───────────────────────┬────────────────────────┘  │
+│                          │ CAN‑FD (shielded)          │
+│  ┌───────────────────────▼────────────────────────┐  │
+│  │   LAYER 2 – REAL‑TIME CONTROL (1.5 W)          │  │
+│  │   STM32H743 Cortex‑M7 @ 480 MHz                │  │
+│  │   FreeRTOS │ EKF 500 Hz │ PWM 48 kHz           │  │
+│  └──────┬──────────┬───────────┬──────────────────┘  │
+│         │ SPI      │ I²C       │ UART/SBUS           │
+│  ┌──────▼──┐  ┌────▼────┐  ┌──▼──────────────────┐  │
+│  │ SENSORS │  │SENSORS  │  │  RC / MAVLink        │  │
+│  │ICM42688 │  │ZED‑F9P  │  │  FrSky R‑XSR SBUS   │  │
+│  │PMW3901  │  │MS5611   │  │  UART 921600 baud    │  │
+│  │INA226   │  │VL53L5   │  └──────────────────────┘  │
+│  └─────────┘  └─────────┘                            │
+│                                                      │
+│  ┌────────────────────────────────────────────────┐  │
+│  │   LAYER 3 – ACTUATORS                          │  │
+│  │   4× 2306‑1807 kV motors + 7″ CF props        │  │
+│  │   32‑bit ESC (BLHeli_32) @ 48 kHz DShot       │  │
+│  └────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3. SOFTWARE ARCHITECTURE
+
+### 3a. Jetson (High‑Level, 500 Hz)
+
+```
+┌────────────────────────────────────────────────────────────┐
+│              PC‑SRGI INFERENCE ENGINE  (Rust)              │
+│                                                            │
+│  raw state/ctrl ──► [ Physical Feature Extractor ]         │
+│                              │  ξ ∈ ℝ²⁰                   │
+│                              ▼                             │
+│                   [ Transformer Encoder ]                  │
+│                    H=5 steps, L=2, d=64                    │
+│                              │  h ∈ ℝ⁶⁴                   │
+│                              ▼                             │
+│                   [ Capsule Layer  ×12 ]                   │
+│                    gates z_i, primitives φ_i               │
+│                              │  F_neural ∈ ℝ⁶              │
+│                              ▼                             │
+│         [ LieFVIN Integrator on SE(3) ]                    │
+│          conservative + neural + control                   │
+│                              │                             │
+│                    thrust / torque cmd                     │
+│                              │                             │
+│  ◄─────────── CAN‑FD (ID 0x100, 500 Hz) ─────────────────► │
+│                                                            │
+│  Thermal/power gate ──► dynamic capsule pruning            │
+│  microSD logger    ──► HDF5 flight data                    │
+└────────────────────────────────────────────────────────────┘
+```
+
+### 3b. STM32H743 (Low‑Level, FreeRTOS)
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                  FreeRTOS TASK SCHEDULE                  │
+│                                                          │
+│  Priority 5 ┤ Sensor Fusion EKF     (500 Hz)  ├──IMU    │
+│  Priority 4 ┤ CAN‑FD RX/TX          (1 kHz)   ├──Jetson │
+│  Priority 4 ┤ Watchdog Monitor      (1 kHz)   ├──IWDG   │
+│  Priority 3 ┤ Control Mixer / PWM   (500 Hz)  ├──ESCs   │
+│  Priority 3 ┤ Safety Monitor        (500 Hz)  ├──valida.│
+│  Priority 1 ┤ MAVLink Telemetry     (50 Hz)   ├──GCS    │
+│                                                          │
+│  Each task increments atomic counter every cycle.        │
+│  Watchdog task checks all counters every 1 ms.           │
+│  Failure within 5 ms → PID fallback + IWDG hold.        │
+└──────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 4. NEURAL ARCHITECTURE (PC‑SRGI)
+
+```
+  RAW INPUT  (last H=5 steps)
+  [s_t, u_t] ∈ ℝ¹⁷  ×5
+       │
+       ▼
+  ┌─────────────────────────────────┐
+  │   Physical Feature Extractor    │
+  │   ξ = [v_body, ‖ω‖, z_AGL,     │
+  │        q_dyn, T_cmd, τ, λ, …]  │
+  │   ξ ∈ ℝ²⁰  (fixed, no params)  │
+  └───────────────┬─────────────────┘
+                  │
+        ┌─────────┴──────────┐
+        │                    │
+        ▼                    ▼
+  ┌───────────────┐   ┌──────────────────────────────────────┐
+  │  Transformer  │   │          Capsule Layer  (×12)        │
+  │  Encoder      │   │                                      │
+  │  L=2, d=64    │   │  Cap  Primitive  Feature   Effect    │
+  │  4 heads      │   │  ─── ─────────  ───────   ───────── │
+  │  FFN=256      │   │   1  identity   dyn.pres  lin.drag   │
+  │  GELU         │   │   2  quadratic  dyn.pres  quad.drag  │
+  │               │   │   3  sinusoid   alt.AGL   gnd.osc.   │
+  │  context      │   │   4  gaussian   alt.AGL   gnd.effect │
+  │  h ∈ ℝ⁶⁴  ───┼──►│   5  rational   speed     sat.hi-v   │
+  └───────────────┘   │   6  sigmoid    AoA       stall      │
+                      │   7  identity   speed     body drag  │
+                      │   8  quadratic  speed     body drag² │
+                      │   9  sinusoid   ‖ω‖       torq.dist. │
+                      │  10  gaussian   ‖ω‖       torq.local │
+                      │  11  rational   adv.ratio blade stall│
+                      │  12  identity   const=1   bias       │
+                      │                                      │
+                      │  gate z_i = σ(Linear_i(h) / τ)      │
+                      │  F_i = z_i · (v_i · φ_i(w_i ξ_ki)) │
+                      └──────────────┬───────────────────────┘
+                                     │
+                                     ▼
+                          F_neural = Σ F_i  ∈ ℝ⁶
+                          (3 forces + 3 torques)
+                                     │
+                                     ▼
+                       ┌─────────────────────────┐
+                       │   LieFVIN Integrator     │
+                       │   f_cons + f_neural      │
+                       │   + f_ctrl  on SE(3)     │
+                       └─────────────────────────┘
+```
+
+---
+
+## 5. LieFVIN INTEGRATOR (One Time Step h)
+
+```
+  INPUT:  (x_n, R_n, p_n, Π_n),  control u,  step h
+  ─────────────────────────────────────────────────────────
+
+  STEP 1 ─ Forces at t_n
+  ┌──────────────────────────────────────────────────────┐
+  │  F_total  = mgê_z + F_neural(s_n,u) + R_n F_thrust  │
+  │  τ_total  = −ω_n × Iω_n + τ(u) + τ_neural(s_n,u)   │
+  └───────────────────────────┬──────────────────────────┘
+                              │
+  STEP 2 ─ Half‑step momenta (leapfrog kick)
+  ┌──────────────────────────────────────────────────────┐
+  │  p_{n+½}  = p_n   + (h/2) F_total                   │
+  │  Π_{n+½}  = Π_n  + (h/2) τ_total                   │
+  └───────────────────────────┬──────────────────────────┘
+                              │
+  STEP 3 ─ Position / rotation update (drift)
+  ┌──────────────────────────────────────────────────────┐
+  │  v_{n+½}     = p_{n+½} / m                          │
+  │  ω_{n+½}     = I⁻¹ Π_{n+½}                         │
+  │  x_{n+1}     = x_n + h v_{n+½}                      │
+  │  R_{n+1}     = R_n · cay(h ω̂_{n+½})                │
+  │  x_{n+½}     = x_n + (h/2) v_{n+½}   (midpoint)    │
+  │  R_{n+½}     = R_n · cay((h/2) ω̂_{n+½})           │
+  └───────────────────────────┬──────────────────────────┘
+                              │
+  STEP 4 ─ Forces at midpoint s_{n+½}
+  ┌──────────────────────────────────────────────────────┐
+  │  F′_total = mgê_z + F_neural(s_{n+½},u)             │
+  │             + R_{n+½} F_thrust                       │
+  │  τ′_total = −ω_{n+½}×Iω_{n+½} + τ(u)               │
+  │             + τ_neural(s_{n+½},u)                    │
+  └───────────────────────────┬──────────────────────────┘
+                              │
+  STEP 5 ─ Full‑step momenta (second kick)
+  ┌──────────────────────────────────────────────────────┐
+  │  p_{n+1}  = p_{n+½}  + (h/2) F′_total              │
+  │  Π_{n+1}  = Π_{n+½} + (h/2) τ′_total              │
+  └──────────────────────────────────────────────────────┘
+
+  OUTPUT: (x_{n+1}, R_{n+1}, p_{n+1}, Π_{n+1})
+  ─────────────────────────────────────────────────────────
+  Cayley map:  cay(ψ̂) = (I − ½ψ̂)⁻¹(I + ½ψ̂)  ∈ SO(3)
+  Symplectic when F_neural = 0;  2nd‑order accurate otherwise.
+```
+
+---
+
+## 6. CAN‑FD COMMUNICATION PROTOCOL
+
+```
+  JETSON ──────────────────────────────────────── STM32
+    │                                               │
+    │── ID 0x100  (500 Hz)  Control Command ───────►│
+    │   [0‑3]  timestamp_us  uint32                 │
+    │   [4]    thrust        uint8  (0‑255 → 0‑1)  │
+    │   [5‑6]  torque_x      int16  (×1000 N·m)    │
+    │   [7‑8]  torque_y      int16                  │
+    │   [9‑10] torque_z      int16                  │
+    │   [11‑63] reserved                            │
+    │                                               │
+    │── ID 0x301  (1 kHz)   Heartbeat ─────────────►│
+    │   [0‑3]  timestamp_us                         │
+    │   [4]    status byte  (PC‑SRGI|therm|batt)    │
+    │                                               │
+    │◄─ ID 0x000  (10 Hz)   Time Sync ──────────────│
+    │   64‑bit µs hardware timestamp                │
+    │   Jetson corrects clock via linear regression │
+    │                                               │
+    │◄─ ID 0x200  position  (float32 x,y,z)─────────│
+    │◄─ ID 0x201  velocity  (float32 vx,vy,vz)──────│
+    │◄─ ID 0x202  attitude  (quaternion w,x,y,z) ───│
+    │◄─ ID 0x203  ang.vel.  (float32 wx,wy,wz) ─────│
+    │◄─ ID 0x204  capsule   (gates[12] + resid[6])──│
+    │                                               │
+    │  All frames: CAN‑FD 64‑byte payload           │
+    │  Bus: 1 Mbps arbitration / 5 Mbps data phase  │
+```
+
+---
+
+## 7. SAFETY LAYER STACK
+
+```
+  INCOMING NEURAL COMMAND
+          │
+          ▼
+  ┌───────────────────────────────────────────────────────┐
+  │  LAYER 1 · Physical Clamping          < 10 µs         │
+  │  PWM saturation in mixer;                             │
+  │  thrust ∈ [0, T_max], torque ∈ [±2 N·m]             │
+  └────────────────────────────┬──────────────────────────┘
+                               │
+  ┌────────────────────────────▼──────────────────────────┐
+  │  LAYER 2 · Command Validation         < 100 µs        │
+  │  Rate limits: thrust rate ≤ 50 N/s                    │
+  │  3 consecutive failures → discard + PID fallback      │
+  └────────────────────────────┬──────────────────────────┘
+                               │
+  ┌────────────────────────────▼──────────────────────────┐
+  │  LAYER 3 · Software Watchdog           < 1 ms         │
+  │  Per‑task atomic counters checked @ 1 kHz             │
+  │  Stale counter within 5 ms → PID fallback             │
+  └────────────────────────────┬──────────────────────────┘
+                               │
+  ┌────────────────────────────▼──────────────────────────┐
+  │  LAYER 4 · Hardware IWDG               < 10 ms        │
+  │  32 kHz independent watchdog, 100 ms timeout          │
+  │  Refreshed only if all tasks healthy                  │
+  │  Triggers: full STM32 reset                           │
+  └────────────────────────────┬──────────────────────────┘
+                               │
+  ┌────────────────────────────▼──────────────────────────┐
+  │  LAYER 5 · Manual RC Override          < 5 ms         │
+  │  FrSky SBUS → direct motor passthrough                │
+  │  Signal loss > 500 ms → immediate disarm              │
+  └───────────────────────────────────────────────────────┘
+        +
+  ┌───────────────────────────────────────────────────────┐
+  │  ENERGY DRIFT MONITOR (100 Hz)                        │
+  │  ΔE_cons > 0.1 J / 1 s (unexplained) → fallback      │
+  └───────────────────────────────────────────────────────┘
+```
+
+---
+
+## 8. TRAINING LOSS FUNCTION
+
+```
+  ℒ  =  ℒ_pred  +  λ₁ ℒ_physics  +  λ₂ E_comp  +  λ₃ ℒ_spatial  +  λ₄ ℒ_temporal
+           │             │                │               │                │
+           │             │                │               │                │
+  K=20 step        total accel       capsule gate     Lipschitz        temporal
+  multi‑step       must match        sparsity         bound on         rate of
+  rollout MSE      observed ṡ        penalty          F_neural         change
+
+  λ₁=1.0  λ₂=0.01  λ₃=0.1  λ₄=0.1
+  AdamW  lr=1e‑4  batch=64  200k steps  grad‑clip=1.0
+  Temperature τ: 1.0 ──linear──► 0.1  over 100k steps
+```
+
+---
+
+## 9. SIM‑TO‑REAL TRANSFER PIPELINE
+
+```
+  ┌─────────────────────────────────────────────────────────┐
+  │  PHASE 1 · Simulation Training (Isaac Sim)              │
+  │  Domain randomization: mass ±20%, inertia ±30%,        │
+  │  drag 0.2–0.6, wind 0–5 m/s, sensor noise ×1–3        │
+  └──────────────────────────┬──────────────────────────────┘
+                             │  export ONNX → TensorRT
+                             ▼
+  ┌─────────────────────────────────────────────────────────┐
+  │  PHASE 2 · System‑ID Flight (PID controller)           │
+  │  ≥5 min flight; log state, control, EKF velocity       │
+  │  Compute true residual:                                 │
+  │  F_res = m v̇_est − f_cons(s) − f_ctrl(u)              │
+  └──────────────────────────┬──────────────────────────────┘
+                             │
+                             ▼
+  ┌─────────────────────────────────────────────────────────┐
+  │  PHASE 3 · Real‑World Fine‑Tuning (offline)            │
+  │  Freeze: transformer + primitive params                 │
+  │  Train:  gate logits + basis vectors only              │
+  │  Stop when:  force RMSE < 0.5 N                        │
+  │              torque RMSE < 0.05 N·m  (on held‑out)     │
+  └──────────────────────────┬──────────────────────────────┘
+                             │
+                             ▼
+  ┌─────────────────────────────────────────────────────────┐
+  │  PHASE 4 · Activation + Verification Flight            │
+  │  PC‑SRGI gain = 1.0;  single stability check flight    │
+  └─────────────────────────────────────────────────────────┘
+                             │
+                             ▼  (post‑flight, offline)
+  ┌─────────────────────────────────────────────────────────┐
+  │  PHASE 5 · Symbolic Extraction (PySR)                  │
+  │  Active capsule outputs → sparse regression            │
+  │  Accept if R² > 0.9, physically plausible, AIC better  │
+  │  Laws stored; candidates promoted to future hardcode   │
+  └─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 10. POWER & THERMAL BUDGET
+
+```
+  Battery: 6S LiPo 2200 mAh  │  22.2 V × 2.2 Ah = 48.8 Wh
+  Usable (80% DoD):  39 Wh
+  ──────────────────────────────────────────────────────
+  Consumer          Load (W)   Mode
+  ─────────────     ────────   ──────────────────────────
+  4× Motor+ESC        250      hover thrust ~13.5 N
+  Jetson Orin Nano      5      AI inference (5 W cap)
+  STM32 + sensors       2      always on
+                    ──────
+  Total hover         257 W   → flight time ≈ 9.1 min
+  Total cruise        100 W   → flight time ≈ 23 min
+  ──────────────────────────────────────────────────────
+  Thermal:
+  Heatsink R_th ≈ 3.5 °C/W  │  T_j = 40 + 5×3.5 = 57.5 °C
+  Throttle point: 80 °C      │  headroom: 22.5 °C  ✓
+
+  Dynamic gating: α = min(1, (80−T_j)/20)
+  Loop freq  =  500·α Hz  (floor 250 Hz)
+  Active capsules  =  ⌈α × 12⌉  (largest gates kept)
+```
+
+---
+
+*Document ID: DRONE-PC-SRGI-SPEC-007 / APPX-003 — v4.1 Final*
+
 
