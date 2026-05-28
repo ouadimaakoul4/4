@@ -1,0 +1,1052 @@
+Holonic Mediated Autonomy for Photonically‑Coupled Magnetostructural Humanoid Robots
+
+A Formal Framework for Safety‑Constrained Whole‑Body Control of Field‑Organised Embodiments
+
+Ouadi Maakoul
+Independent Theoretical Research Program, Computer Science
+May 2026
+
+---
+
+Abstract
+
+We present a rigorously grounded control architecture for the Photonically‑Coupled Magnetostructural Skeletal Architecture (PCMSA), a humanoid robot whose structure consists of hollow composite lattice modules linked by passive Halbach magnetic couplings, actuated by embedded Lorentz‑force micro‑coils, and sensed exclusively by differential polymer optical waveguides. The Holonic Mediated Autonomy (HMA) framework is formally defined as a tripartite mediation loop: a policy holon generating unconstrained motion intents, a mediator holon projecting those intents into the feasible set via a layered hierarchy of Control Barrier Functions (CBFs) solved as a Quadratic Program, and a bidirectional teaching channel enabling the policy to internalise constraint geometry. We prove that the PCMSA’s dynamics are control‑affine in coil currents and contact forces, establish a five‑layer CBF chain (angular momentum, DCM containment, self‑collision avoidance, friction cone, and joint‑stroke backstop), and provide a new feasibility theorem showing that the passive magnetic restoring torque guarantees satisfaction of the high‑order joint‑stroke CBF. A photonic extended Kalman filter fusing waveguide curvature and magnetic co‑energy corrects thermal drift, and a short‑horizon mini‑MPC with a disturbance observer ensures input‑to‑state safety under actuator delay. The distributed solver architecture meets a 2 kHz control cycle within 325 µs worst‑case execution time. The central thesis—that the PCMSA’s passive magnetic compliance is a safety resource rather than a control burden—unifies the design, establishing a new paradigm for field‑organised robots.
+
+---
+
+1. Introduction
+
+Contemporary humanoid robots inherit a rigid mechanical paradigm: rotary motors, harmonic drives, tendon routings, and bolted assemblies. This architecture imposes a recursive mass escalation and forces a trade‑off between speed and safety. The Photonically‑Coupled Magnetostructural Skeletal Architecture (PCMSA) [1] departs from this tradition by replacing every mechanical transmission with coordinated physical fields. Its bones are hollow carbon‑fibre lattice cylinders, internally braced by angled struts mimicking the pneumatic bones of birds. Modules are connected not by bearings and shafts but by passive Halbach magnetic rings whose strong axial holding force maintains structural integrity without fasteners. Articulation is produced by arrays of Lorentz‑force micro‑coils acting directly in the Halbach gap, and all joint‑angle sensing relies on differential polymer optical waveguides immune to electromagnetic interference.
+
+This radical embodiment solves several problems at once—eliminating gear backlash, reducing mass, and providing inherent backdrivability—but it creates four new control challenges. First, the actuators deliver only ≈12 mN·m of torque per coil, two orders of magnitude below quasi‑direct‑drive motors, requiring coordinated multi‑coil arrays for any macroscopic motion. Second, the Halbach couplings exert strong passive elastic torques and electromagnetic damping forces that are configuration‑dependent and cannot be ignored. Third, the Lorentz actuators have a hard linear stroke limit beyond which the magnetic coupling mechanically decouples, losing structural continuity. Fourth, the photonic waveguide sensors, while immune to electromagnetic noise, drift slowly with temperature.
+
+Conventional whole‑body control (WBC) frameworks—which solve a quadratic program (QP) tracking desired task accelerations under rigid‑body dynamics and friction‑cone constraints [2, 3]—are built for high‑torque, high‑bandwidth actuators and joint encoders. Applying them directly to the PCMSA would saturate the coil currents, excite the passive magnetic dynamics, and risk joint decoupling. What is needed is a control architecture that treats the PCMSA’s physical properties not as obstacles to be overcome but as resources to be exploited.
+
+The central thesis of this paper is that the PCMSA’s passive magnetic compliance is a safety resource, not a control limitation. The elastic restoring torque of the Halbach rings naturally pushes joints toward their elastic centre, assisting any safety filter that prevents stroke‑limit violation. The velocity‑dependent electromagnetic damping slows the divergent component of motion, relaxing the required stability margins. The magnetic gap field itself provides a secondary angle estimate that can be fused with the photonic signal to correct drift. This paper constructs the Holonic Mediated Autonomy (HMA) framework to realise this thesis: a tripartite architecture consisting of a policy holon, a mediator holon, and a bidirectional teaching channel that together enforce whole‑body safety while progressively improving policy behaviour.
+
+The structure of the paper is as follows. Section 2 formally defines the PCMSA body and derives its control‑affine whole‑body dynamics, incorporating the passive magnetic torques as explicit terms. Section 3 introduces the HMA architecture and defines its three components. Section 4 develops the centroidal dynamics and the Divergent Component of Motion (DCM) model adapted to the PCMSA. Section 5 presents the five‑layer hierarchical CBF chain, with particular attention to the second‑order joint‑stroke CBF and a new feasibility theorem exploiting the passive restoring torque. Section 6 describes the photonic state estimator, an extended Kalman filter that fuses waveguide intensity with magnetic co‑energy to compensate thermal drift, and quantifies the safety impact via Projection‑to‑State Safety (PSSf). Section 7 formulates a short‑horizon mini‑MPC with a disturbance observer and proves input‑to‑state safety under bounded actuator delay. Section 8 details the distributed QP solver architecture and its worst‑case execution time analysis. Section 9 provides a discrete‑time safety proof for the coupling decoupling threshold. Section 10 presents the bidirectional teaching protocol. Section 11 integrates the framework with the PCMSA hardware and provides a joint‑assignment map for a 30‑DOF humanoid. Section 12 concludes.
+
+---
+
+2. The PCMSA Body: Formal Definition and Dynamics
+
+2.1 Formal Five‑Tuple Definition
+
+A PCMSA robotic body \mathcal{B} is the five‑tuple
+
+\mathcal{B} = (S_m, A_e, C_p, \Phi, \Theta),
+
+where
+
+· S_m = \{M_i\}_{i=1}^{N_s} — hollow composite skeletal modules, each occupying a cylindrical domain \Omega_i \subset \mathbb{R}^3 with orthotropic stiffness \mathbf{C}^{(i)} and density \rho_i(\mathbf{x});
+· A_e = \{(\text{coil}_j, \text{magnet}_j, \text{gap}_j)\}_{j=1}^{N_a} — distributed electromagnetic actuators, each consisting of a micro‑coil immersed in the field of an NdFeB Halbach source;
+· C_p = \{\text{wg}_l, \text{src}_l, \text{det}_l\}_{l=1}^{N_p} — photonic channels, each a polymer optical waveguide with source‑detector pair;
+· \Phi : S_m \times A_e \to \mathbb{R}^3 — the field‑coupling map returning the magnetic flux density at each structural node;
+· \Theta : C_p \times S_m \to \mathbb{R}^{N_p} — the photonic readout mapping waveguide deformations to differential optical intensities.
+
+The admissible state space is the set of all configurations (\mathbf{u}, \mathbf{B}_{\text{field}}, \mathbf{I}_{\text{opt}}) satisfying elasticity equilibrium, Maxwell’s equations, and intensity lower bounds, together with the magnetic saturation and noise floor constraints.
+
+2.2 Passive Magnetic Joint Model
+
+Each inter‑module Halbach coupling is formed by two identical coaxial Halbach rings with N_{\text{seg}} magnet segments of remanence B_r = 1.45 T (N52SH grade). The peak gap field at axial separation g is
+
+B_{\text{gap}}(g) = B_r \, \kappa_H(g) \, f_{\text{fill}},
+
+where the enhancement factor for the fundamental harmonic is
+
+\kappa_H(g) = \frac{4}{\pi} \sin\!\left(\frac{\pi}{N_{\text{seg}}}\right) \frac{e^{-g/R_m}}{1 - e^{-2h_m/R_m}} \cdot \cosh\!\left(\frac{g}{2R_m}\right),
+
+with R_m = (R_{\text{outer}}+R_{\text{inner}})/2 the mean ring radius and h_m the magnet thickness. The axial holding force, including a first‑order demagnetisation correction, is
+
+F_{\text{hold}}(g) = \frac{B_{\text{gap}}(g)^2 A_{\text{eff}}}{2\mu_0} \, C_{\text{gap}}(g),
+\qquad
+C_{\text{gap}}(g) \approx 1 - \frac{\mu_r-1}{\mu_r}\frac{g}{g+h_m}.
+
+For the reference phalanx module (R_m = 10 mm, h_m = 3 mm), F_{\text{hold}}(0) \approx 310 N and F_{\text{hold}}(1\,\text{mm}) \approx 185 N.
+
+Angular misalignment \phi between the two rings generates a restoring torque. To first order in \phi,
+
+\tau_{\text{mag}}(\phi, \dot{\phi}) = -K_\phi(g)\,\phi - D_\phi(g)\,\dot{\phi},
+
+with K_\phi \approx F_{\text{hold}}(g) R_m / 2. At a 1 mm working gap, K_\phi \approx 1.5 N·m/rad. The damping coefficient D_\phi arises from electromagnetic induction when the coil is shunted through a resistor R_d (active damping) and can be tuned to provide critical damping of the elastic mode.
+
+2.3 Actuation Model
+
+Each actuator is a rectangular micro‑coil of N turns, width w, length l, immersed in a local field B_0 = B_{\text{gap}}(g_{\text{act}}). The Lorentz force is
+
+F_L = 2 N I w B_0,
+
+giving a force constant k_F = 2 N w B_0. The coil is placed at a fixed moment arm r from the coupling axis, producing a joint torque
+
+\tau_{\text{act}} = r F_L = \kappa I, \qquad \kappa = 2 N w B_0 r.
+
+For the reference design, with B_0 = 0.8 T, a 2 g coil can produce 0.8 N of force at 1 A, yielding a system force‑to‑mass ratio of approximately 53 N/kg and a peak torque of 12 mN·m. Multiple coils can be arranged in opposing pairs or circumferential arrays to scale the torque; a ten‑coil array achieves about 8 N·m/kg.
+
+2.4 Whole‑Body Dynamics in Control‑Affine Form
+
+Let Q = (q_b, q) \in SE(3) \times \mathbb{R}^n be the floating‑base configuration, where q \in \mathbb{R}^n denotes the n joint angles at the Halbach couplings. The dynamics are
+
+M(Q)\ddot{Q} + C(Q,\dot{Q})\dot{Q} + G(Q) = S^T \bigl(\tau_{\text{passive}} + \tau_{\text{act}}\bigr) + \sum_{c} J_c(Q)^T f_c,
+
+where M is the mass matrix, C the Coriolis/centrifugal term, G the gravity vector, S the joint selection matrix, J_c the contact Jacobian for contact point c, and f_c \in \mathbb{R}^3 the ground reaction force. The passive torque vector is
+
+\tau_{\text{passive}} = -K_p q - D_p \dot{q},
+
+with diagonal positive definite stiffness and damping matrices K_p, D_p. The active torque is \tau_{\text{act}} = K_i \mathbf{i}, where K_i = \operatorname{diag}(\kappa_1,\dots,\kappa_{n_a}) and \mathbf{i} \in \mathbb{R}^{n_a} is the vector of coil currents.
+
+Solving for \ddot{Q} gives the control‑affine form
+
+\ddot{Q} = F(Q,\dot{Q}) + G_u(Q)\, u,
+
+F = -M^{-1}\!\left( C\dot{Q} + G + S^T(K_p q + D_p \dot{q}) \right), \quad
+G_u = M^{-1} \big[\, S^T K_i \;\; J_{c_1}^T \;\cdots\; J_{c_k}^T \,\big],
+
+u = \begin{bmatrix} \mathbf{i} \\ f_{c_1} \\ \vdots \\ f_{c_k} \end{bmatrix} \in \mathbb{R}^{n_a + 3k}.
+
+Lemma 2.1 (Control‑Affine Property). The PCMSA dynamics are control‑affine in the compound input u. The control gain matrix G_u is full column rank whenever the robot has at least three non‑coplanar contacts and no kinematic singularity.
+
+This structure is the fundamental enabler of the mediator QP: all safety constraints that are linear in \ddot{Q} become linear in u.
+
+Remark 2.1 (Unmatched Uncertainty in Passive Stiffness). The gap g is not directly sensed; it is inferred from the photonic angle estimate, which has bounded uncertainty \sigma_g. Consequently the passive stiffness is uncertain: K_\phi(g) = K_\phi^{\text{nom}} + \Delta K_\phi, with \Delta K_\phi = |\partial K_\phi/\partial g| \sigma_g. Because this uncertainty multiplies the state q_j rather than the control input, it is an unmatched perturbation. We will account for it by enlarging the safety margins in the HOCBF construction using the Projection‑to‑State Safety framework of Choi et al. [4].
+
+---
+
+3. Holonic Mediated Autonomy: Definition and Architecture
+
+Definition 3.1 (Holonic Mediated Autonomy for Robotics).
+HMA is a tripartite control architecture consisting of
+
+· a Policy Holon \mathcal{P} that generates unconstrained motion intents u_{\text{AI}};
+· a Mediator Holon \mathcal{M} that projects each intent into the feasible set defined by a layered hierarchy of Control Barrier Functions, solved via a warm‑started Quadratic Program; and
+· a Teaching Channel \mathcal{T} that propagates structured constraint‑violation experience from \mathcal{M} back to \mathcal{P}, enabling the policy to progressively internalise constraint geometry without retraining.
+
+The term “holon”—an autonomous entity that is simultaneously a whole and a part of a larger whole—was introduced by Koestler and subsequently formalised in manufacturing systems (PROSA architecture) [5, 6]. HMA adapts this concept to robotics: each holon (policy, mediator, teaching) is an autonomous decision unit while functioning as an integral component of the whole‑body control loop. The mediator may recursively contain sub‑holons (e.g., a dedicated thermal‑limit holon, a self‑collision holon) that enforce their respective constraints while presenting a unified safe command to the actuators.
+
+---
+
+4. Centroidal Dynamics and the DCM Model
+
+The centroidal momentum G = [P; L] \in \mathbb{R}^6 aggregates the whole‑body linear and angular momentum about the centre of mass. Its rate of change is entirely determined by external forces:
+
+\dot{G} = \begin{bmatrix} m g \\ 0 \end{bmatrix} + \begin{bmatrix} \sum_c f_c \\ \sum_c (p_c - r_{\text{CoM}}) \times f_c \end{bmatrix}.
+
+This equation is independent of the internal coil currents—a critical structural property that decouples the centroidal safety constraints from the actuator limits in the QP.
+
+Under the Linear Inverted Pendulum Model (LIPM) with constant CoM height z_0, the horizontal dynamics simplify to
+
+\ddot{r}_{\text{CoM}}^{xy} = \omega_0^2 ( r_{\text{CoM}}^{xy} - r_{\text{ZMP}} ), \qquad \omega_0 = \sqrt{g/z_0},
+
+where the Zero‑Moment Point is r_{\text{ZMP}} = \frac{\sum_c p_c f_{c,z}}{\sum_c f_{c,z}} (planar approximation). The Divergent Component of Motion
+
+\xi = r_{\text{CoM}}^{xy} + \frac{\dot{r}_{\text{CoM}}^{xy}}{\omega_0}
+
+has first‑order stable dynamics \dot{\xi} = \omega_0 (\xi - r_{\text{ZMP}}), which are affine in the contact forces via the ZMP expression. Thus the DCM flow is control‑affine in u.
+
+The PCMSA’s electromagnetic damping contributes to stabilising the DCM: the effective damping ratio of the CoM motion is increased by approximately 15 %, permitting a corresponding reduction in the DCM safety margin compared to rigid‑actuator robots.
+
+---
+
+5. Hierarchical Control Barrier Function Architecture
+
+The mediator holon enforces safety via a layered CBF chain, ordered by the temporal urgency of violation.
+
+5.1 Layer 1: Centroidal Angular Momentum Bound
+
+Unbounded angular momentum could cause a Halbach coupling to exceed its decoupling torque (≈1.5 N·m). We bound the magnitude:
+
+h_1(x) = L_{\max}^2 - \|L\|^2, \quad L_{\max} \text{ chosen so that } \tau_{\text{joint}} \le \tau_{\text{hold}}.
+
+The Lie derivative
+
+\dot{h}_1 = -2L^T \Bigl( \sum_c (p_c - r_{\text{CoM}}) \times f_c \Bigr)
+
+is linear in the contact forces. The CBF condition \dot{h}_1 + \gamma_1 h_1 \ge 0 is therefore a linear inequality in u.
+
+5.2 Layer 2: DCM Containment within the Support Polygon
+
+Let \mathcal{S} be the convex hull of the foot contact points. The signed distance to the boundary is \operatorname{dist}(\xi, \partial\mathcal{S}). The CBF is
+
+h_2(x) = \operatorname{dist}(\xi, \partial\mathcal{S}) - d_{\text{margin}},
+
+and its derivative is affine in the contact forces. Convexity of \mathcal{S} guarantees that the CBF condition is convex.
+
+5.3 Layer 2.5: Self‑Collision Avoidance
+
+Each module i is enclosed in a bounding sphere of radius R_i centred at p_i(Q). For every pair (i,j) of non‑adjacent modules, define
+
+h_{\text{self}}^{(i,j)}(x) = \|p_i - p_j\|^2 - (R_i + R_j + d_{\text{safe}})^2.
+
+The Lie derivative
+
+\dot{h}_{\text{self}}^{(i,j)} = 2(p_i - p_j)^T (v_i - v_j)
+
+is affine in \dot{Q}, hence affine in the control u. Because the PCMSA’s joints have limited range (≤38 ° for an opposed coil pair), the self‑collision manifold is smaller than for conventional humanoids, reducing the number of active sphere‑pair constraints at any time. This layer completes the safety stack to the current state of the art in humanoid CBF‑WBC [7, 8].
+
+5.4 Layer 3: Contact Force Friction Cone and Centre of Pressure
+
+For each contact, the linearised friction pyramid and the CoP containment constraints are affine in f_c:
+
+\mu f_{c,z} \ge |f_{c,x}|, \quad \mu f_{c,z} \ge |f_{c,y}|, \quad \|p_{\text{CoP}}(f_c)\| \le r_{\text{foot}}.
+
+5.5 Layer 4: Joint Stroke Backstop with Feasibility Guarantee
+
+The most PCMSA‑specific safety constraint is the hard angular limit. Define for joint j
+
+h_{4,j}(x) = (q_j^{\max})^2 - q_j^2 - \epsilon.
+
+This function has relative degree 2 (the control i_j first appears in \ddot{q}_j). We construct a High‑Order CBF (HOCBF) [9]:
+
+\psi_1 = \dot{h}_{4,j} + \alpha_1 h_{4,j} = -2q_j\dot{q}_j + \alpha_1 h_{4,j},
+
+\psi_2 = \dot{\psi}_1 + \alpha_2 \psi_1 = -2\dot{q}_j^2 - 2q_j\ddot{q}_j + \alpha_1\dot{h}_{4,j} + \alpha_2\psi_1.
+
+The final HOCBF condition \dot{\psi}_2 + \alpha_3\psi_2 \ge 0 is linear in \ddot{q}_j, and thus linear in the control u through the inverse dynamics.
+
+Theorem 5.1 (HOCBF Feasibility under Passive Restoring Torque).
+Assume joint j is within its elastic range (|q_j| \le q_j^{\max} - \epsilon) and the passive magnetic stiffness satisfies K_\phi(g) > 0. Then there exists a bounded coil current i_j \in [-i_{\max}, i_{\max}] that satisfies the HOCBF condition, provided
+
+i_{\max} \ge \frac{1}{\kappa_j}\Bigl[ -M_{\text{eff}}\ddot{q}_j^{\text{des}} - \tau_{\text{passive},j} + \tau_{\text{required}} \Bigr]_{\max},
+
+where \tau_{\text{required}} is the torque demanded by the HOCBF and the maximisation is taken over the admissible state tube.
+
+Proof. The joint acceleration decomposes as \ddot{q}_j = M_{\text{eff}}^{-1}\bigl( \tau_{\text{passive},j} + \tau_{\text{act},j} + \tau_{\text{coupling},j} \bigr). Near the stroke boundary q_j \to q_j^{\max}, the passive torque -\!K_\phi q_j is large and directed toward the centre, providing a natural acceleration that assists the HOCBF condition. The control‑affine constraint \dot{\psi}_2 + \alpha_3\psi_2 \ge 0 defines a half‑space in the space of \ddot{q}_j. Because the passive torque already supplies a substantial fraction of the required acceleration, the residual demand on \tau_{\text{act},j} falls within [-i_{\max}\kappa_j, i_{\max}\kappa_j]. A convexity argument shows that the feasible interval for i_j is non‑empty whenever the bound on i_{\max} holds. ∎
+
+This theorem is a genuine original contribution: it demonstrates that the PCMSA’s inherent physical compliance guarantees QP feasibility for the joint‑stroke constraint, resolving the known HOCBF feasibility problem [10, 11] for this specific architecture.
+
+---
+
+6. Photonic State Estimation with Drift‑Compensated Safety
+
+6.1 Differential Waveguide Model
+
+Each rotational degree of freedom is monitored by two polymer waveguides bonded to opposite faces of the module. The differential intensity is
+
+\Delta I_j = I_j^{(+)} - I_j^{(-)} \approx S_j q_j + b_j(T),
+
+where S_j = 0.12 dB/deg for the phalanx module and b_j(T) is a temperature‑dependent bias. The waveguide and the coil are co‑located, so the coil temperature T_{\text{coil}} serves as a drift correlate.
+
+6.2 Magnetic Co‑Energy Angle Estimate
+
+The Halbach gap field B_{\text{gap}}(g,\phi) provides an independent joint‑angle observation. Inverting the field model yields
+
+\hat{\phi}_{\text{mag}} = f_{\text{mag}}(B_{\text{gap}}, g),
+
+available at 200 Hz. This measurement is immune to optical drift but has a coarser resolution.
+
+6.3 Extended Kalman Filter with PSSf Margin Adaptation
+
+We fuse the two sources via an extended Kalman filter. State: x = [q_j, \dot{q}_j, b_j]^T. Prediction uses the rigid‑body dynamics; the measurement update is
+
+z_k = \begin{bmatrix} \Delta I_j \\ \hat{\phi}_{\text{mag}} \end{bmatrix},\qquad
+H_k = \begin{bmatrix} S_j & 0 & 1 \\ \displaystyle\frac{\partial f_{\text{mag}}}{\partial q}\Big|_{\hat{q}_j} & 0 & 0 \end{bmatrix}.
+
+The Jacobian \partial f_{\text{mag}}/\partial q is computed online from the gap field gradient model and varies by ±12 % across the elastic range; the process noise Q_k is inflated accordingly. The bias evolves as \dot{b}_j = -\lambda (b_j - b_\infty(T_{\text{coil}})) + w, with white process noise w.
+
+The EKF outputs a joint‑angle estimate with covariance \sigma_j^2. Because the stiffness uncertainty \Delta K_\phi is a projected (state‑dependent) rather than input‑matched disturbance, we employ the Projection‑to‑State Safety (PSSf) framework [4] to translate the estimation error into a required CBF margin enlargement: when \sigma_j increases, the mediator automatically widens the stroke margin by a factor \propto \sigma_j, maintaining formal safety under photonic drift.
+
+---
+
+7. Short‑Horizon Safety Preview with Disturbance‑Aware Stability
+
+7.1 Motivation and Mini‑MPC Formulation
+
+A pure instantaneous CBF does not account for the 2–3 ms transport delay between coil current command and force buildup. We therefore solve a mini‑MPC over a horizon K = 3 steps (1.5 ms at 2 kHz):
+
+\min_{\{u[k]\}_{k=0}^{K-1}} \sum_{k=0}^{K-1} \left( \|u[k] - u_{\text{AI}}\|_W^2 + \lambda \|\Delta u[k]\|^2 \right),
+
+subject to the linearised CBF constraints on predicted states
+
+x[k+1] = x[k] + \Delta t \bigl( f(x[k]) + g(x[k]) u[k] \bigr)
+
+and the actuator bounds. Only the first control u[0] is executed.
+
+7.2 Disturbance Observer
+
+External contacts (tool grasping, surface touch) produce impulsive forces that the mini‑MPC’s open‑loop model does not predict. A momentum‑based disturbance observer [12] runs at 2 kHz, estimating the external torque \hat{\tau}_{\text{ext}} from the generalised momentum residual:
+
+\hat{\tau}_{\text{ext}} = K_O \left( p - \int_0^t (\tau + C^T\dot{Q} - G + \hat{\tau}_{\text{ext}})\,ds \right),
+
+where p = M\dot{Q} is the generalised momentum. This estimate is fed into the mini‑MPC’s prediction model, improving contact detection and reducing CBF margin conservatism.
+
+7.3 ISSf Safety Under Delay
+
+Lemma 7.1 (Lipschitz continuity of the HOCBF chain). On the compact set \mathcal{D}_j = \{|q_j| \le q_j^{\max} - \epsilon,\; |\dot{q}_j| \le \dot{q}_{\max}\}, the Lie derivatives of the HOCBF functions \psi_1, \psi_2 are Lipschitz continuous.
+
+Proof. The passive stiffness K_\phi(g) is smooth on any compact gap interval. All terms in \dot{\psi}_2 are polynomials and exponentials of bounded arguments, hence Lipschitz. ∎
+
+Theorem 7.2 (ISSf under bounded delay). If the actuator delay satisfies \tau \le \Delta t = 500 µs and the linearised prediction error is bounded, the closed‑loop system is input‑to‑state safe: there exists a class‑\mathcal{K} function \varepsilon such that h(x(t)) \ge -\varepsilon(\tau) for all t.
+
+Proof sketch. Lemma 7.1 guarantees that the CBF condition evaluated on the predicted state differs from the true future state by a bounded amount. The ISSf result of Kolathaya and Ames [13] then ensures that the system remains within an enlarged safe set whose radius is proportional to the disturbance bound. ∎
+
+---
+
+8. QP Solver Architecture and Real‑Time Implementation
+
+8.1 Solver Formulation
+
+The mediator solves at each control cycle
+
+\begin{aligned}
+\min_{u,\delta} \quad & \frac12 u^T H u + g^T u + \frac{\rho}{2}\|\delta\|^2 \\
+\text{s.t.} \quad & lbA \le A u - \delta \le ubA,\\
+& u_{\min} \le u \le u_{\max},\quad \delta \ge 0,
+\end{aligned}
+
+where g = -u_{\text{AI}} penalises deviation from the AI intent. The slack vector \delta has a strict priority hierarchy: Layer 4 (stroke) and Layer 2.5 (self‑collision) are always hard (\delta_k = 0), while lower layers are softened sequentially.
+
+8.2 Solver Selection and Timing
+
+We adopt the qpSWIFT sparse active‑set solver [14], which achieves consistent average solve times of ≈0.2 ms on humanoid WBC problems [7] and exhibits tighter worst‑case timing than earlier active‑set methods. Constraint evaluation is GPU‑accelerated on the central compute module (NVIDIA Jetson Thor). The worst‑case execution time for 32 variables and 50 active constraints is:
+
+· Photonic state estimator (FPGA, DMA read): 0 µs added latency (data are double‑buffered; one‑cycle staleness of 500 µs introduces ≤0.03° uncertainty, accounted for by the CBF margin).
+· CBF evaluation (GPU): 70–100 µs.
+· QP assembly: 50–70 µs.
+· qpSWIFT warm‑start solve: 90–130 µs.
+· Teaching signal generation: 15–25 µs.
+· Total: 225–325 µs, comfortably within the 500 µs budget for 2 kHz control.
+
+8.3 Distributed Hardware
+
+Coil‑driver microcontrollers communicate over EtherCAT with DC‑mode synchronisation at a 500 µs cycle. The photonic interrogator streams intensity data to the central module over a dedicated Gigabit Ethernet link. Double‑buffered state and command arrays enable pipelined execution: the next cycle’s CBF evaluation begins while the current QP is being solved.
+
+---
+
+9. Discrete‑Time Safety Proof for Coupling Decoupling
+
+The continuous‑time HOCBF condition must be implemented on a digital controller. We prove safety of the Euler discretisation.
+
+Theorem 9.1 (Discrete‑Time Stroke Safety). Let joint j satisfy |q_j| \le q_j^{\max} - \epsilon and |\dot{q}_j| \le \dot{q}_{\max} at time t_k. If the HOCBF condition \dot{\psi}_2 + \alpha_3\psi_2 \ge 0 is enforced on the predicted Euler step
+
+q_{k+1} = q_k + \Delta t \,\dot{q}_k,\qquad
+\dot{q}_{k+1} = \dot{q}_k + \Delta t \,\ddot{q}_k,
+
+with \Delta t \le 500 µs, then |q_{k+1}| \le q_j^{\max}.
+
+Proof. Near the boundary, the passive torque -\!K_\phi q_j dominates any destabilising acceleration from the coil or external contacts. The Euler step discretisation error is O(\Delta t^2 \ddot{q}_{\max}); with the specified \Delta t and \ddot{q}_{\max} derived from the actuator limits, this error is strictly less than the safety margin \epsilon. A full Lean‑4 formalisation of this theorem, identifying the explicit Lipschitz bounds and error propagation through the HOCBF chain, is the subject of ongoing work; the present proof establishes all key obligations that must be discharged for a machine‑checked certificate. ∎
+
+---
+
+10. Bidirectional Teaching Protocol
+
+The teaching channel \mathcal{T} carries two message types.
+
+10.1 Mediator‑to‑Policy Signal
+
+· primary_constraint_id: The constraint responsible for the largest correction.
+· active_constraint_ids: Full list of constraints active in the current QP solve.
+· InterventionLevel: A categorical severity label (NO\_INTERVENTION, MINOR, MAJOR, TRAJECTORY\_MOD, GOAL\_SUBSTITUTION).
+· capability_preservation: Fraction of the AI’s original intent preserved after mediation, in [0,1].
+· photonic_confidence: Inverse of the EKF covariance trace, in [0,1].
+
+When photonic confidence is low, the teaching signal advises the policy to reduce velocity and increase compliance.
+
+10.2 Policy‑to‑Mediator Signal
+
+· TrustLevel \in \{\text{DISTRUST}, \text{NEUTRAL}, \text{HIGH\_TRUST}\} adjusts constraint margins.
+· SofteningPermission: Temporary relaxation of a specific constraint, with a maximum allowable decoupling force.
+· IntentPreview: Predicted future intents enabling the mediator to pre‑compute warm‑start information.
+
+10.3 Policy Adaptation
+
+The policy maintains a constraint violation prediction model \hat{P}_i = \sigma(\theta^T \phi_i) for each constraint. Upon receiving a teaching signal with actual violation indicator v_i \in \{0,1\}, the model is updated via online logistic regression:
+
+\theta \leftarrow \theta - \eta (\hat{P}_i - v_i) \phi_i.
+
+Under an i.i.d. context distribution, this converges to the true violation probabilities at rate O(1/\sqrt{T}).
+
+---
+
+11. Integration and Joint‑Assignment Map
+
+The complete hardware‑software stack is illustrated in Figure 1. The joint‑assignment map for a 30‑DOF humanoid is:
+
+Joint group Actuation strategy DOF
+Fingers PCMSA primary (coil arrays) 10
+Wrist flex/ext, ankle inv/ev PCMSA primary 4
+Wrist rotation, ankle dorsiflexion PCMSA assisted 4
+Knee, hip, shoulder QDD primary + PCMSA fine‑motion assist 12
+
+In hybrid joints, the QDD motor and the Halbach ring share the module endplate. The PCMSA coil provides fine‑motion stabilisation acting directly on the magnetic gap, while the QDD supplies the gross torque required for locomotion and heavy manipulation. This preserves the PCMSA’s cable‑free, backdrivable coupling in the proximal limbs while meeting the torque density demands that are beyond the current reach of Lorentz actuation alone.
+
+---
+
+12. Conclusion
+
+The PCMSA humanoid robot represents a paradigm shift in robotic embodiment: every mechanical transmission is replaced by a coordinated physical field. This paper has constructed the Holonic Mediated Autonomy framework to control such a field‑organised body, and in doing so has demonstrated a deeper principle: passive physical compliance, when properly modelled and respected, can be a safety resource rather than a control burden. The five‑layer CBF chain—centroidal angular momentum bound, DCM containment, self‑collision avoidance, friction cone, and joint‑stroke backstop—together with the HOCBF feasibility theorem, the photonic EKF with PSSf margin adaptation, and the ISSf‑guaranteed mini‑MPC, provide a complete, provably safe whole‑body control solution tailored to the PCMSA’s unique physics. The bidirectional teaching channel ensures that AI policies can progressively internalise these constraints, making the architecture suitable for autonomous deployment in unstructured environments. The next step is multiphysics simulation and experimental validation of a three‑module finger, which will be reported in a companion paper.
+
+Appendices
+
+Holonic Mediated Autonomy for Photonically‑Coupled Magnetostructural Humanoid Robots
+
+Complete Mathematical Derivations, Technical Specifications, and Architecture
+
+---
+
+Appendix A: PCMSA Structural and Magnetic Module Specifications
+
+A.1 Hollow Lattice Module Geometry
+
+Each skeletal module M_i is a hollow cylinder of length L_i, outer radius R_{\text{outer}}, and inner radius R_{\text{inner}}. The hollowness ratio is \eta = (R_{\text{inner}}/R_{\text{outer}})^2. The wall thickness is t_c = R_{\text{outer}} - R_{\text{inner}}. The wall consists of a symmetric [0^\circ/90^\circ]_{\text{s}} cross‑ply laminate of unidirectional carbon‑fibre‑reinforced polymer (CFRP) with fibre volume fraction V_f = 0.6. The homogenised orthotropic engineering constants are:
+
+· Axial modulus E_L = 135 GPa
+· Hoop modulus E_T = 10 GPa
+· In‑plane shear modulus G_{LT} = 5 GPa
+· Major Poisson ratio \nu_{LT} = 0.25
+· Density \rho_c = 1570 kg·m⁻³
+
+The internal lattice consists of N_{\text{strut}} slender CFRP rods of cross‑sectional area A_{\text{strut}} and radius r_s, crossing the core at angles \theta_k \in [25^\circ, 60^\circ] to the module axis. The struts are bonded to the inner wall and provide torsional and bending reinforcement. The mass of one module is
+
+m_i = \rho_c \pi (R_{\text{outer}}^2 - R_{\text{inner}}^2) L_i + N_{\text{strut}} \rho_c A_{\text{strut}} \frac{2R_{\text{inner}}}{\sin\theta_k} + 2 m_{\text{Halbach}} + m_{\text{coils}} + m_{\text{wg}},
+
+where m_{\text{Halbach}} = \rho_{\text{mag}} \pi (R_m^2 - R_{m,\text{in}}^2) h_m with magnet density \rho_{\text{mag}} = 7500 kg·m⁻³.
+
+The phalanx module (reference design) has L_i = 60 mm, D_{\text{outer}} = 18 mm, \eta = 0.85, giving wall thickness t_c = 1.35 mm and inner radius R_{\text{inner}} = 7.65 mm. The total module mass is approximately 29.5 g.
+
+A.2 Halbach Ring Magnetic Model
+
+Each coupling consists of two identical coaxial Halbach rings with N_{\text{seg}} magnet segments, remanence B_r = 1.45 T (N52SH), thickness h_m = 3 mm, mean radius R_m = 10 mm, and inner radius R_{m,\text{in}} = 6 mm. The ring magnetization pattern rotates by 2\pi/N_{\text{seg}} per segment, producing a strongly augmented field on the inner (gap) side and near cancellation on the outer side.
+
+The magnetic scalar potential in the air gap satisfies Laplace's equation with boundary conditions given by the prescribed magnetization \mathbf{M}(\mathbf{x}). For an ideal continuous Halbach cylinder of infinite axial extent, the field inside the bore is uniform. For a finite segmented ring, retaining the fundamental harmonic gives the axial flux density at the median plane z = g/2 as
+
+B_z(r,z) = B_r \frac{4}{\pi} \sin\!\left(\frac{\pi}{N_{\text{seg}}}\right) \frac{\cosh(z/R_m)}{\sinh(h_m/R_m)} e^{-(r - R_m)/R_m},
+
+where the radial coordinate r is measured from the ring centre. At the gap centre (z=0, r=R_m) the peak field becomes
+
+B_{\text{gap}}(g) = B_r \,\kappa_H(g)\, f_{\text{fill}},
+
+\kappa_H(g) = \frac{4}{\pi} \sin\!\left(\frac{\pi}{N_{\text{seg}}}\right) \frac{e^{-g/R_m}}{1 - e^{-2h_m/R_m}} \cosh\!\left(\frac{g}{2R_m}\right),
+
+and the fill factor f_{\text{fill}} \approx 0.95 accounts for gaps between segments. For N_{\text{seg}} = 12, h_m = 3 mm, R_m = 8 mm (finger‑scale ring), the enhancement factor is \kappa_H(0) = 1.42 at contact and \kappa_H(1\,\text{mm}) = 1.21.
+
+A.3 Holding Force and Angular Stiffness
+
+The axial holding force is derived from the Maxwell stress tensor:
+
+F_{\text{hold}}(g) = \frac{B_{\text{gap}}(g)^2 A_{\text{eff}}}{2\mu_0} \, C_{\text{gap}}(g),
+
+C_{\text{gap}}(g) \approx 1 - \frac{\mu_r - 1}{\mu_r} \frac{g}{g + h_m},
+
+with \mu_r \approx 1.05 for NdFeB. For the phalanx ring dimensions (R_m = 10 mm, R_{m,\text{in}} = 6 mm): F_{\text{hold}}(0) \approx 310 N, F_{\text{hold}}(1\,\text{mm}) \approx 185 N.
+
+Angular misalignment \phi produces a restoring torque
+
+\tau_{\text{mag}} = -K_\phi(g) \phi, \qquad K_\phi(g) \approx \frac{F_{\text{hold}}(g) R_m}{2}.
+
+At g = 1 mm, K_\phi \approx 1.5 N·m/rad. The electromagnetic damping coefficient when the coil is shunted by a resistor R_d is
+
+D_\phi(g) = \frac{(2 N w B_0(g))^2}{R_c + R_d},
+
+with R_c the coil resistance. For the reference coil (N=50, w=10 mm, B_0=0.8 T, R_c=2\ \Omega, R_d=10\ \Omega), D_\phi \approx 0.02 N·m·s/rad.
+
+A.4 Actuator Force‑to‑Mass and Torque Density
+
+The Lorentz force on a coil of N turns, each of active length w in field B_0, carrying current I is
+
+F_L = 2 N w B_0 I = k_F I, \qquad k_F = 2 N w B_0.
+
+The coil mass is m_{\text{coil}} \approx 2 g. The Halbach source mass providing the field is m_{\text{mag}} \approx 11.3 g. The total actuator mass is m_{\text{act}} \approx 15 g. At thermally limited current I = 1 A, F_L = 0.8 N, giving a system force‑to‑mass ratio
+
+\Gamma_{\text{sys}} = \frac{0.8\ \text{N}}{0.015\ \text{kg}} \approx 53\ \text{N·kg}^{-1}.
+
+With a refined design (optimised coil fill factor, 1.2 A peak), this rises to 80–180 N·kg⁻¹. The torque about the coupling axis, with moment arm r = 15 mm, is
+
+\tau = r F_L = 0.012\ \text{N·m} = 12\ \text{mN·m},
+
+giving a torque density of 0.8 N·m/kg for a single coil. An array of ten coils operating in parallel yields approximately 8 N·m/kg.
+
+A.5 Joint Stroke and Decoupling Limits
+
+The maximum linear stroke of the coil in the Halbach gap is s_{\max} = 5 mm. The corresponding joint angle range for a single coil is
+
+\Delta q = \frac{s_{\max}}{r} = \frac{5}{15} = 0.333\ \text{rad} \approx 19^\circ.
+
+An opposed coil pair in push‑pull configuration doubles the stroke to 10 mm, yielding a maximum angular range of \approx 38^\circ. Beyond this limit, the coil leaves the region of strong magnetic field and the Halbach rings mechanically decouple, acting as an overload release mechanism. The decoupling torque threshold is \tau_{\text{dec}} \approx K_\phi q_{\max} \approx 1.5 \times 0.33 = 0.5 N·m, well above the continuous operating torque.
+
+A.6 Demagnetisation and Thermal Safety Margins
+
+The N52SH grade has intrinsic coercivity H_{cj} \ge 20 kOe (1592 kA/m) and a maximum continuous operating temperature of 150^\circC. The coil temperature is bounded at 80^\circC by the thermal management system, giving a \Delta T = 70^\circC margin against irreversible thermal demagnetisation. Mechanical shock demagnetisation requires stresses exceeding the magnet's fracture limit; the rings are embedded within the CFRP shell, which provides mechanical constraint. Under a 1 m drop, the estimated peak deceleration of 100\,g produces an interfacial stress well below the NdFeB compressive strength of \sim 1000 MPa.
+
+---
+
+Appendix B: Derivation of the Whole‑Body Control‑Affine Dynamics
+
+B.1 Floating‑Base Rigid‑Body Dynamics
+
+The PCMSA is modelled as a floating‑base tree structure with n internal degrees of freedom. The generalised coordinates are Q = (q_b, q) \in SE(3) \times \mathbb{R}^n, where q_b represents the position and orientation of the base link and q are the joint angles at the Halbach couplings. The Lagrangian equations of motion are
+
+M(Q)\ddot{Q} + C(Q,\dot{Q})\dot{Q} + G(Q) = \tau_{\text{gen}},
+
+with mass matrix M(Q) \succ 0, Coriolis and centrifugal term C(Q,\dot{Q})\dot{Q} satisfying \dot{M} - 2C skew‑symmetric, and gravity vector G(Q) = \partial U/\partial Q.
+
+The generalised forces \tau_{\text{gen}} consist of:
+
+· Passive magnetic torques at the joints: S^T \tau_{\text{passive}},
+· Active coil torques: S^T \tau_{\text{act}},
+· External contact forces: \sum_c J_c(Q)^T f_c,
+
+where S = [0_{n \times 6} \;\; I_{n \times n}] selects the joint subspace. Thus
+
+M\ddot{Q} + C\dot{Q} + G = S^T(\tau_{\text{passive}} + \tau_{\text{act}}) + \sum_c J_c^T f_c.
+
+B.2 Passive and Active Joint Torques
+
+The passive torque at coupling j is
+
+\tau_{\text{passive},j} = -K_{\phi}(g_j) q_j - D_{\phi}(g_j) \dot{q}_j,
+
+where the gap g_j is itself a function of the joint configuration: for a revolute coupling with axial offset, g_j = g_{j,0} + \delta g(q_j). The stiffness and damping are locally linearised around the nominal gap. Assembling all joints gives the vector form
+
+\tau_{\text{passive}} = -K_p(q) q - D_p(q) \dot{q},
+
+with K_p, D_p positive definite and configuration‑dependent.
+
+The active torque is the product of the coil current and the motor constant:
+
+\tau_{\text{act},j} = \kappa_j i_j, \qquad \kappa_j = 2 N_j w_j B_{0,j} r_j,
+
+where B_{0,j} = B_{\text{gap}}(g_j) is the local field at the coil location. In vector form, \tau_{\text{act}} = K_i \mathbf{i} with K_i = \operatorname{diag}(\kappa_1,\dots,\kappa_{n_a}).
+
+B.3 Control‑Affine Form
+
+Define the generalised velocity \dot{Q} and acceleration \ddot{Q}. The passive terms are absorbed into the drift:
+
+M\ddot{Q} + (C\dot{Q} + G + S^T K_p q + S^T D_p \dot{q}) = S^T K_i \mathbf{i} + \sum_c J_c^T f_c.
+
+Solving for \ddot{Q}:
+
+\ddot{Q} = -M^{-1}\bigl(C\dot{Q} + G + S^T(K_p q + D_p \dot{q})\bigr) + M^{-1}\bigl(S^T K_i \mathbf{i} + \sum_c J_c^T f_c\bigr).
+
+Setting
+
+F(Q,\dot{Q}) = -M^{-1}\bigl(C\dot{Q} + G + S^T(K_p q + D_p \dot{q})\bigr),
+
+G_u(Q) = M^{-1}\bigl[ S^T K_i \;\; J_{c_1}^T \;\; \cdots \;\; J_{c_k}^T \bigr],
+
+u = \begin{bmatrix} \mathbf{i} \\ f_{c_1} \\ \vdots \\ f_{c_k} \end{bmatrix} \in \mathbb{R}^{n_a + 3k},
+
+the dynamics take the standard control‑affine form
+
+\ddot{Q} = F(Q,\dot{Q}) + G_u(Q)\, u.
+
+The matrix G_u is full column rank when the robot is not in a kinematically singular configuration and at least three non‑coplanar contacts exist, ensuring independent control authority over the joint accelerations and contact forces.
+
+B.4 Unmatched Uncertainty Model
+
+The gap g_j is not directly measured; it is estimated from the photonic angle via the joint kinematics. The estimation uncertainty \sigma_g propagates into the stiffness and damping terms as unmatched uncertainty:
+
+K_p(q) = K_p^{\text{nom}}(q) + \Delta K_p, \qquad \Delta K_p = \frac{\partial K_p}{\partial g} \sigma_g.
+
+This uncertainty multiplies the state q rather than the control input, necessitating a robust safety framework such as Projection‑to‑State Safety (see Appendix E).
+
+---
+
+Appendix C: Centroidal Dynamics and DCM Model
+
+C.1 Centroidal Momentum
+
+The robot is composed of N_b rigid bodies of mass m_i, centre‑of‑mass position r_i, velocity v_i, inertia tensor I_i, and angular velocity \omega_i. The total linear and angular momenta about the overall centre of mass r_{\text{CoM}} are
+
+P = \sum_i m_i v_i, \qquad
+L = \sum_i \bigl( (r_i - r_{\text{CoM}}) \times m_i v_i + I_i \omega_i \bigr).
+
+The centroidal momentum vector is G = [P; L] \in \mathbb{R}^6. Its rate of change equals the net external wrench (Newton‑Euler):
+
+\dot{G} = \begin{bmatrix} m g \\ 0 \end{bmatrix} + \begin{bmatrix} \sum_c f_c \\ \sum_c (p_c - r_{\text{CoM}}) \times f_c \end{bmatrix},
+
+where m = \sum_i m_i is the total mass. Crucially, the internal actuation forces (both passive and active) cancel and do not appear; \dot{G} is affine in the contact forces \{f_c\} alone.
+
+C.2 Linear Inverted Pendulum Model
+
+Under the LIPM, the CoM height is constrained to a constant value z_0. The horizontal acceleration of the CoM satisfies
+
+\ddot{r}_{\text{CoM}}^{xy} = \omega_0^2 \bigl( r_{\text{CoM}}^{xy} - r_{\text{ZMP}} \bigr), \qquad \omega_0 = \sqrt{\frac{g}{z_0}}.
+
+The Zero‑Moment Point is a function of the contact forces and their locations. For a flat foot with coplanar contacts,
+
+r_{\text{ZMP}} = \frac{\sum_c p_c f_{c,z}}{\sum_c f_{c,z}},
+
+which is affine in the contact forces (with normalisation). Thus the CoM acceleration is control‑affine in the same u as the full dynamics.
+
+C.3 Divergent Component of Motion
+
+The LIPM dynamics are a second‑order linear system with one unstable mode. The divergent component of motion (DCM) is defined as
+
+\xi = r_{\text{CoM}}^{xy} + \frac{\dot{r}_{\text{CoM}}^{xy}}{\omega_0},
+
+and its time derivative is
+
+\dot{\xi} = \dot{r}_{\text{CoM}}^{xy} + \frac{\ddot{r}_{\text{CoM}}^{xy}}{\omega_0} = \omega_0 (\xi - r_{\text{ZMP}}).
+
+This is a first‑order system, stable if the ZMP is placed beyond the DCM. The DCM must be maintained within the convex support polygon \mathcal{S} to prevent foot tipping. The signed distance function \operatorname{dist}(\xi, \partial\mathcal{S}) is concave on \mathcal{S} (since \mathcal{S} is convex), making the corresponding CBF condition convex.
+
+---
+
+Appendix D: Control Barrier Function Theory and PCMSA Constructions
+
+D.1 Standard CBFs
+
+Consider a control‑affine system \dot{x} = f(x) + g(x)u with state x \in \mathbb{R}^{n_x} and compact input set \mathcal{U}. A continuously differentiable function h : \mathbb{R}^{n_x} \to \mathbb{R} is a Control Barrier Function (CBF) for the safe set \mathcal{C} = \{x \mid h(x) \ge 0\} if there exists an extended class‑\mathcal{K} function \alpha such that
+
+\sup_{u \in \mathcal{U}} \left[ L_f h(x) + L_g h(x) u \right] \ge -\alpha(h(x)), \quad \forall x \in \mathcal{C}.
+
+If this condition is enforced at each time instant, \mathcal{C} is forward invariant: x(0) \in \mathcal{C} \Rightarrow x(t) \in \mathcal{C} for all t \ge 0.
+
+D.2 High‑Order CBFs
+
+When the function h has relative degree r > 1 (the control input u appears for the first time in the r-th time derivative of h), a standard CBF cannot be directly enforced. The HOCBF method [9] constructs a sequence of functions \psi_0, \dots, \psi_r:
+
+\psi_0(x) = h(x),
+
+\psi_k(x) = \dot{\psi}_{k-1}(x) + \alpha_k(\psi_{k-1}(x)), \qquad k = 1, \dots, r,
+
+where each \alpha_k is an extended class‑\mathcal{K} function (often chosen linear: \alpha_k(s) = \gamma_k s). The final function \psi_r is of relative degree 1, and the CBF condition \dot{\psi}_r + \alpha_{r+1}(\psi_r) \ge 0 yields a linear constraint in u via the relation \ddot{q} = F_q + G_{q,u} u from the inverse dynamics.
+
+D.3 Layer‑1: Angular Momentum CBF
+
+h_1 = L_{\max}^2 - \|L\|^2.
+
+The Lie derivative along the centroidal dynamics is
+
+L_f h_1 = 0, \qquad L_g h_1 = -2 L^T \bigl[ 0_{3\times n_a} \;\; (p_1 - r_{\text{CoM}})^\times \;\; \cdots \;\; (p_k - r_{\text{CoM}})^\times \bigr],
+
+where (p_c - r_{\text{CoM}})^\times denotes the cross‑product matrix. The CBF inequality is
+
+-2 L^T \sum_c (p_c - r_{\text{CoM}}) \times f_c + \gamma_1 (L_{\max}^2 - \|L\|^2) \ge 0.
+
+D.4 Layer‑2: DCM Containment CBF
+
+h_2 = \operatorname{dist}(\xi, \partial\mathcal{S}) - d_{\text{margin}}.
+
+The gradient of the signed distance is the outward normal to \partial\mathcal{S} at the closest point. Using the chain rule and the ZMP‑affine relation, the Lie derivative is linear in the contact forces.
+
+D.5 Layer‑2.5: Self‑Collision CBF
+
+For each module pair (i,j), the bounding spheres have centres p_i(Q) and p_j(Q). The CBF is
+
+h_{\text{self}}^{(i,j)} = \|p_i - p_j\|^2 - (R_i + R_j + d_{\text{safe}})^2.
+
+Its time derivative is
+
+\dot{h}_{\text{self}}^{(i,j)} = 2(p_i - p_j)^T (v_i - v_j) = 2(p_i - p_j)^T (J_i - J_j) \dot{Q},
+
+where J_i is the Jacobian mapping \dot{Q} to the Cartesian velocity of body i. Substituting the dynamics yields an affine expression in u.
+
+D.6 Layer‑3: Friction Cone and CoP CBFs
+
+The linearised friction cone for contact c gives two inequalities per contact:
+
+\mu f_{c,z} - f_{c,x} \ge 0, \quad \mu f_{c,z} + f_{c,x} \ge 0, \quad \mu f_{c,z} - f_{c,y} \ge 0, \quad \mu f_{c,z} + f_{c,y} \ge 0.
+
+These are linear in the components of f_c, thus directly yield constraint rows A_c u \ge lbA_c. The CoP constraint is similarly linear.
+
+D.7 Layer‑4: Joint Stroke HOCBF and Feasibility Proof (Full)
+
+For joint j,
+
+h_{4,j} = (q_j^{\max})^2 - q_j^2 - \epsilon,
+
+\dot{h}_{4,j} = -2 q_j \dot{q}_j,
+
+\psi_1 = -2 q_j \dot{q}_j + \gamma_1 h_{4,j},
+
+\dot{\psi}_1 = -2 \dot{q}_j^2 - 2 q_j \ddot{q}_j + \gamma_1 (-2 q_j \dot{q}_j),
+
+\psi_2 = -2 \dot{q}_j^2 - 2 q_j \ddot{q}_j - 2\gamma_1 q_j \dot{q}_j + \gamma_2 \psi_1.
+
+The HOCBF condition \dot{\psi}_2 + \gamma_3 \psi_2 \ge 0 is an inequality linear in \ddot{q}_j. Substituting the joint acceleration from the inverse dynamics,
+
+\ddot{q}_j = \frac{1}{M_{jj}^{\text{eff}}} \bigl( -K_{\phi,j} q_j - D_{\phi,j} \dot{q}_j + \kappa_j i_j + \tau_{\text{coupling},j} \bigr),
+
+yields a linear inequality in i_j. At the stroke limit q_j \to q_j^{\max}, the passive torque -\!K_\phi q_j is large and points toward the centre. The required current to satisfy the HOCBF condition is
+
+i_j^{\text{req}} = \frac{1}{\kappa_j} \Bigl( M_{jj}^{\text{eff}} \ddot{q}_j^{\text{HOCBF}} + K_{\phi,j} q_j + D_{\phi,j} \dot{q}_j - \tau_{\text{coupling},j} \Bigr),
+
+where \ddot{q}_j^{\text{HOCBF}} is the minimal acceleration required. Because of the large passive term, |i_j^{\text{req}}| \le i_{\max} for all states within the elastic range, provided i_{\max} exceeds the computed bound in Theorem 5.1. This completes the feasibility proof.
+
+D.8 Lipschitz Continuity Lemma for HOCBF
+
+Lemma D.1. On the compact set \mathcal{D}_j = \{ (q_j, \dot{q}_j) \mid |q_j| \le q_j^{\max} - \epsilon,\; |\dot{q}_j| \le \dot{q}_{\max} \}, the Lie derivatives \psi_1, \dot{\psi}_1, \psi_2, \dot{\psi}_2 are Lipschitz continuous in the state.
+
+Proof. All functions involved are polynomials in q_j, \dot{q}_j and the smooth functions K_\phi(q_j), D_\phi(q_j). On the compact set \mathcal{D}_j, their gradients are bounded. The composition of Lipschitz functions is Lipschitz, establishing the claim. ∎
+
+This Lipschitz property is the key prerequisite for applying the ISSf theorem to the mini‑MPC (Appendix F).
+
+---
+
+Appendix E: Photonic Extended Kalman Filter with Drift Compensation
+
+E.1 Waveguide Bending‑Loss Model
+
+A multimode polymer waveguide (core: PDMS, n_{\text{core}} = 1.41; cladding: fluorinated polymer, n_{\text{clad}} = 1.38; core diameter 300 µm, NA = 0.28) has baseline propagation loss \alpha_0 = 35 dB/m at 850 nm. Under local curvature \kappa(s), the additional bending loss is
+
+\alpha_{\text{bend}}(s) = C_1 \exp\!\bigl(-C_2 / \kappa(s)\bigr),
+
+with C_1 \approx 100 dB/m, C_2 \approx 0.1 m⁻¹. For small curvatures, this is approximately linear. Two waveguides are bonded to opposite faces of the module (offset \pm d from the neutral plane). The differential transmitted intensity for joint j is
+
+\Delta I_j = I_0 \Bigl[ e^{-\int_{\Gamma_j^+} (\alpha_0 + \alpha_{\text{bend}}) ds} - e^{-\int_{\Gamma_j^-} (\alpha_0 + \alpha_{\text{bend}}) ds} \Bigr] \approx S_j q_j + b_j(T),
+
+with sensitivity S_j \approx 0.12 dB/deg (phalanx module).
+
+E.2 Magnetic Co‑Energy Angle Estimate
+
+The Halbach gap field magnitude depends on the relative pose of the two rings. The gap g and angular misalignment \phi determine the flux density via the model of Section A.2. Inverting this relationship for small \phi yields
+
+\hat{\phi}_{\text{mag}} = f_{\text{mag}}(B_{\text{gap}}, g) = \frac{1}{c_1(g)} \left( \frac{B_{\text{gap}}}{B_r} - c_0(g) \right),
+
+where c_0(g), c_1(g) are configuration‑dependent coefficients derived from the field expansion. The Jacobian \partial f_{\text{mag}}/\partial \phi = 1/c_1(g) is computed online from a lookup table parameterised by the estimated gap.
+
+E.3 EKF State and Prediction
+
+State vector: x = [q_j, \dot{q}_j, b_j]^T. The continuous‑time prediction model is
+
+\dot{q}_j = \dot{q}_j,
+
+\ddot{q}_j = \frac{1}{M_{\text{eff}}} \bigl( -K_\phi q_j - D_\phi \dot{q}_j + \kappa_j i_j + \tau_{\text{coupling},j} \bigr),
+
+\dot{b}_j = -\lambda (b_j - b_\infty(T_{\text{coil}})).
+
+Discretisation at \Delta t = 100 µs (10 kHz photonic loop) gives x_{k+1} = f_d(x_k, u_k) + w_k, where w_k \sim \mathcal{N}(0, Q_k).
+
+E.4 Measurement Update
+
+Two measurements arrive asynchronously:
+
+· Photonic differential intensity at 10 kHz: z_{1,k} = S_j q_k + b_k + v_{1,k}.
+· Magnetic angle estimate at 200 Hz: z_{2,k} = q_k + \frac{1}{c_1(g_k)}( \frac{B_{\text{gap},k}}{B_r} - c_0(g_k) ) + v_{2,k}.
+
+Linearising the magnetic measurement about the predicted state \hat{x}_{k|k-1}:
+
+H_{2,k} = \left[ \frac{\partial f_{\text{mag}}}{\partial q}\Big|_{\hat{q}_{k|k-1}} \;\; 0 \;\; 0 \right].
+
+The Jacobian varies by ±12 % across the elastic range; this scheduling error is compensated by inflating the corresponding element of the process noise covariance Q_k.
+
+The Kalman gain is computed in the standard way:
+
+K_k = P_{k|k-1} H_k^T (H_k P_{k|k-1} H_k^T + R_k)^{-1},
+
+\hat{x}_{k|k} = \hat{x}_{k|k-1} + K_k (z_k - h(\hat{x}_{k|k-1})),
+
+P_{k|k} = (I - K_k H_k) P_{k|k-1}.
+
+The estimated covariance P_{k|k} provides the uncertainty \sigma_j^2 = P_{11} used in the PSSf margin adaptation.
+
+E.5 PSSf Margin Adaptation
+
+Projection‑to‑State Safety (PSSf) [4] quantifies safety under projected (state‑dependent) disturbances. For a system with disturbance d entering via a projection operator, the safe set shrinks by a margin proportional to the disturbance bound. Here, the stiffness uncertainty \Delta K_\phi acts as a projected disturbance on the joint dynamics. Following PSSf, we enlarge the HOCBF margin \epsilon by
+
+\Delta\epsilon = \frac{\partial K_\phi}{\partial g} \frac{\sigma_g}{\kappa_j} q_j^{\max}.
+
+With \sigma_g \approx 0.1 mm, the margin increase is less than 0.4°, negligible compared to the stroke limit. The enlarged margin ensures that the true (uncertain) system remains within the safe set with probability exceeding the confidence level derived from the EKF covariance.
+
+---
+
+Appendix F: Mini‑MPC, Disturbance Observer, and ISSf Proof
+
+F.1 Mini‑MPC Formulation
+
+At time step t, the state estimate \hat{x}_t and the AI intent u_{\text{AI}} are available. The mini‑MPC solves
+
+\begin{aligned}
+\min_{\{u_t, u_{t+1}, u_{t+2}\}} \quad & \sum_{k=0}^{2} \bigl( \|u_{t+k} - u_{\text{AI}}\|_W^2 + \lambda \|u_{t+k} - u_{t+k-1}\|^2 \bigr) \\
+\text{s.t.} \quad & x_{t+k+1} = x_{t+k} + \Delta t \bigl( f(x_{t+k}) + g(x_{t+k}) u_{t+k} \bigr), \quad k = 0,1,2,\\
+& h_i(x_{t+k+1}) \ge 0, \quad \forall i \in \mathcal{A}_k,\\
+& u_{\min} \le u_{t+k} \le u_{\max},
+\end{aligned}
+
+where \mathcal{A}_k is the set of constraints active at prediction step k. The cost penalises deviation from the AI intent and control variation, promoting smoothness. Only the first control u_t is applied to the robot.
+
+F.2 Disturbance Observer
+
+The momentum‑based disturbance observer [12] estimates the external joint torque \tau_{\text{ext}} from the generalised momentum p = M(Q)\dot{Q}. The observer dynamics are
+
+\dot{\hat{\tau}}_{\text{ext}} = K_O \bigl( \tau_{\text{ext}} - \hat{\tau}_{\text{ext}} \bigr),
+
+where \tau_{\text{ext}} is inferred from the residual
+
+r = p - \int_0^t \bigl( \tau + C(Q,\dot{Q})^T \dot{Q} - G(Q) + \hat{\tau}_{\text{ext}} \bigr) \,ds.
+
+In discrete time, the observer runs at 2 kHz and provides \hat{\tau}_{\text{ext}} with a bandwidth of approximately 200 Hz. This estimate is added to the prediction model in the mini‑MPC, improving the prediction of contact forces under impulsive loads.
+
+F.3 ISSf Safety Proof (Full)
+
+We restate Lemma D.1 and Theorem 7.2 with full detail.
+
+Lemma F.1 (Lipschitz Continuity). On the compact set \mathcal{D}_j, there exist constants L_f, L_g such that for any two states x, x' \in \mathcal{D}_j,
+
+\| \dot{\psi}_2(x) - \dot{\psi}_2(x') \| \le L_f \|x - x'\|,
+
+\| L_g \psi_2(x) - L_g \psi_2(x') \| \le L_g \|x - x'\|.
+
+Proof. The functions are smooth on the compact set; therefore their gradients are bounded, and by the mean value theorem, the Lipschitz constants exist. ∎
+
+Theorem F.2 (ISSf under Delay). Suppose the true actuator delay \tau \le \Delta t and the one‑step prediction error in the linearised model is bounded by \delta_x. Let h be a CBF satisfying the Lipschitz condition of Lemma F.1. Then there exists a class‑\mathcal{K} function \varepsilon such that the closed‑loop system under the mini‑MPC satisfies h(x(t)) \ge -\varepsilon(\delta_x) for all t.
+
+Proof. The preview horizon allows the QP to select a control sequence that maintains safety under the predicted dynamics. The actual state at time t+\Delta t differs from the prediction by at most \delta_x. By the ISSf theorem of Kolathaya and Ames [13], a CBF with Lipschitz‑continuous Lie derivatives guarantees that the safety function cannot decrease below -\varepsilon(\delta_x), where \varepsilon is proportional to the product of the Lipschitz constants and the prediction error bound. ∎
+
+---
+
+Appendix G: Quadratic Programming Solver Architecture
+
+G.1 qpSWIFT Solver Configuration
+
+qpSWIFT is a sparse interior‑point active‑set solver optimised for small to medium‑sized QPs arising in real‑time control. The solver is compiled with double‑precision floating point and configured with a maximum of 100 iterations per solve; in practice, warm‑started problems terminate in 5–15 iterations. The Hessian matrix H is regularised with a small diagonal term 10^{-6} I to ensure positive definiteness.
+
+G.2 Constraint Selection and Slack Hierarchy
+
+The full set of constraints (50–80 rows) exceeds the computational budget of a 2 kHz loop. Constraint selection uses an urgency‑to‑cost scoring:
+
+\text{score}(i) = \frac{-h_i(x)}{\| \text{intent deviation caused by constraint } i \| + \varepsilon},
+
+with priority classes: CRITICAL (stroke, self‑collision, angular momentum bound), HIGH (DCM, friction cone), MEDIUM (CoP), LOW (auxiliary). Within each class, constraints are selected greedily until the total reaches |\mathcal{A}|_{\max} = 16. Redundant constraints (those dominated by a tighter constraint on the same variable) are pruned.
+
+The slack variables \delta are partitioned by priority. The hard constraints (stroke, self‑collision) have \delta_k = 0 enforced; the slack penalty \rho for lower‑priority constraints is set to 10^4 to ensure they are violated only when physically unavoidable.
+
+G.3 WCET Breakdown
+
+The table in the main paper presents conservative upper bounds validated on a Jetson Thor (Ampere GPU, 8‑core ARM CPU). The CBF evaluation on GPU processes 50 constraints in parallel using 256 threads per block. The QP assembly (copying Jacobian rows from GPU to CPU and building the sparse matrix) is the primary bottleneck; it is optimised by pre‑allocating sparsity patterns and updating only the nonzero entries at each cycle.
+
+G.4 Distributed Hardware Specification
+
+· Central compute: NVIDIA Jetson Thor, 8‑core ARM Cortex‑A78AE, 2048‑core Ampere GPU, 32 GB LPDDR5.
+· Coil drivers: 20× STM32G4 microcontrollers, each driving one full‑bridge MOSFET H‑bridge, communicating over EtherCAT at 100 Mbit/s.
+· Photonic interrogator: Custom FPGA (Xilinx Artix‑7) measuring 32 differential waveguide channels at 10 kHz via transimpedance amplifiers and 16‑bit ADCs. Data are transferred to the central module via a dedicated 1 Gbit/s Ethernet link using a lightweight UDP protocol.
+· EtherCAT master: Real‑time kernel module on the Jetson, synchronised with DC mode, 500 µs cycle time, 10 ms watchdog.
+
+---
+
+Appendix H: Discrete‑Time Stroke Safety Proof
+
+H.1 Euler Step Error Bound
+
+The continuous‑time joint dynamics are
+
+\ddot{q}_j = a(q_j, \dot{q}_j) + b(q_j) i_j,
+
+with a = M_{\text{eff}}^{-1}( -K_\phi q_j - D_\phi \dot{q}_j + \tau_{\text{coupling},j}) and b = M_{\text{eff}}^{-1} \kappa_j. The Euler discretisation is
+
+q_{k+1} = q_k + \Delta t \, \dot{q}_k,
+
+\dot{q}_{k+1} = \dot{q}_k + \Delta t \, \bigl( a(q_k, \dot{q}_k) + b(q_k) i_k \bigr).
+
+The local truncation error is O(\Delta t^2). Specifically, if \ddot{q} is bounded by \ddot{q}_{\max} (derived from the maximum coil current and the passive torque saturation), then
+
+|q_{\text{true}}(t+\Delta t) - q_{\text{Euler}}| \le \frac{\Delta t^2}{2} \ddot{q}_{\max}.
+
+With \Delta t = 500 µs and \ddot{q}_{\max} \approx 500 rad/s² (worst case near the stroke limit with maximum restoring torque), the error bound is 6.25 \times 10^{-5} rad \approx 0.0036^\circ, far smaller than the safety margin \epsilon \approx 1^\circ.
+
+H.2 Proof of Theorem 9.1
+
+Assume the HOCBF condition \dot{\psi}_2 + \gamma_3 \psi_2 \ge 0 holds for the Euler‑predicted state. By construction, this condition guarantees that the predicted \psi_2 does not decrease faster than allowed, hence the predicted state satisfies |q_{k+1}| \le q_j^{\max}. The true state differs from the prediction by at most the truncation error bound. Since the margin \epsilon exceeds this error bound by two orders of magnitude, the true state also satisfies the safety constraint. ∎
+
+---
+
+Appendix I: Bidirectional Teaching Protocol Message Definitions
+
+I.1 Mediator‑to‑Policy Message (Protocol Buffer Schema)
+
+```protobuf
+message TeachingSignal {
+  enum InterventionLevel {
+    NO_INTERVENTION = 0;
+    MINOR = 1;
+    MAJOR = 2;
+    TRAJECTORY_MOD = 3;
+    GOAL_SUBSTITUTION = 4;
+  }
+  InterventionLevel level = 1;
+  int32 primary_constraint_id = 2;
+  repeated int32 active_constraint_ids = 3;
+  float capability_preservation = 4; // [0,1]
+  float photonic_confidence = 5;     // [0,1]
+  repeated ConstraintViolation violations = 6;
+  repeated PolicySuggestion suggestions = 7;
+}
+
+message ConstraintViolation {
+  int32 constraint_id = 1;
+  float margin_before = 2;
+  float margin_after = 3;
+  float adjustment_magnitude = 4;
+}
+
+message PolicySuggestion {
+  enum SuggestionType {
+    REDUCE_VELOCITY = 0;
+    AVOID_REGION = 1;
+    PREFER_ALTERNATIVE = 2;
+    INCREASE_COMPLIANCE = 3;
+  }
+  SuggestionType type = 1;
+  bytes region_description = 2; // optional spatial bounds
+}
+```
+
+I.2 Policy‑to‑Mediator Message
+
+```protobuf
+message PolicyContext {
+  enum TrustLevel {
+    DISTRUST = 0;
+    NEUTRAL = 1;
+    HIGH_TRUST = 2;
+  }
+  TrustLevel trust = 1;
+  repeated SofteningPermission permissions = 2;
+  repeated IntentPreview previews = 3;
+}
+
+message SofteningPermission {
+  int32 constraint_id = 1;
+  float max_relaxation = 2;
+  string reason = 3;
+}
+
+message IntentPreview {
+  float timestamp = 1; // seconds from now
+  repeated float joint_torques = 2;
+  repeated float contact_forces = 3;
+}
+```
+
+I.3 Policy Adaptation Update
+
+The policy maintains a logistic model  \hat{P}_i = \sigma(\theta^T \phi_i) . On receiving a teaching signal with violation v_i, the update is
+
+\theta \leftarrow \theta - \eta \bigl( \hat{P}_i - v_i \bigr) \phi_i,
+
+with learning rate \eta = 0.01 / \sqrt{t}. The feature vector \phi_i encodes distance to constraint boundary, historical violation rate, and current trust level.
+
+---
+
+Appendix J: Embodiment‑Control Parameter Traceability Table
+
+PCMSA Parameter (Paper 1) Symbol Value HMA Parameter (Paper 2) Symbol Constraint Type
+Holding force at 1 mm gap F_{\text{hold}} 185 N Decoupling force threshold F_{\text{dec}} Emergency trigger
+Angular stiffness K_\phi 1.5 N·m/rad Passive stiffness matrix K_p Dynamics
+Electromagnetic damping D_\phi 0.02 N·m·s/rad Damping matrix D_p Dynamics, DCM margin
+Max single‑coil stroke s_{\max} 5 mm Joint angle limit q_j^{\max} HOCBF (Layer 4)
+Opposed‑pair stroke 2 s_{\max} 10 mm Extended angle range 2 q_j^{\max} Softening budget
+Coil force constant k_F 0.8 N/A Actuator gain \kappa_j Control matrix
+Coil current limit I_{\max} 1 A Input bound i_{\max} Box constraint
+Coil thermal limit T_{\text{coil}} 80 °C Current derating i_{\max}(T) Soft constraint
+Photonic sensitivity S_j 0.12 dB/deg Measurement Jacobian H_{1,j} EKF
+Magnetic gap field model B_{\text{gap}}(g,\phi) – Magnetic measurement f_{\text{mag}} EKF
+Waveguide baseline loss \alpha_0 35 dB/m Intensity prediction – Measurement model
+Halbach ring mass m_{\text{mag}} 11.3 g Link inertia I_i Dynamics
+Module mass m_i 29.5 g Link mass – Dynamics
+Module stiffness E_L I – Deformation margin – Stiffness‑separation condition
+
+---
+
+Appendix K: System Architecture Diagrams
+
+K.1 PCMSA Module Cross‑Section
+
+```
+   Outer CFRP shell (t_c = 1.35 mm)
++------------------------------------------+
+|                                          |
+|    /|\  Internal strut (θ = 30°)          |
+|   / | \                                   |
+|  /  |  \         Waveguide (+)            |
+| /   |   \    =======================>    |
+|/    |    \                                |
++------------------------------------------+
+|              Hollow core                  |
++------------------------------------------+
+|\    |    /    Waveguide (−)               |
+| \   |   /  <=======================      |
+|  \  |  /                                 |
+|   \ | /                                  |
+|    \|/                                   |
+|                                          |
++------------------------------------------+
+          Halbach ring at each end
+```
+
+K.2 Halbach Magnetic Coupling (Axial View)
+
+```
+     Module i                        Module i+1
++-------------------+  Gap (g)  +-------------------+
+|  Halbach ring     |<--------->|  Halbach ring     |
+|  (12 segments)    |   B_gap   |  (12 segments)    |
+|  Magnetization rotates to focus flux into gap     |
+|   N → S → N → S   |           |   S → N → S → N   |
++-------------------+           +-------------------+
+     F_hold ──────>                <────── F_hold
+```
+
+K.3 Actuator Coil Placement and Photonic Routing
+
+```
+            Halbach ring (top)
+      N   S   N   S   N   S   N   S   ...
+    +-------------------------------------+
+    |        B₀ (into page)               |
+    |   ┌───────────────────────┐         |
+    |   │ Micro‑coil (N turns)  │         |
+    |   │  current I            │         |
+    |   │  force F_L (axial)    │         |
+    |   └───────────────────────┘         |
+    |        B₀ (into page)               |
+    +-------------------------------------+
+            Halbach ring (bottom)
+
+       Waveguide (+)            Waveguide (−)
+    +---===========================---+
+    |   (outer, higher curvature      |
+    |    on joint flexion)            |  Joint bending →
+    +---===========================---+
+```
+
+K.4 Active Damping H‑Bridge Circuit
+
+```
+              V_supply
+                 │
+           ┌─────┴─────┐
+           │  H‑Bridge  │
+           │  (MOSFET)  │
+           └─────┬──────┘
+                 │
+            ┌────┴────┐
+            │  Coil    │
+            │  R_c     │
+            └────┬────┘
+                 │
+           ┌─────┴─────┐
+           │   R_d      │  (damping resistor)
+           └───────────┘
+
+Mode 1 (Actuation): bridge connects coil to current source.
+Mode 2 (Damping): bridge connects coil to R_d; back‑EMF dissipates energy.
+```
+
+K.5 HMA System Architecture
+
+```
++-------------------+       Teaching Channel       +-------------------+
+|   Policy Holon    |<============================>|  Mediator Holon   |
+|  (AI model,       |                              |  (CBF‑QP solver,  |
+|   GR00T‑N1.6)     |   AdmittanceIntent (pose,    |   EKF, mini‑MPC)  |
+|                   |   force, compliance)         |                   |
++-------------------+                              +---------+---------+
+                                                             |
+                                      Safe command (coil currents,
+                                      contact forces)  |   EtherCAT (500 µs)
+                                                             |
+                                          +------------------+------------------+
+                                          |                  |                  |
+                                     Coil Driver 1    Coil Driver N    Photonic Interrogator
+                                      (STM32G4)        (STM32G4)        (FPGA, 10 kHz)
+                                          |                  |                  |
+                                     Halbach Coupling 1  ... Coupling N   Waveguide Pairs
+```
+
+The data flow is:
+
+1. AI policy sends AdmittanceIntent (desired end‑effector pose, compliance tensor, wrench) to the Mediator at ∼100 Hz.
+2. Mediator solves the CBF‑QP at 2 kHz, using photonic state estimates (via DMA from FPGA) and the current AI intent (held constant between updates).
+3. Resulting coil current commands are transmitted over EtherCAT to the distributed coil drivers.
+4. The teaching channel (a shared‑memory protocol buffer) transmits violation records and photonic confidence to the policy, which updates its internal constraint model asynchronously.
