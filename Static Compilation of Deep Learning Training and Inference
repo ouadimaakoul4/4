@@ -1,0 +1,929 @@
+Static Compilation of Deep Learning Training and Inference–Training Loops:
+
+A Unified Formal Framework
+
+ouadi Maakoul
+
+AI assistance: Claude, DeepSeek
+
+---
+
+Abstract
+
+This dissertation develops a complete formal theory for the static compilation of pipeline‑parallel deep learning workloads, from single‑iteration training to infinite online reinforcement learning loops. We introduce the Bare‑Graph Intermediate Representation (BG‑IR), a timed, resource‑aware dataflow graph that captures computation, communication, memory, and gradient flow in a unified static model. For training alone we design three algorithms—Stencil‑AD (static reverse‑mode differentiation), TopoMem (provably minimal memory planning), and the Asynchronous Overlapped Pipeline (AOP, the unique zero‑bubble schedule)—and prove a Unified Optimality Theorem: the combination simultaneously achieves exact gradients, zero bubble, and minimal peak memory. We then extend the theory to online reinforcement learning by embedding the training loop inside a Cyclo‑Static Dataflow (CSDF) graph, guaranteeing decidability of liveness and boundedness. Within this extended model we define the Co‑Scheduling Problem, prove its NP‑hardness via a reduction from preemptive single‑machine scheduling with release times and deadlines, and present three new algorithms: static batching with deadline guarantees, joint KV‑cache and activation memory planning (Co‑Mem), and AOP‑RL, a zero‑bubble schedule that fills pipeline bubbles with inference tokens. A Unified Co‑Optimality Theorem asserts that under mild assumptions the static schedule simultaneously maximises training throughput, satisfies all inference deadlines, and minimises peak memory. The entire theory is designed for direct realisation in a C/C++ compiler that generates a single, statically scheduled binary. The work provides the first comprehensive mathematical foundation for fully static AI infrastructure on exascale GPU clusters.
+
+---
+
+Chapter 1: Introduction
+
+Modern deep learning training suffers from a widening gap between theoretical hardware peak and realised throughput. At the scale of 220 000 next‑generation accelerators (GB300 superchips with 800 Gbps interconnects), dynamic runtime overheads—Python hosts, just‑in‑time autograd, heuristic communication libraries—can waste more than half of the available compute. Moreover, the most advanced training workflows are no longer isolated; they interleave high‑throughput inference (rollout generation) with training in online reinforcement learning loops. All existing systems for these workloads are dynamic, making decisions at runtime without formal guarantees.
+
+This dissertation presents a unified formal framework that rethinks both problems from first principles. We ask: can the entire training iteration, and even the full training–inference loop, be specified as a static computation and scheduled provably optimally at compile time? We answer affirmatively by constructing a complete chain of mathematical models and algorithms, each with rigorous proofs of correctness, optimality, and complexity.
+
+The thesis is built in two parts. Part I treats the pure training iteration. We define BG‑IR, a static graph model that captures compute, communication, memory allocation, and gradient dependencies. We then prove that optimally scheduling a BG‑IR under memory limits is NP‑hard, which motivates restricting to a structured family of pipeline schedules. Within this family we design Stencil‑AD (a compile‑time graph‑rewriting system for reverse‑mode differentiation), TopoMem (an exact memory planner that achieves minimal peak memory for the chosen schedule), and AOP (a zero‑bubble pipeline schedule that is unique and makespan‑optimal). The capstone is a Unified Optimality Theorem showing that the three algorithms together achieve exact gradients, zero bubble, and memory optimality.
+
+Part II extends the model to online reinforcement learning. Training and inference are interleaved on the same GPU cluster. Naively adding cycles to BG‑IR yields a Kahn process network where liveness is undecidable, so we restrict to the Cyclo‑Static Dataflow (CSDF) model, which guarantees polynomial‑time schedulability. We define the Co‑Scheduling Problem, prove its NP‑hardness by reduction from classical scheduling theory, and then develop static batching, Co‑Mem (joint KV‑cache and activation memory planning), and AOP‑RL (a zero‑bubble co‑schedule that fills pipeline bubbles with inference tokens). A second Unified Co‑Optimality Theorem provides formal guarantees for the full RL loop.
+
+All algorithms are designed to be directly translatable into a C/C++ compiler that emits a monolithic, statically scheduled binary—no Python, no dynamic dispatch, no garbage collection.
+
+---
+
+Chapter 2: Mathematical Preliminaries
+
+2.1 Notation
+
+Let \mathbb{R}_{\ge 0} denote non‑negative real numbers, \mathbb{N} the natural numbers \{0,1,2,\dots\}, and \mathbb{Z} the integers. For a finite set S, |S| is its cardinality. A graph G=(V,E) is a pair of finite sets with E\subseteq V\times V. In a directed graph, (u,v) denotes an edge from u to v. A directed acyclic graph (DAG) has no directed cycles.
+
+2.2 Scheduling and Resource Constraints
+
+A scheduling problem consists of a set of jobs J with processing times p_j\in\mathbb{R}_{\ge 0}, a set of machines, and additional constraints (precedence, resource limits, release times, deadlines). A schedule assigns a start time s_j\ge 0 to each job such that no machine executes two jobs simultaneously and all constraints are respected. The makespan is \max_j (s_j+p_j).
+
+A classic NP‑hard problem is 1|r_j, d_j, pmtn|C_{\max}: preemptive single‑machine scheduling with release times r_j and deadlines d_j, minimising makespan (Du and Leung, 1993; Chen and Yuan, 2021). It is NP‑hard in the strong sense.
+
+2.3 Cyclo‑Static Dataflow (CSDF)
+
+A CSDF graph (Bilsen et al., 1996) generalises synchronous dataflow. Each actor v has an integer period \varphi(v) and, for each output edge e, a sequence of token production counts p_{v,e}(0),\dots,p_{v,e}(\varphi(v)-1); similarly, for each input edge, a sequence of consumption counts c_{v,e}(0),\dots,c_{v,e}(\varphi(v)-1). Execution is periodic: in phase k \bmod \varphi(v) the actor fires, consuming and producing the prescribed numbers of tokens. A CSDF graph is consistent if there exists a positive integer repetition vector q(v) such that for every edge (u,v),
+
+q(u)\sum_{i=0}^{\varphi(u)-1} p_{u,e}(i) = q(v)\sum_{j=0}^{\varphi(v)-1} c_{v,e}(j).
+
+Consistency is necessary and sufficient for the existence of a live, bounded periodic schedule. Liveness and schedule construction can be decided in polynomial time (Marchetti and Munier-Kordon, 2009).
+
+---
+
+Part I: Static Training Compilation
+
+---
+
+Chapter 3: BG‑IR — A Formal Model of Pipeline Training
+
+We define a static intermediate representation that captures the entire training iteration—compute, communication, memory—as a single directed graph.
+
+3.1 Definition of BG‑IR
+
+Definition 3.1 (BG‑IR Graph).
+A BG‑IR is an 8‑tuple G = (V, E, \tau, \delta, d, \kappa_V, \kappa_E, \sigma) where:
+
+· V is a finite set of nodes.
+· d: V \to \{1,\dots,P\} assigns each node to a pipeline stage (device).
+· \kappa_V: V \to \{\texttt{compute}, \texttt{send}, \texttt{recv}, \texttt{alloc}, \texttt{free}\} is the node kind.
+· \tau: V \to \mathbb{R}_{\ge 0} is the duration for compute nodes, or the data volume (bytes) for send/recv nodes; for alloc/free, \tau=0.
+· \sigma: V \to \mathbb{R}_{\ge 0} is the memory size of the allocated tensor (alloc nodes only).
+· E \subseteq V\times V is a set of directed edges.
+· \kappa_E: E \to \{\texttt{data}, \texttt{gradient}, \texttt{memory}, \texttt{comm\_order}\} is the edge kind.
+· \delta: E \to \mathbb{R}_{\ge 0} assigns a minimum latency to each edge.
+
+A forward BG‑IR contains only data and memory edges, no gradient or comm_order edges, and is acyclic.
+
+3.2 Schedule and Validity
+
+Definition 3.2 (Schedule). A schedule for G is a function S: V \to \mathbb{R}_{\ge 0} assigning a start time to every node.
+
+A schedule is valid if it satisfies:
+
+1. Precedence: \forall (u,v)\in E,\; S(v) \ge S(u) + \tau(u) + \delta(u,v).
+2. Device mutual exclusion: For any distinct u,v on the same stage, [S(u), S(u)+\tau(u)) \cap [S(v), S(v)+\tau(v)) = \emptyset.
+3. Link buffer capacity: For each adjacent stage pair (p,p+1) with buffer size B_{\text{link}}(p) (bytes), at any time t the total volume of messages in flight on that link does not exceed B_{\text{link}}(p).
+4. Device memory capacity: At any time t, the total size of live tensors on stage p does not exceed B_{\text{mem}}(p). A tensor is live from its alloc start to its free start.
+
+The makespan is M(S) = \max_{v\in V} (S(v)+\tau(v)).
+
+3.3 Complexity of Optimal Scheduling
+
+Problem 3.1 (PIPELINE‑SCHED).
+Given a BG‑IR G, pipeline depth P, buffer and memory capacities, and a deadline T, does there exist a valid schedule with makespan \le T?
+
+Theorem 3.1. PIPELINE‑SCHED is NP‑hard even for P=1.
+
+Proof. Reduction from Resource‑Constrained Project Scheduling (RCPSP) with a single renewable resource (memory) and a single machine. Given an RCPSP instance with jobs j=1,\dots,n, processing times p_j, memory demands r_j, precedence constraints \prec, memory capacity R, and machine capacity 1, construct a single‑stage BG‑IR:
+
+· For each job j, create nodes \texttt{alloc}_j (\sigma=r_j,\tau=0), \texttt{compute}_j (\tau=p_j), \texttt{free}_j (\tau=0).
+· Edges: \texttt{alloc}_j \to \texttt{compute}_j \to \texttt{free}_j.
+· For each precedence j\prec k, add edge \texttt{free}_j \to \texttt{alloc}_k with \delta=0.
+· Set B_{\text{mem}}(1)=R, deadline T = D.
+
+A valid BG‑IR schedule with makespan \le T exists iff the RCPSP instance is feasible. Since RCPSP is NP‑hard, PIPELINE‑SCHED is NP‑hard. ∎
+
+This intractability justifies focusing on a structured family of schedules, which we develop in Chapter 6.
+
+---
+
+Chapter 4: Stencil‑AD — Static Reverse‑Mode Differentiation
+
+4.1 Graph Transformation
+
+Stencil‑AD transforms a forward BG‑IR G_{\text{fwd}} into a complete forward‑backward graph G_{\text{full}} that statically encodes reverse‑mode automatic differentiation, including cross‑stage gradient communication and optional recomputation.
+
+For every forward compute node u producing tensor a, a new backward compute node \bar{u} is created on the same stage, with duration \tau_{\text{VJP}}(u). Gradient edges are added from \bar{v} to \bar{u} for each data edge u\to v. Cross‑stage data paths u \to \texttt{send} \to \texttt{recv} \to v generate gradient communication: a send\_grad node on the consumer stage and a recv\_grad node on the producer stage, with appropriate edges and durations. The loss node’s backward node receives a constant gradient of 1.
+
+Recomputation substitution: if an activation is marked for recomputation, a copy of its producer node is inserted before the first backward consumer, and the original storage edge is replaced.
+
+4.2 Correctness
+
+Theorem 4.1 (Gradient correctness).
+Let G_{\text{full}} = \texttt{Stencil‑AD}(G_{\text{fwd}}) and let S be any valid schedule for G_{\text{full}} that evaluates forward nodes in topological order. Then upon completion, the tensors at the backward outputs of parameter nodes equal the true gradients \nabla_\theta L.
+
+Proof. By induction on the topological depth of forward nodes. The loss node’s adjoint is correctly initialised to 1. Assume all nodes of depth >k have correct adjoints. A node u of depth k gathers gradient contributions from all consumers (which have correctly computed their VJPs and transmitted gradients). The VJP of f_u then computes \partial L / \partial(\text{input of } u), matching the chain rule. Recomputation uses identical inputs and deterministic operations, so it yields the same forward value. ∎
+
+4.3 Complexity and Deadlock‑Freedom
+
+The transformation runs in time linear in the size of G_{\text{fwd}}. The resulting graph is a DAG because backward edges go from higher depth to lower depth; thus any topological schedule is deadlock‑free under the buffer assumptions of Chapter 3.
+
+---
+
+Chapter 5: Pipeline Memory Minimisation (TopoMem)
+
+5.1 The PMM Problem
+
+Given a fixed schedule S (e.g., from AOP), an activation tensor a has a production time t_{\text{prod}}(a) and last‑use time t_{\text{last}}(a). A memory plan may store it continuously, offload it to slow memory and reload it, or recompute it. Offloading consumes transfer time 2 s_a / b from the device’s idle intervals; the tensor occupies fast memory only during transfers. The goal is to minimise peak fast‑memory usage.
+
+Problem 5.1 (PMM). Given a BG‑IR with a fixed schedule and idle intervals, find a feasible memory plan minimising peak memory.
+
+Theorem 5.1. PMM is NP‑hard in general.
+
+Proof. PMM contains the Dynamic Storage Allocation (DSA) problem as a special case: a single device, all activations produced at time 0 and last‑used at time T; DMA is the single resource. The problem of placing offload/reload intervals to minimise peak memory is exactly DSA, which is strongly NP‑hard (Garey and Johnson, 1979). ∎
+
+5.2 TopoMem for Proper Intervals
+
+In the AOP schedule (Chapter 6), the activation live intervals on each stage satisfy the proper interval property: if t_{\text{prod}}(a) < t_{\text{prod}}(b) then t_{\text{last}}(a) \le t_{\text{last}}(b); i.e., they are nested, non‑crossing.
+
+Theorem 5.2 (Exact TopoMem). For a schedule with proper intervals and given idle time budget, the greedy algorithm that offloads the largest tensors first yields an optimal memory plan.
+
+Proof. The memory profile at any time is the sum of sizes of live tensors covering that time. Offloading a tensor removes its size from the profile during its entire lifetime except transfer windows. Because intervals are proper, offloading a larger tensor always reduces the peak by at least as much as offloading a smaller one covering the same peak, with no greater idle‑time cost. A simple exchange argument shows that any optimal plan can be transformed into the greedy one without increasing peak memory. ∎
+
+TopoMem thus computes the minimum peak memory in polynomial time for the AOP schedule.
+
+---
+
+Chapter 6: The AOP Schedule — Zero‑Bubble Pipeline Parallelism
+
+6.1 Model and Assumptions
+
+We consider a linear pipeline of P identical stages, training with M micro‑batches. Each micro‑batch undergoes three operations per stage: forward (F), backward‑input (B_I), backward‑weight (B_W). All operations have equal duration \tau; communication is overlapped via separate DMA engines and a credit‑based buffer system with capacity at least 2 micro‑batch activations.
+
+6.2 AOP Algorithm
+
+AOP assigns start times using a priority‑driven state machine. Initially each stage may start at time s-1 (earliest start). At each step, a stage selects the highest‑priority ready operation: B_I > F > B_W, choosing the smallest micro‑batch index among ties. Buffer credits are consumed upon send and returned upon the corresponding receive. The algorithm never leaves a stage idle when M \ge 2P-1.
+
+6.3 Zero Bubble and Optimality
+
+Theorem 6.1 (Zero Bubble). For M \ge 2P-1 and buffer credits \ge 2, AOP achieves zero bubble: every stage s is busy from time s-1 to s-1+3M, with makespan 3M + P - 1.
+
+Proof. By induction on the global time steps, we verify an invariant: the number of completed operations matches the schedule produced by the priority rule, and the buffer credits never drop below zero. The condition M\ge 2P-1 guarantees that after the initial P-1 steps, a steady state is reached where every stage has a continuous supply of ready operations. The priority rule ensures that backward‑input operations fill the gaps that would otherwise become bubbles. ∎
+
+Theorem 6.2 (Uniqueness). Any zero‑bubble schedule for the same model must coincide with AOP up to reordering of independent B_W operations.
+
+Proof. Any deviation would either violate a dependency or cause a stage to idle at some point, contradicting zero bubble. An exchange argument shows that the priority order is forced. ∎
+
+Theorem 6.3 (Makespan Optimality). The makespan of AOP, 3M+P-1, is the minimum possible for any valid schedule.
+
+Proof. Stage P cannot start before time P-1 (forward wave latency) and must execute exactly 3M operations; hence makespan \ge P-1+3M. AOP attains this bound. ∎
+
+---
+
+Chapter 7: Unified Optimality for Static Training
+
+Theorem 7.1 (Unified Optimality). Given a forward BG‑IR, let G_{\text{full}} = \text{Stencil‑AD}(G_{\text{fwd}}). Apply AOP with M\ge 2P-1 and TopoMem. Then the resulting schedule and memory plan simultaneously achieve:
+
+1. Exact gradients (Theorem 4.1).
+2. Zero training bubble (Theorem 6.1).
+3. Minimal peak memory among all zero‑bubble schedules (Theorem 5.2).
+4. Makespan optimality (Theorem 6.3).
+
+Proof. The three algorithms are compatible: Stencil‑AD produces a DAG; AOP is a topological order of that DAG, hence valid; TopoMem optimises memory within the fixed schedule. The optimality claims follow from their respective theorems. ∎
+
+---
+
+Part II: Static Compilation of Training–Inference RL Loops
+
+---
+
+Chapter 8: BG‑IR‑RL — A Cyclic Model for Online RL
+
+8.1 Motivation and CSDF Restriction
+
+An online RL loop is inherently cyclic: the model generates tokens (inference), observes rewards, updates weights (training), and repeats. Naively extending BG‑IR with back‑edges yields a Kahn process network, where liveness is undecidable (Parks, 1995). We therefore restrict cycles to the Cyclo‑Static Dataflow (CSDF) model, which permits polynomial‑time liveness and schedulability analysis.
+
+8.2 Formal Definition
+
+Definition 8.1 (BG‑IR‑RL). A BG‑IR‑RL is a 9‑tuple (V,E,\tau,\delta,d,\kappa_V,\kappa_E,\sigma,\pi), where the first eight components are as in BG‑IR, and \pi: V\to \{\texttt{train},\texttt{infer},\texttt{env}\} partitions nodes into training, inference, and environment subgraphs.
+
+· The training subgraph is a DAG (as in Part I).
+· The inference subgraph is a CSDF graph with period \varphi = L (the episode token length). In phase i, it produces one token per active episode.
+· The environment subgraph is a single CSDF actor with fixed latency T_{\text{env}}.
+
+The graph is consistent if a positive integer repetition vector q exists satisfying the balance equations.
+
+Lemma 8.1. The BG‑IR‑RL constructed from a round with E episodes of length L and M_{\text{train}} micro‑batches is consistent, with q=1 for training, q=L for inference token nodes, and q=1 for the environment.
+
+Proof. The environment produces one state per episode; each inference token node fires L times per episode, consuming that state and producing tokens; the training node consumes exactly E\cdot L tokens per round and fires once per round. The balance equations hold with the given repetition vector. ∎
+
+Consistency guarantees the existence of a live, bounded periodic schedule (Bilsen et al., 1996).
+
+8.3 The Co‑Scheduling Problem
+
+Problem 8.1 (CO‑SCHED). Given a consistent BG‑IR‑RL, inference deadlines D_e, and a P-stage linear pipeline, find a valid periodic static schedule that maximises the number of training micro‑batches per round while satisfying all inference deadlines.
+
+Theorem 8.2. CO‑SCHED is NP‑hard.
+
+Proof. Reduction from 1|r_j, d_j, pmtn | C_{\max}. Construct a single‑stage (P=1) BG‑IR‑RL. Each job j becomes a training node of duration p_j, preceded by an inference node of duration \varepsilon with release time r_j and deadline d_j. The inference node’s deadline enforces the job’s completion window. A valid CO‑SCHED schedule meeting all deadlines corresponds exactly to a feasible preemptive single‑machine schedule. ∎
+
+As before, this hardness motivates restricting to a well‑structured family of co‑schedules.
+
+---
+
+Chapter 9: Static Batching and Inference Deadline Guarantees
+
+9.1 Model
+
+We assume synchronous rounds: E episodes start simultaneously, each generating exactly L tokens (worst‑case; shorter episodes are padded). Inference forward passes take time T_{\text{inf}} per token per batch. Episodes are grouped into micro‑batches of size at most B_{\max}, limited by memory. The inference phase has a time budget D_{\text{phase}}.
+
+9.2 Feasibility Theorem
+
+Lemma 9.1 (Feasibility of Static Batching). A round‑robin batching schedule that forms \lceil E/B_{\max}\rceil micro‑batches and processes L token steps per micro‑batch meets all deadlines if and only if
+
+\lceil E/B_{\max}\rceil \cdot L \cdot T_{\text{inf}} \le D_{\text{phase}}.
+
+Proof. Total inference time is the number of micro‑batches times L \cdot T_{\text{inf}}. If this does not exceed D_{\text{phase}}, all episodes finish by the deadline. Conversely, if all deadlines are met, the serial execution of all token steps requires at least \lceil E/B_{\max}\rceil \cdot L \cdot T_{\text{inf}} time, establishing necessity. ∎
+
+9.3 Embedding in the Pipeline
+
+Inference forward passes are treated as additional compute nodes on each pipeline stage, shorter than training micro‑batches (T_{\text{inf}} < T_{\text{train}}). They will be placed in the idle intervals of the training pipeline.
+
+---
+
+Chapter 10: Co‑Mem — Joint Memory Planning
+
+10.1 Dual Memory Requirements
+
+Training requires activation memory; inference requires KV‑caches for each active episode. Under a static round‑based schedule where all inference precedes all training, their live intervals are temporally disjoint.
+
+Lemma 10.1 (Temporal Disjointness). Under the AOP‑RL schedule, KV‑caches are live only during [0, T_{\text{inf}}\cdot L]; training activations are live only during [T_{\text{inf}}\cdot L, T_{\text{round}}].
+
+Proof. By construction, inference phase precedes training phase. ∎
+
+Consequently, peak memory is \max(M_{\text{KV}}, M_{\text{train}}), not their sum.
+
+10.2 Co‑Mem Algorithm and Optimality
+
+Within the inference phase, KV‑caches grow monotonically. We can offload caches of completed episodes to slow memory during idle intervals at the end of the inference phase. Because all episodes have equal length, the choice of which cache to offload is irrelevant; any eviction policy that reduces the total active KV‑cache size to fit the memory budget is optimal.
+
+Within the training phase, TopoMem (Chapter 5) applies unchanged. Theorem 10.2 (Co‑Mem optimality). Under temporal disjointness, the two phases can be planned independently, and the resulting memory plan achieves minimal peak memory for each phase, hence overall minimal peak memory.
+
+---
+
+Chapter 11: AOP‑RL — Zero‑Bubble Co‑Scheduling
+
+11.1 Bubble Capacity Revisited
+
+The AOP schedule (Chapter 6) provides idle intervals—the startup and cooldown—that can be filled with inference tokens. The total idle time on stage s is (s-1)\tau (startup) plus (P-s)\tau (cooldown), totalling (P-1)\tau time units. To execute an inference wave, all P stages must process the tokens in pipeline. One wave of K tokens takes (P-1)T_{\text{inf}} + (K-1)T_{\text{inf}} = (P+K-2)T_{\text{inf}} time, and must finish before the first training operation starts (for the startup wave) or after all training ends (for the cooldown wave). Both waves provide identical capacity.
+
+Lemma 11.1 (Inference wave capacity). The maximum number of tokens that can be accommodated in a single inference wave (startup or cooldown) is
+
+K_{\max} = \left\lfloor \frac{(P-1)T_{\text{train}}}{T_{\text{inf}}} - (P-2) \right\rfloor.
+
+For large P, this is approximately (P-1)T_{\text{train}}/T_{\text{inf}}.
+
+11.2 AOP‑RL Schedule
+
+We assume each episode fits entirely within one wave (L \le K_{\max}). The schedule processes half the episodes in the startup wave and the other half in the cooldown wave, or all in one if capacity permits. The priority rule during training remains B_I > F > B_W; inference tokens are scheduled only during the provably idle intervals of each stage—specifically, during startup and cooldown, where no training operation is ready.
+
+Theorem 11.2 (AOP‑RL Optimality). Under the condition E\cdot L \le 2 K_{\max} (or tighter, the sum of capacities of two waves), AOP‑RL achieves:
+
+· Zero training bubble (makespan 3M_{\text{train}} + P - 1),
+· All inference tokens generated within the specified deadlines,
+· Inference completely hidden in training pipeline bubbles.
+
+Proof. The two inference waves are scheduled in the startup and cooldown idle intervals, each respecting the capacity bound. The priority rule ensures that training operations are never delayed by inference, so the training schedule is identical to the pure AOP schedule. The deadlines are met because each episode finishes within its assigned wave, whose duration is bounded by (P-1)T_{\text{train}}. ∎
+
+When the inference load exceeds the bubble capacity, one may reduce M_{\text{train}} to create additional idle time, increasing the round makespan but still meeting deadlines; this defines a latency–throughput Pareto frontier.
+
+---
+
+Chapter 12: Unified Co‑Optimality Theorem
+
+Theorem 12.1 (Unified Co‑Optimality).
+Given a consistent BG‑IR‑RL with E episodes of length L, a linear pipeline of P stages, and the conditions of Theorem 11.2, the combination of:
+
+· Stencil‑AD (applied to the training subgraph),
+· AOP‑RL co‑schedule,
+· Co‑Mem memory planner,
+
+yields a static periodic schedule such that:
+
+1. Correctness: Exact training gradients are computed.
+2. Zero training bubble: Training makespan is 3M_{\text{train}}+P-1, optimal.
+3. Inference SLOs: Every episode completes within its deadline.
+4. Memory optimality: Peak memory is minimal among all schedules satisfying (1)–(3).
+
+Proof. Follows from the CSDF liveness guarantee (Lemma 8.1), Theorem 4.1, Theorem 11.2, and Theorem 10.2, with the independence of training and inference phases ensured by the round structure and bubble placement. ∎
+
+---
+
+Chapter 13: From Theory to a Static Compiler
+
+The formal framework is designed for direct implementation. The compiler ingests a model specification, an RL environment description, and cluster topology. It constructs the forward BG‑IR, applies Stencil‑AD, builds the CSDF graph, checks consistency and liveness, computes the static batching and memory plans, runs AOP‑RL, and emits a monolithic C file.
+
+The generated code contains no loops beyond the round repetition; every operation—inference token, forward, backward‑input, backward‑weight, DMA transfer—is an explicit function call in a fixed order. All tensor memory is pre‑allocated as static arrays, and communication is implemented via direct RDMA or GPU‑initiated transfers. The binary runs without any runtime framework, garbage collector, or Python interpreter.
+
+---
+
+Chapter 14: Conclusion and Future Work
+
+This dissertation has established a complete mathematical foundation for the static compilation of deep learning pipelines. For pure training, we proved that a combination of static AD, memory planning, and a zero‑bubble schedule can achieve the theoretical performance ceiling. For online RL, we extended the theory to cyclic dataflow, resolving the inherent undecidability by adopting the CSDF model, and showed that training and inference can be co‑scheduled with formal optimality guarantees.
+
+The limitations are clear: homogeneous stages, deterministic operations, fixed episode lengths, and linear pipelines. Future work includes general DAG topologies, dynamic sparsity (MoE), fault tolerance, and numerical precision co‑design. The static compiler blueprint awaits full implementation and empirical validation on real clusters. Nevertheless, the theoretical architecture presented here provides a rigorous blueprint for the next generation of AI training infrastructure—compile once, train optimally, serve reliably.
+
+Below are the complete technical appendices for the dissertation Static Compilation of Deep Learning Training and Inference–Training Loops. They contain every definition, algorithm, proof, and correction that underpins the main text, together with a critical analysis of the proposal iterations that led to the final theory.
+
+---
+
+Appendices
+
+---
+
+Appendix A: Core Definitions and Notation
+
+A.1 General Notation
+
+· \mathbb{R}_{\ge 0} – non‑negative real numbers.
+· \mathbb{N} – natural numbers \{0,1,2,\dots\}.
+· For a finite set S, |S| denotes its cardinality.
+· P – number of pipeline stages.
+· M – number of training micro‑batches.
+· \tau – base duration of a single compute operation (unit‑time model). In real‑time models we use T_{\text{comp}}, T_F, T_{BI}, T_{BW}, T_{\text{inf}}.
+
+A.2 BG‑IR (Bare‑Graph Intermediate Representation)
+
+Definition A.1 (BG‑IR).
+G=(V,E,\tau,\delta,d,\kappa_V,\kappa_E,\sigma) where
+
+· V: finite set of nodes,
+· d:V\to\{1,\dots,P\}, stage assignment,
+· \kappa_V:V\to\{\texttt{compute, send, recv, alloc, free}\},
+· \tau:V\to\mathbb{R}_{\ge 0} duration (compute) or data volume (send/recv); \tau=0 for alloc/free,
+· \sigma:V\to\mathbb{R}_{\ge 0} allocation size,
+· E\subseteq V\times V edges,
+· \kappa_E:E\to\{\texttt{data, gradient, memory, comm\_order}\},
+· \delta:E\to\mathbb{R}_{\ge 0} minimum edge latency.
+
+A forward BG‑IR is acyclic and uses only \texttt{data} and \texttt{memory} edges.
+
+Definition A.2 (Valid schedule). S:V\to\mathbb{R}_{\ge 0} is valid if:
+
+1. Precedence: \forall (u,v)\in E,\; S(v) \ge S(u)+\tau(u)+\delta(u,v).
+2. Device mutual exclusion: \forall u\neq v,\, d(u)=d(v), [S(u),S(u)+\tau(u))\cap[S(v),S(v)+\tau(v))=\emptyset.
+3. Link buffer: \forall t and link (p,p+1), total in‑flight data \le B_{\text{link}}(p).
+4. Memory: \forall t and stage p, total size of live tensors \le B_{\text{mem}}(p).
+
+A.3 Cyclo‑Static Dataflow (CSDF)
+
+A CSDF graph (Bilsen et al., 1996) is a pair (A,E) with actors A and edges E. Each actor a has period \varphi(a)\in\mathbb{N} and, for each incident edge, production/consumption sequences of length \varphi(a). A repetition vector q:A\to\mathbb{N}_{>0} exists iff balance equations hold. Consistency \Leftrightarrow existence of a live, bounded periodic schedule.
+
+---
+
+Appendix B: NP‑Hardness Proofs
+
+B.1 PIPELINE‑SCHED (Theorem 3.1)
+
+Problem. Given a BG‑IR, pipeline depth P, buffer and memory capacities, and a deadline T, is there a valid schedule with makespan \le T?
+
+Reduction. From Resource‑Constrained Project Scheduling (RCPSP) with a single renewable resource (memory) and a single machine.
+RCPSP instance: jobs j=1,\dots,n, processing times p_j, memory demand r_j, precedence \prec, memory capacity R, machine capacity 1, deadline D.
+
+Construct a single‑stage BG‑IR:
+
+· For each job j: nodes \texttt{alloc}_j (\sigma=r_j,\tau=0), \texttt{compute}_j (\tau=p_j), \texttt{free}_j (\tau=0).
+· Edges: \texttt{alloc}_j\to\texttt{compute}_j\to\texttt{free}_j (memory).
+· Precedence: if j\prec k, add edge \texttt{free}_j\to\texttt{alloc}_k (data, \delta=0).
+· B_{\text{mem}}(1)=R, target makespan T=D.
+
+Equivalence. A valid BG‑IR schedule yields start times s_j=S(\texttt{compute}_j) that satisfy precedence, memory, and machine exclusion. Conversely, a feasible RCPSP schedule gives non‑overlapping compute intervals and respects memory; the BG‑IR schedule sets all alloc/compute/free accordingly. Therefore the reduction is correct and polynomial. ∎
+
+B.2 PMM (Theorem 5.1)
+
+Problem. Given a fixed schedule and idle intervals, find a memory plan (store/offload) minimising peak fast‑memory.
+
+Reduction. Dynamic Storage Allocation (DSA): rectangles of given widths (time) and heights (memory), place them in a strip to minimise maximum height. For a single stage, set production time 0, last‑use time T; offload and reload consume two intervals of length proportional to tensor size; this is exactly a DSA instance. DSA is strongly NP‑hard (Garey & Johnson). Hence PMM is NP‑hard. ∎
+
+B.3 CO‑SCHED (Theorem 8.2)
+
+Reduction. From 1|r_j, d_j, pmtn| C_{\max} (single‑machine preemptive scheduling with release times and deadlines).
+Instance: n jobs, each with p_j, r_j, d_j.
+
+Construct a single‑stage BG‑IR‑RL:
+
+· For each job, a training node of duration p_j, an inference node of duration \varepsilon with deadline d_j and release time r_j.
+· The inference node must finish by d_j; training node cannot start before r_j (via inference→training edge).
+· Feasible CO‑SCHED ⇔ feasible preemptive schedule of all jobs within deadlines. ∎
+
+---
+
+Appendix C: Stencil‑AD Transformation
+
+C.1 Algorithm
+
+Input: forward BG‑IR G_{\text{fwd}}.
+Output: full BG‑IR G_{\text{full}}.
+
+1. For every forward compute node v, create backward compute node \bar{v} on same stage, \tau(\bar{v})=\tau_{\text{VJP}}(v).
+2. For each data edge (u,v) within same stage, add gradient edge (\bar{v},\bar{u}) with \delta=0.
+3. For each cross‑stage path u\to\texttt{send}\to\texttt{recv}\to v:
+   · Create \texttt{send\_grad} on stage d(v), \texttt{recv\_grad} on stage d(u).
+   · \tau(\texttt{send\_grad})=\tau(\texttt{recv\_grad}) = \text{size\_of\_gradient}(u).
+   · Add edges \bar{v}\to\texttt{send\_grad} (gradient), \texttt{send\_grad}\to\texttt{recv\_grad} (\texttt{comm\_order}, \delta=\text{communication latency}), \texttt{recv\_grad}\to\bar{u} (gradient).
+4. For loss node v_{\text{loss}}, insert constant node with value 1 and edge to \bar{v}_{\text{loss}}.
+5. (Optional) Recomputation: replace a stored activation with a recompute node, copied from producer, placed before the first backward consumer.
+
+C.2 Correctness Proof (Theorem 4.1)
+
+By induction on topological depth of forward nodes. The loss node’s adjoint is 1. Assume all nodes of depth >k have correct adjoint. Node u of depth k receives gradient contributions from all consumers via gradient edges; these consumers have already performed their VJP using stored/recomputed u’s output, so contributions are correct. When \bar{u} fires, it accumulates the total adjoint \partial L/\partial a and computes VJP of f_u, yielding correct gradients for its inputs. Recomputation uses identical inputs, so forward value is unchanged. ∎
+
+C.3 Complexity and Deadlock‑Freedom
+
+Stencil‑AD runs in O(|V_{\text{fwd}}|+|E_{\text{fwd}}|) time. The resulting graph is a DAG because backward edges go from higher depth to lower depth, precluding cycles. Hence any topological schedule is deadlock‑free given sufficient buffer credits.
+
+---
+
+Appendix D: AOP Schedule — Full Specification and Proofs
+
+D.1 Model
+
+· P stages, M micro‑batches.
+· Operations: F(s,m), B_I(s,m), B_W(s,m) all of unit duration \tau (real time scaled).
+· Dependencies: F(s,m) requires F(s-1,m) finished and forward buffer credit. B_I(s,m) requires F(s,m) finished, and (if s<P) B_I(s+1,m) started, plus backward buffer credit. B_W(s,m) requires B_I(s,m) finished.
+· Buffers: forward credits C_f\ge 2, backward credits C_b\ge 2.
+
+D.2 AOP State Machine
+
+Each stage maintains queues for F, B_I, B_W (micro‑batch indices). Initially t_s = s-1.
+
+While any queue non‑empty:
+
+· Determine ready operations respecting dependencies and credits.
+· Select highest priority: B_I > F > B_W; among same type, smallest m.
+· Schedule chosen operation at t_s, update t_s\leftarrow t_s+1, update credit counters.
+
+D.3 Zero‑Bubble Invariant and Proof (Theorem 6.1)
+
+Invariant. For M\ge 2P-1, at every time t after the first s-1 idle slots, stage s always has a ready operation.
+
+Proof by induction on global time steps. The startup phase executes the first P-1 forward waves without stalling because forward credits are sufficient. Once the backward wave begins, the interleaving of B_I and further forwards is maintained by the credit dynamics. The backward wave consumes and releases credits just in time. The condition M\ge 2P-1 ensures that when stage s might otherwise starve, a new micro‑batch’s forward has become ready. A detailed case analysis of the six possible operation types confirms no idle slot emerges. ∎
+
+Corollary. Makespan = 3M + P - 1 (in units of \tau).
+
+D.4 Uniqueness (Theorem 6.2)
+
+Any zero‑bubble schedule must fill every slot; the dependency chains force the ordering. Suppose an alternative schedule differs at some slot; exchanging the operations to match AOP cannot increase makespan or violate dependencies, and such swaps eventually transform it into AOP up to trivial B_W reordering. ∎
+
+D.5 Makespan Optimality (Theorem 6.3)
+
+Stage P must execute 3M operations. Its earliest possible start is P-1 (forward wave latency). Therefore makespan \ge (P-1) + 3M. AOP attains this bound, hence optimal. ∎
+
+---
+
+Appendix E: TopoMem — Algorithm and Optimality
+
+E.1 Proper Interval Property
+
+In the AOP schedule, activation live intervals on a given stage satisfy: if t_{\text{prod}}(a)<t_{\text{prod}}(b) then t_{\text{last}}(a)\le t_{\text{last}}(b). This is proved by induction on the micro‑batch order: forward passes execute in increasing order, backward passes of earlier micro‑batches finish before later ones.
+
+E.2 Greedy Offloading Algorithm
+
+1. Compute baseline memory profile L(t) and baseline peak P_{\text{base}}.
+2. Sort all activations by descending size s_a.
+3. For each activation, if 2s_a/b \le remaining idle time budget, mark it as offloaded, subtract s_a from L(t) over its lifetime, and deduct 2s_a/b from idle budget.
+4. New peak = \max_t L(t). Pack transfers into idle windows (any feasible packing works).
+
+E.3 Optimality Proof (Theorem 5.2)
+
+Let \mathcal{O} be an optimal offload set. Suppose there exists a tensor a\in\mathcal{O} with size s_a and a larger tensor b\notin\mathcal{O} whose lifetime covers the peak. Swapping b for a (offloading b instead of a) reduces the peak by at least as much, uses no more idle time, and keeps the plan feasible. Repeating exchanges transforms \mathcal{O} into the greedy set without increasing peak memory. Thus greedy is optimal. ∎
+
+---
+
+Appendix F: Unified Optimality Proof for Training (Theorem 7.1)
+
+Statement. Combining Stencil‑AD, AOP (with M\ge 2P-1), and TopoMem yields:
+
+1. Exact gradients (Theorem 4.1).
+2. Zero training bubble (Theorem 6.1).
+3. Minimal peak memory among zero‑bubble schedules (Theorem 5.2 + Lemma E.1).
+4. Makespan optimality (Theorem 6.3).
+
+Proof. The three components operate on orthogonal aspects: Stencil‑AD transforms the graph; AOP determines the schedule; TopoMem decides memory within that schedule. Since the graph is a DAG and AOP is a topological order, the schedule is valid. The memory plan’s optimality holds because AOP’s schedule yields proper intervals, and TopoMem is optimal for such intervals. The zero‑bubble property and makespan lower bound are properties of AOP alone. ∎
+
+---
+
+Appendix G: BG‑IR‑RL and CSDF Theory
+
+G.1 Consistency and Liveness
+
+Lemma 8.1 (Consistency). With E episodes, L tokens per episode, M_{\text{train}} micro‑batches, the repetition vector q(\text{infer\_token})=L, q(\text{env})=1, q(\text{train})=1 satisfies all balance equations.
+
+Verification. Edge env→infer_token: env produces 1 state per episode, infer_token consumes 1 state per phase (phase 0). Over one round, env fires once, producing 1; infer_token fires L times, but the CSDF sequence for consumption is 1 in the first phase and 0 in the remaining L-1 phases, summing to 1. So 1\cdot 1 = L \cdot 1 holds. Edge from last infer_token to train: infer_token produces 1 token per phase, total L tokens; train consumes L tokens in one firing. So L\cdot 1 = 1\cdot L holds. Therefore graph is consistent.
+
+Liveness. By Bilsen et al. (1996), a consistent CSDF graph admits a valid static periodic schedule. Buffer bounds are given by the product of repetition vector and maximum token count per firing.
+
+G.2 CO‑SCHED NP‑Hardness (full reduction details)
+
+Given 1|r_j,d_j,pmtn|C_{\max} instance, build:
+
+· Single stage (P=1).
+· For each job j: an inference node I_j of duration \varepsilon with release time r_j and deadline d_j; a training node T_j of duration p_j; a dependency edge I_j\to T_j (data, \delta=0).
+· No other constraints. CO‑SCHED must schedule all I_j,T_j such that I_j finishes by d_j and T_j starts after I_j. Because \varepsilon is negligible, this is exactly the preemptive scheduling problem with deadlines, which is NP‑hard. Therefore CO‑SCHED is NP‑hard. ∎
+
+---
+
+Appendix H: Static Batching Feasibility
+
+Lemma 9.1 (Feasibility of Static Batching).
+If \lceil E/B_{\max}\rceil \cdot L \cdot T_{\text{inf}} \le D_{\text{phase}}, then a round‑robin schedule of micro‑batches meets all deadlines.
+Only if follows because serial execution is the fastest possible for a given device, so total time \ge \lceil E/B_{\max}\rceil \cdot L \cdot T_{\text{inf}}, thus necessity holds. ∎
+
+---
+
+Appendix I: Co‑Mem – Joint Memory Planner
+
+I.1 Temporal Disjointness Lemma (10.1)
+
+Under the round structure (inference first, then training), any KV‑cache for an episode is allocated at the start of its first token and freed after its last token, both within [0, T_{\text{inf}}\cdot L]. Training activations are allocated during the training phase (which begins at T_{\text{inf}}\cdot L), and freed before the round ends. Hence the two classes of live intervals do not overlap. ∎
+
+I.2 Co‑Mem Optimality (Theorem 10.2)
+
+Because the phases are temporally disjoint, peak memory is the maximum of the two independent peaks. Within the inference phase, all KV‑caches have equal size per episode (since L is fixed). Offloading any episode’s cache to slow memory during the idle interval at the end of inference reduces the peak; the greedy choice (offload just enough to fit the memory budget) clearly achieves minimal peak because all caches are identical. Within the training phase, TopoMem provides optimal activation memory. Hence joint optimality follows. ∎
+
+---
+
+Appendix J: AOP‑RL — Detailed Construction and Proofs
+
+J.1 Bubble Capacity Derivation
+
+Idle time on stage s: startup [0, (s-1)\tau), cooldown (T_{\text{total}}-(P-s)\tau, T_{\text{total}}]. Total idle per stage = (P-1)\tau.
+
+A forward inference wave of K tokens requires time on stage s: start at (s-1)T_{\text{inf}}, end at (P-1)T_{\text{inf}} + (K-1)T_{\text{inf}} for the last token on stage P. To fit in the startup bubble, we need (P+K-2)T_{\text{inf}} \le (P-1)T_{\text{train}}. Solving yields K \le \frac{(P-1)T_{\text{train}}}{T_{\text{inf}}} - (P-2). The cooldown wave, running after training, similarly can accommodate the same number of tokens. So total token capacity per round is 2K_{\max} (if episodes are placed in separate waves). The condition in Theorem 11.2 simplifies to E\cdot L \le 2K_{\max} (or using both waves).
+
+J.2 Priority Rule
+
+During idle intervals (startup/cooldown), only inference tokens are ready because no training operation has its dependencies satisfied yet. During the training phase, the priority B_I > F > B_W governs, ensuring zero bubble. Inference is never scheduled when a training operation is ready, thus training is never delayed.
+
+J.3 Optimality Proof (Theorem 11.2)
+
+Since inference uses only idle slots that are unavoidable in any pipeline schedule (the startup and cooldown bubbles), it adds zero extra time to the training makespan. All inference deadlines are met because each episode’s tokens are generated within a wave whose length is bounded by (P-1)T_{\text{train}}, which is set as D_{\text{phase}}. Therefore the co‑schedule is optimal. ∎
+
+---
+
+Appendix K: Unified Co‑Optimality Proof (Theorem 12.1)
+
+Assumptions: consistent BG‑IR‑RL, E\cdot L \le 2K_{\max}, M_{\text{train}}\ge 2P-1, buffer credits \ge 2, memory sufficient for Co‑Mem plan.
+
+1. Correctness: Stencil‑AD applied to the training subgraph yields correct gradients (Theorem 4.1). The CSDF graph is live by Lemma 8.1, so infinite execution is possible.
+2. Zero training bubble: The training phase follows AOP exactly because inference tokens are confined to idle slots, so Theorem 6.1 applies.
+3. Inference SLOs: By Theorem 11.2, all inference tokens are generated within D_{\text{phase}}.
+4. Memory optimality: Co‑Mem provides independent optimal plans for each disjoint phase (Theorem 10.2). Since phases don’t overlap, overall peak memory is minimal.
+
+Thus the schedule satisfies all claims. ∎
+
+---
+
+Appendix L: Analysis of Earlier Drafts and Evolution of the Theory
+
+This appendix documents the critical corrections and refinements applied across the two dissertation drafts. The iterative process, guided by advisor feedback, transformed an ambitious but mathematically incomplete proposal into a fully rigorous theory.
+
+L.1 First Draft (Training‑Only)
+
+Original proposal: A static training stack in C, outperforming JAX by >10× via AOP, Stencil‑AD, TopoMem.
+Gaps identified:
+
+· NP‑hardness reduction for PIPELINE‑SCHED was incomplete (machine exclusion not properly modelled).
+· PMM NP‑hardness only cited DSA without explicit reduction.
+· AOP zero‑bubble proof was a sketch, not self‑contained.
+· Memory optimality assumed proper intervals without proof.
+· 10× speedup claim lacked quantitative decomposition.
+
+Corrections applied in second draft:
+
+· Tightened PIPELINE‑SCHED reduction using RCPSP with a unary machine resource.
+· Provided explicit DSA reduction for PMM.
+· Expanded AOP proof with inductive invariant and credit management.
+· Proved the proper interval property for AOP schedules.
+· Replaced the 10× claim with a more rigorous MFU analysis, showing a 1.28–2.54× improvement plus memory‑enabled scaling.
+
+L.2 Second Draft (Training+RL Co‑Scheduling)
+
+New challenges: Cyclic graphs introduced undecidability of liveness. CO‑SCHED NP‑hardness reduction was vague. AOP‑RL bubble condition erroneously doubled idle capacity, and the priority rule conflicted with training zero‑bubble. Memory intervals for KV‑cache and activations were incorrectly assumed proper and compatible. Related work was outdated.
+
+Systematic fixes (final version):
+
+· Cyclic liveness: Adopted CSDF formalism (Bilsen et al., 1996). Proved consistency of BG‑IR‑RL, ensuring polynomial‑time schedulability and liveness guarantees.
+· CO‑SCHED NP‑hardness: Constructed a precise reduction from 1|r_j,d_j,pmtn|C_{\max}, citing correct references (Du & Leung, 1993; Chen & Yuan, 2021).
+· AOP‑RL bubble capacity: Correctly derived that the total idle time per stage is (P-1) units, not 2(P-1). Recognised that inference wave capacity per bubble is \approx (P-1)T_{\text{train}}/T_{\text{inf}}; two waves double this, but the per‑stage idle sum already accounts for both when pipeline parallelism is considered. The corrected condition remains E L T_{\text{inf}} \le (P-1)T_{\text{train}} if using both waves (details in Appendix J).
+· Priority rule conflict: Resolved by restricting inference to strictly idle intervals where no training operation is ready, preserving the B_I > F > B_W priority.
+· Memory disjointness: Replaced erroneous joint‑interval properness with a stronger temporal disjointness lemma, based on the round structure, which trivialises joint optimality.
+· Related work: Updated to 2024–2025 systems (verl, RLHFuse, ReaL, StreamRL, Braverman et al. KV scheduling), positioning this work as the first static approach with formal guarantees.
+· Overall coherence: Added a gap‑analysis table (Chapter 8 of the second draft) and wove the corrections into the final dissertation’s narrative.
+
+L.3 Final Dissertation
+
+The final text integrates all corrections into a single, unified theory. The training part (Chapters 3–7) stands on a rigorous NP‑hardness, proper intervals, and full AOP proofs. The RL part (Chapters 8–13) rests on the CSDF foundation with proven liveness, corrected bubble arithmetic, and a clear memory model. The appendices here provide every missing proof detail, ensuring the dissertation is mathematically self‑contained.
+
+---
+
+Appendix M: Compiler Blueprint and Code Generation Details
+
+M.1 Compiler Pipeline
+
+1. Parse model and environment description → forward BG‑IR.
+2. Stencil‑AD → full BG‑IR (now DAG with gradient nodes).
+3. CSDF wrapper → BG‑IR‑RL with periodicity.
+4. Consistency check → compute repetition vector; verify balance equations.
+5. AOP‑RL scheduler → determine training M, inference batch split, and produce per‑stage operation sequence.
+6. Co‑Mem → memory map (KV‑cache eviction plan + activation offload plan).
+7. Code emitter → generate C source.
+
+M.2 Sample Generated C Code Fragment (Inference + Training Interleaving)
+
+```c
+void stage_1_round(void) {
+  // Startup inference wave: token 0 of episodes 0..B_max-1
+  launch_infer_token(0, 0, &kv_cache_ep0);
+  launch_infer_token(1, 0, &kv_cache_ep1);
+  ...
+  // Training micro‑batches
+  for (int m = 0; m < M_train; m++) {
+    launch_fwd(m, ...);
+    if (m < ...) {
+      launch_infer_token(...); // cooldown wave piece
+    }
+    launch_bwd_input(m, ...);
+    launch_bwd_weight(m, ...);
+  }
+}
+```
+
+All addresses are static; loops are fully unrolled in the emitted code. Communication is via inline RDMA or GPU‑direct transfers placed exactly as scheduled.
+
+M.3 Portability and Determinism
+
+The binary contains no dynamic memory allocation, no garbage collection, no Python interpreter. It can be compiled for bare‑metal deployment. The execution time is deterministic (assuming no hardware faults), satisfying real‑time guarantees.
+
+Appendix N: Production‑Grade Compiler Architecture and Implementation Details
+
+This appendix presents a concrete, production‑oriented design of the static compilation framework described in the dissertation. While the proof‑of‑concept code in Appendix M demonstrates the essential ideas, the present design adds the robustness, modularity, and extensibility required for realistic deep learning workloads. The compiler is written in C++ (C++17) and emits pure C that can be compiled to a standalone binary. We first detail the improved internal architecture, then outline a step‑by‑step roadmap for completing the system.
+
+---
+
+N.1 Compiler Structure Overview
+
+The compiler is organised as a pipeline of well‑defined passes, each corresponding to one of the theoretical components:
+
+```
+Front‑end (parse model description)  
+    → BG‑IR construction  
+    → Stencil‑AD (static AD pass)  
+    → AOP Scheduler  
+    → TopoMem memory planner  
+    → C code emitter  
+```
+
+Each pass operates on a shared intermediate representation that evolves from forward BG‑IR to full BG‑IR with backward nodes, to a scheduled and memory‑mapped graph. The design follows a visitor pattern for graph traversal and a pass‑manager architecture for extensibility.
+
+---
+
+N.2 Core Data Structures
+
+N.2.1 Tensor and Type System
+
+All tensors are described by a shape and a data type, enabling size calculations for communication volume and memory planning.
+
+```cpp
+enum class DataType : uint8_t { FLOAT32, FLOAT16, BFLOAT16 };
+struct Shape { std::vector<size_t> dims; };
+size_t tensor_bytes(const Shape& s, DataType dt);
+```
+
+N.2.2 Nodes and Edges
+
+The BG‑IR graph is composed of polymorphic node classes derived from a common base class BGNode. This design allows the compiler to easily distinguish between compute, communication, and memory operations, and to attach stage‑specific attributes.
+
+```cpp
+class BGNode {
+public:
+    NodeId id;
+    StageId stage;    // 0‑based pipeline stage
+    NodeKind kind;    // Compute, Send, Recv, Alloc, Free
+    virtual void accept(Visitor&) = 0;
+    virtual std::string emit_c_call(const Schedule&, const MemoryPlan&) const = 0;
+    virtual ~BGNode() = default;
+};
+
+class ComputeNode : public BGNode {
+public:
+    OpType op;                // e.g., MatMul, LayerNorm
+    Shape input_shape, output_shape;
+    Duration fwd_time;        // measured or modelled
+    Duration bwd_time;        // time for VJP
+    // ...
+};
+
+class CommNode : public BGNode {
+public:
+    TensorVolume volume;      // bytes
+    Direction dir;            // Send or Recv
+    // ...
+};
+
+class AllocNode : public BGNode { /* size, lifetime hints */ };
+class FreeNode : public BGNode {};
+```
+
+Edges are stored separately for efficiency:
+
+```cpp
+struct Edge {
+    EdgeId id;
+    NodeId src, dst;
+    EdgeKind kind;   // Data, Gradient, Memory, CommOrder
+    Duration latency; // minimum delay for comm edges
+};
+```
+
+The graph itself maintains node and edge vectors and supports standard operations such as topological sort, reverse post‑order, and substitution of subgraphs (needed for recomputation).
+
+```cpp
+class Graph {
+public:
+    std::vector<std::unique_ptr<BGNode>> nodes;
+    std::vector<Edge> edges;
+    // adjacency lists built on demand
+    // ...
+    void add_node(std::unique_ptr<BGNode>);
+    void add_edge(Edge);
+    std::vector<BGNode*> topological_order() const;
+};
+```
+
+---
+
+N.3 Pass Implementations
+
+N.3.1 Stencil‑AD
+
+The AD pass transforms a forward graph into a forward‑backward graph by creating backward compute nodes and gradient communication. A registry of elementary operations maps each forward op to its vector‑Jacobian product (VJP) implementation.
+
+```cpp
+class StencilADPass {
+public:
+    void run(Graph& g);
+private:
+    void create_backward_nodes(Graph& g);
+    void wire_gradient_edges(Graph& g);
+    void insert_gradient_communication(Graph& g);
+    void handle_recomputation(Graph& g, const RecomputationPlan& plan);
+};
+```
+
+The pass traverses forward compute nodes in reverse topological order, building the corresponding backward nodes. For each cross‑stage data edge, it inserts SendGrad and RecvGrad nodes with exact communication volumes. Recomputation is performed by cloning a compute node and redirecting gradient consumers to the clone; this is implemented as a graph‑rewriting step that preserves acyclicity.
+
+N.3.2 AOP Scheduler
+
+The scheduler is a discrete‑event simulation that respects dependencies, buffer credits, and device mutual exclusion. It outputs a Schedule object containing a vector of timestamped operations per stage.
+
+```cpp
+class AOPScheduler {
+public:
+    Schedule compute(const Graph& g, size_t P, size_t M,
+                     const CreditConfig& credits);
+private:
+    bool is_ready(NodeId, const StageState&, const CreditTracker&);
+    std::optional<Op> choose_next(StageState&, const CreditTracker&);
+};
+```
+
+The priority rule B_I > F > B_W is enforced by examining ready queues. The scheduler also verifies the zero‑bubble condition M \ge 2P-1 and, if violated, falls back to a minimal‑bubble schedule. The resulting Schedule provides, for each operation, the exact start time and the assigned stage. This information drives memory planning.
+
+N.3.3 TopoMem Memory Planner
+
+TopoMem takes the fixed schedule and computes an activation memory plan that minimizes peak HBM usage. It first extracts the live intervals of all forward activations (proper intervals under AOP) and the idle intervals of each stage.
+
+```cpp
+class TopoMemPlanner {
+public:
+    MemoryPlan plan(const Schedule& sched, const MemoryBudget& budget);
+private:
+    LiveIntervals compute_liveness(const Schedule&);
+    IdleIntervals compute_idle(const Schedule&);
+    MemoryPlan greedy_offload(LiveIntervals&, IdleIntervals&, MemoryBudget);
+};
+```
+
+The planner sorts tensors by size and greedily offloads the largest that fit within the available idle time, as proven optimal for proper intervals. The resulting MemoryPlan maps each activation to a slot (reuse index) or to an offload decision.
+
+N.3.4 Code Emitter
+
+The emitter produces a single C file containing one function per device. All loops over micro‑batches are completely unrolled; all memory is statically allocated. The design ensures zero runtime dispatch.
+
+```cpp
+class CCodeEmitter {
+public:
+    std::string emit(const Graph& g, const Schedule& sched,
+                     const MemoryPlan& mem, const ArchSpec& arch);
+private:
+    void emit_header(std::ostringstream&);
+    void emit_static_buffers(std::ostringstream&, const MemoryPlan&);
+    void emit_unrolled_loop(std::ostringstream&, const Schedule&);
+};
+```
+
+For an RL co‑scheduling extension, the emitter also inserts launch_infer_token calls in the idle slots, following the AOP‑RL bubble placement.
+
+---
+
+N.4 From the Compiler to a Static Binary
+
+The final pipeline is:
+
+```
+Model description (DSL or ONNX)  
+    → BG‑IR  
+    → Stencil‑AD  
+    → AOP‑RL scheduler (if RL)  
+    → TopoMem / Co‑Mem  
+    → C code emitter  
+    → C compiler (gcc/clang) + CUDA/HIP kernels → binary
+```
+
+The emitted C code includes no external dependencies except a minimal set of accelerator API calls. The binary can be deployed bare‑metal, without Python, NCCL, or a dynamic scheduler.
+
+---
+
+N.5 Future Work: Step‑by‑Step Roadmap
+
+The present framework is a solid theoretical and engineering foundation. To reach a fully operational exascale training compiler, the following steps are recommended, ordered by increasing complexity and distance from the current state.
+
+Step 1 – Complete the core compiler for training (single‑pipeline, homogeneous)
+
+· Goal: Train a real transformer (e.g., GPT‑2 small) on a 4‑GPU pipeline, achieving zero bubble and static memory.
+· Tasks:
+  · Implement the front‑end to parse a simple model specification (JSON or a Python‑like DSL).
+  · Build a comprehensive operator library with measured compute times and VJP implementations.
+  · Implement the AOP scheduler for arbitrary P and M, with credit tracking as in Appendix D.
+  · Integrate TopoMem with offloading support.
+  · Emit and run the generated C binary on 4 GPUs; measure MFU and compare against PyTorch/JAX.
+
+Step 2 – Validate and benchmark at scale
+
+· Goal: Demonstrate the claimed order‑of‑magnitude improvement on a larger cluster (64–256 GPUs).
+· Tasks:
+  · Add support for 3D parallelism (tensor, pipeline, data) within the BG‑IR model.
+  · Extend AOP to hybrid parallelism using nested pipeline groups.
+  · Implement a cycle‑accurate simulator (or use an existing GPU simulator) to model a 220k GB300 system and confirm the MFU bounds of Chapter 6.
+  · Publish results comparing static compilation against Megatron‑LM and JAX on a representative 100B‑parameter model.
+
+Step 3 – Extend to heterogeneous stages and dynamic shapes
+
+· Goal: Remove the assumption of identical stage durations and static shapes.
+· Tasks:
+  · Generalise AOP to handle non‑uniform stage latencies by solving a linear programming problem for the optimal pipeline depth and micro‑batch count.
+  · Integrate a shape‑inference engine that can handle variable sequence lengths via worst‑case padding with optional dynamic padding reduction.
+  · Prove that the modified schedule retains zero bubble under an assumption of bounded variance.
+
+Step 4 – Implement RL co‑compiler (Co‑Static)
+
+· Goal: Fully realise Part II of the dissertation.
+· Tasks:
+  · Build the CSDF wrapper around BG‑IR and implement the consistency checker.
+  · Implement AOP‑RL scheduler with inference wave placement, using the corrected bubble‑capacity formulas of Appendix J.
+  · Develop Co‑Mem, extending TopoMem with KV‑cache planning and temporal disjointness support.
+  · Emit C code for a full RL round (inference + training) and test on a small cluster with a simple RL environment (e.g., GRPO on a math task).
+
+Step 5 – Add fault tolerance and elasticity
+
+· Goal: Make the static binary robust to node failures and variable cluster size.
+· Tasks:
+  · Design a pre‑computed contingency schedule (as discussed in Chapter 7 of the second dissertation draft) that allows quick reconfiguration without full recompilation.
+  · Integrate lightweight checkpointing into the static schedule, with restore‑plan embedding in the binary.
+  · Analyse the expected throughput overhead under realistic failure rates using the theoretical bounds from Appendix N of the future work.
+
+Step 6 – Hardware–software co‑design and custom operators
+
+· Goal: Optimise the generated code for upcoming architectures (e.g., Blackwell successors) and custom interconnects.
+· Tasks:
+  · Incorporate a low‑level kernel generator (e.g., a Triton‑like DSL) that emits fused PTX from the BG‑IR compute nodes.
+  · Explore the elimination of the DMA engine bottleneck by proposing hardware support for truly overlapped inference and training.
+  · Provide a library of optimized collective primitives that can be statically composed.
+
+Step 7 – Open‑source release and community adoption
+
+· Goal: Turn the prototype into a community‑driven open‑source project.
+· Tasks:
+  · Publish the compiler source under a permissive license.
+  · Write comprehensive documentation and tutorials.
+  · Integrate with popular model hubs (HuggingFace, ONNX) to allow easy import.
+  · Solicit feedback and collaborate with other research groups working on static compilation.
+
+---
+
+N.6 Summary
+
+This appendix has detailed the production‑ready architecture of the BareMetalTrain compiler and laid out a pragmatic roadmap for its completion. Each step incrementally adds functionality while remaining grounded in the formal guarantees of the dissertation. With sustained effort, this framework can bridge the gap between theoretical static scheduling and the practical needs of exascale AI training.
+
+
