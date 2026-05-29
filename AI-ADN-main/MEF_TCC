@@ -1,0 +1,331 @@
+A Meta‑Evaluation Framework for Temporal and Causal Consistency in Large Language Models
+
+Theoretical Foundations, Mathematical Architecture, and Design
+
+Author: ouadi Maakoul+Gemini+Deepseek+Qwen
+Abstract
+
+Large language models (LLMs) exhibit remarkable fluency but frequently generate factually incorrect or historically incoherent statements. Existing evaluation benchmarks treat facts as isolated units and fail to capture temporal inconsistencies, causal fabrications, or legitimate interpretive diversity. This document presents a comprehensive theoretical framework for evaluating factual accuracy in LLMs, with a focus on historical knowledge—a domain that exposes the limitations of current metrics. The framework introduces: (i) formal models of temporal consistency grounded in directed acyclic graphs with uncertainty intervals; (ii) historiographical coverage scores that treat historical interpretations as semantic fields with intra‑stance variance and causal argument structure; (iii) a hybrid verification architecture combining Natural Language Inference (NLI) and retrieval‑augmented LLMs, with a learned fusion classifier; (iv) multi‑objective Pareto analysis for model comparison; and (v) rigorous meta‑evaluation protocols against expert human judgments. All components are defined mathematically, and the dataset schema is specified in a machine‑readable format (JSON‑LD). The framework is designed for cross‑cultural portability and provides interpretable diagnostics rather than opaque leaderboards. This document serves as a theoretical blueprint for organizations and researchers aiming to build robust, interpretable evaluation tools for LLM factuality.
+
+---
+
+1. Introduction
+
+Large language models (LLMs) are increasingly deployed in knowledge‑intensive domains such as education, journalism, and research. Despite their fluency, these models frequently produce hallucinations—plausible but incorrect statements. In history, where narratives rest on verifiable events and causal chains, hallucinations can propagate misinformation and erode trust.
+
+Current evaluation paradigms (e.g., TruthfulQA, FactScore, RAGAS) provide valuable insights but suffer from three fundamental limitations:
+
+1. Structural blindness: Historical facts are not isolated; they form temporal and causal webs. A model may correctly name entities but violate chronological order (anachronism) or invent causal links. Existing metrics rarely capture such structural errors.
+2. Oversimplification of truth: History is not a collection of binary facts. Many questions admit multiple valid interpretations supported by different scholarly traditions. Penalising legitimate divergence biases evaluation.
+3. Evaluator circularity: Using LLMs to judge LLMs inherits the judge's hallucinations; knowledge graphs may be incomplete. The validity of any automatic metric must be established through meta‑evaluation against human experts.
+
+This document proposes a meta‑evaluation framework that addresses these gaps. The framework is defined purely theoretically, with all components formalised mathematically. It provides a blueprint for building automated evaluation tools that are interpretable, diagnostically rich, and validated against expert judgment.
+
+Core Research Questions:
+
+· How can we formally model temporal and causal constraints in historical narratives and use them to evaluate LLM outputs?
+· How can evaluation metrics distinguish between verifiable facts, plausible interpretations, and outright hallucinations, while capturing the semantic depth of historiographical schools?
+· What features of historical reasoning (temporal structure, causal depth, interpretive pluralism) most challenge automatic evaluators, and how can meta‑evaluation diagnose these gaps?
+· How can a hybrid verification architecture mitigate evaluator bias and provide calibrated uncertainty estimates?
+
+---
+
+2. Problem Formalization
+
+Let \mathcal{Q} denote a set of historical questions. For each question q \in \mathcal{Q}, there exists a ground truth representation \mathcal{G}(q) that captures accepted knowledge relevant to q. The nature of \mathcal{G}(q) depends on the question type (see Section 4).
+
+Let M be a language model. When queried with q, the model produces a response R = M(q). Because LLMs are stochastic, we consider the response as a draw from the model's conditional distribution: R \sim P_M(\cdot \mid q). To obtain a stable estimate of a model's factual reliability, we sample K responses per question: \{R^{(1)}, \dots, R^{(K)}\}.
+
+A scoring function s(q, R) maps a question–response pair to a real number representing factual quality, typically in [0,1]. The overall score for model M is defined as the expectation over questions and responses:
+
+\mathrm{Score}(M) = \mathbb{E}_{q \sim \mathcal{Q}} \left[ \mathbb{E}_{R \sim P_M(\cdot \mid q)} [ s(q, R) ] \right].
+
+In practice, we approximate this via the empirical mean over the sampled responses.
+
+Counterfactual robustness: We also consider counterfactual queries (e.g., "What if the Bastille had not fallen?") to evaluate whether models distinguish factual reporting from speculative reasoning. Such queries are scored separately.
+
+Formal pipeline diagram: The evaluation framework can be represented as a commutative diagram:
+
+\xymatrix{
+q \ar[r]^{\text{query}} \ar[d]_{\mathcal{G}} & R \ar[d]^{\text{extract}} \\
+\mathcal{G}(q) \ar[r]_{\text{verify}} & \mathcal{A}(R) \ar[r]^{\text{score}} & s(q,R)
+}
+
+where \mathcal{G} maps questions to ground truth, extraction yields atomic facts \mathcal{A}(R), verification compares against ground truth, and scoring produces the final metric. This formalism ensures composability and enables proof of metric properties (e.g., monotonicity under fact addition).
+
+---
+
+3. Evaluation Metrics
+
+3.1 Atomic Fact Decomposition
+
+A response R is decomposed into a set of atomic facts \mathcal{A}(R) – propositions that cannot be further subdivided without losing meaning, typically represented as triples (subject, relation, object) or short clauses. Ground truth \mathcal{G}(q) is similarly represented as a set of atomic facts \mathcal{A}_{\mathcal{G}}(q). The decomposition is performed by a dedicated NLP module (see Section 5).
+
+3.2 Factual Precision and Recall
+
+· Factual Precision:
+  P_f(R, q) = \frac{|\mathcal{A}(R) \cap \mathcal{A}_{\mathcal{G}}(q)|}{|\mathcal{A}(R)|}.
+· Factual Recall:
+  R_f(R, q) = \frac{|\mathcal{A}(R) \cap \mathcal{A}_{\mathcal{G}}(q)|}{|\mathcal{A}_{\mathcal{G}}(q)|}.
+· F1‑Fact Score:
+  F1_f(R, q) = 2 \cdot \frac{P_f \cdot R_f}{P_f + R_f}.
+
+3.3 Temporal Consistency Score
+
+We model ground truth as a directed acyclic graph (DAG) of events \mathcal{T}(q) with edges representing relations \{ \text{precedes}, \text{follows}, \text{simultaneous} \}. To capture historiographical nuance, each edge is augmented with:
+
+· Scholarly confidence p \in [0,1] (derived from source reliability scores)
+· Plausible time lag interval [\Delta_{min}, \Delta_{max}] (e.g., "between 1 and 5 years")
+
+From the response, we extract temporal claims T(R). For each extracted temporal relation t, we check:
+
+1. Hard consistency: Does t contradict any edge in \mathcal{T}(q)? If yes, score contribution = 0.
+2. Soft consistency: If no hard contradiction, compute:
+
+\text{align}(t) = p_t \cdot \exp\left(-\frac{|\hat{\Delta}_t - \Delta_t^*|}{\sigma}\right)
+
+where \hat{\Delta}_t is the implied time lag from the response, \Delta_t^* is the consensus lag from ground truth (or midpoint of interval), and \sigma is a scaling parameter.
+
+The overall temporal consistency score is:
+
+s_{\text{temp}}^{\text{soft}}(R, q) = \frac{1}{|T(R)|} \sum_{t \in T(R)} \text{align}(t).
+
+For responses with no temporal claims, s_{\text{temp}} = 1.
+
+3.4 Attribution Score (for RAG‑enabled models)
+
+If the model is prompted to provide sources, let \mathcal{C}(R) be claims accompanied by a citation. For each c \in \mathcal{C}(R), we retrieve the cited source and check support. Define:
+
+· Attribution Precision:
+  P_{\text{attr}}(R) = \frac{|\{ c \in \mathcal{C}(R) : \text{supports}(c) \}|}{|\mathcal{C}(R)|}.
+· Attribution Recall (optional): fraction of ground truth facts that are correctly cited.
+
+3.5 Historiographical Coverage Score
+
+For interpretive questions, we define a set of interpretive stances \mathcal{I}(q), each representing a mainstream scholarly position. For each stance I:
+
+· Collect canonical texts (excerpts from key historiographical works).
+· Compute a prototype embedding \mathbf{e}_I as the centroid of embeddings of these texts.
+· Compute the intra-stance variance \sigma_I^2 (average cosine distance from centroid). If \sigma_I^2 > \tau_{\text{var}}, use a Mixture-of-Experts embedding layer where multiple prototype vectors represent sub-schools.
+
+For the response R, compute its embedding \mathbf{e}_R. The semantic alignment with stance I is:
+
+\text{align}_{\text{sem}}(R, I) = \max\left( \cos(\mathbf{e}_R, \mathbf{e}_I), \max_{j} \cos(\mathbf{e}_R, \mathbf{e}_{I,j}) \right)
+
+where \mathbf{e}_{I,j} are sub-school prototypes if variance is high.
+
+Argument-structure validation: Extract causal triples from the response: (cause, mechanism, effect). Each stance I is associated with a set of causal templates (e.g., Marxist: economic-structure → class-conflict → political-change). Match extracted triples against these templates using graph edit distance. Let \text{align}_{\text{causal}}(R, I) = 1 if at least one triple matches, 0 otherwise.
+
+A response covers stance I if:
+
+\text{covers}(R, I) = \mathbb{I}\left( \text{align}_{\text{sem}}(R, I) \geq \tau_{\text{sem}} \right) \cdot \text{align}_{\text{causal}}(R, I)
+
+The historiographical coverage score is:
+
+s_{\text{hist}}(R, q) = \frac{1}{|\mathcal{I}(q)|} \sum_{I \in \mathcal{I}(q)} \text{covers}(R, I).
+
+3.6 Expected Calibration Error
+
+We assess whether a model's confidence aligns with its correctness. Confidence is measured either as verbalised confidence (e.g., "How sure are you?") or semantic consistency confidence (fraction of atomic facts stable across K generations). Let y_i \in \{0,1\} be the correctness of response i according to a chosen metric (e.g., F1_f \geq \tau), and \hat{p}_i the model's confidence. Partition predictions into M equal‑width bins and compute:
+
+\mathrm{ECE} = \sum_{m=1}^{M} \frac{|B_m|}{N} \left| \mathrm{acc}(B_m) - \mathrm{conf}(B_m) \right|,
+
+where B_m is the set of indices in bin m, \mathrm{acc}(B_m) the average correctness, and \mathrm{conf}(B_m) the average confidence.
+
+3.7 Multi‑Objective Pareto Analysis
+
+Rather than collapsing multiple dimensions into a single scalar, we frame model evaluation as a multi‑objective optimization problem. Each model M is represented by a vector:
+
+\mathbf{v}_M = (P_f, R_f, s_{\text{temp}}, s_{\text{hist}}, 1-\text{ECE}) \in [0,1]^5.
+
+We compute the Pareto frontier: models that are not dominated in all dimensions by any other model. For visualization, we use parallel coordinates and radar charts. For users who require a scalar ranking, we offer ε‑constraint scalarization and report sensitivity analysis.
+
+---
+
+4. Dataset Design and Ground Truth Representation
+
+4.1 Schema
+
+All ground truth is stored in a structured, machine‑readable format (JSON‑LD). Below is an example for the Storming of the Bastille:
+
+```json
+{
+  "@context": "https://schema.org/",
+  "@type": "HistoricalEvent",
+  "name": "Storming of the Bastille",
+  "identifier": "Q6539",
+  "date": "1789-07-14",
+  "location": "Paris, France",
+  
+  "atomic_facts": [
+    {"subject": "Bernard-René de Launay", "relation": "was_governor_of", "object": "The Bastille"},
+    {"subject": "The Bastille", "relation": "contained_prisoners_count", "object": "7"},
+    {"subject": "The Crowd", "relation": "demanded", "object": "Gunpowder and weapons"}
+  ],
+
+  "temporal_constraints": [
+    {"event_a": "Dismissal of Jacques Necker", "relation": "precedes", "event_b": "Storming of the Bastille",
+     "confidence": 0.95, "lag_min": 1, "lag_max": 3, "unit": "days"},
+    {"event_a": "Storming of the Bastille", "relation": "precedes", "event_b": "Declaration of the Rights of Man",
+     "confidence": 1.0, "lag_min": 20, "lag_max": 25, "unit": "days"}
+  ],
+
+  "interpretive_stances": [
+    {
+      "stance_name": "Marxist Historiography",
+      "core_claim": "The event was a necessary class struggle against feudal absolutism.",
+      "canonical_texts": ["carlyle_1837_ch5", "sobol_1962_intro"],
+      "prototype_embedding": "emb_marxist.npy",
+      "causal_templates": [
+        ["economic_structure", "leads_to", "class_conflict"],
+        ["class_conflict", "leads_to", "political_change"]
+      ]
+    },
+    {
+      "stance_name": "Revisionist Historiography",
+      "core_claim": "The event was a spontaneous riot fueled by bread prices and political panic.",
+      "canonical_texts": ["cobban_1964_ch3", "doyle_1990_ch7"],
+      "prototype_embedding": "emb_revisionist.npy",
+      "causal_templates": [
+        ["bread_prices", "leads_to", "social_unrest"],
+        ["political_panic", "leads_to", "spontaneous_riot"]
+      ]
+    }
+  ],
+
+  "sources": [
+    {"title": "The French Revolution: A History", "author": "Thomas Carlyle", "reliability_score": 0.85},
+    {"title": "The Oxford History of the French Revolution", "author": "William Doyle", "reliability_score": 0.98}
+  ]
+}
+```
+
+4.2 Cultural Extension Protocol
+
+The framework is designed for cross‑cultural portability:
+
+· Abstract schema: Temporal relations and interpretive stances are defined via canonical texts, which can be drawn from any cultural tradition.
+· Parameterization: All thresholds (\tau_{\text{sem}}, \tau_{\text{var}}, \sigma) are configurable per domain.
+· Extension steps:
+  1. Identify authoritative sources (e.g., UNESCO archives, regional historical societies).
+  2. Draft atomic facts and temporal constraints using LLMs, reviewed by local historians.
+  3. Define interpretive stances via canonical texts and causal templates.
+  4. Validate with a small human study (20–30 items) to calibrate thresholds.
+
+---
+
+5. Automated Evaluation Pipeline Architecture
+
+5.1 Atomic Fact Extraction
+
+Extract atomic facts from responses using a hybrid extractor:
+
+· Rule‑based extraction for simple patterns (dates, named entities) via dependency parsing.
+· Neural extraction using a fine‑tuned sequence‑to‑sequence model (e.g., T5) trained on factual decomposition data.
+
+The extractor's precision and recall are quantified on a human‑annotated held‑out set; error rates are propagated to downstream metrics via Monte Carlo sampling.
+
+5.2 Hybrid Fact Verification with Learned Fusion
+
+To mitigate evaluator bias, we implement a cascade with learned fusion:
+
+1. Primary verifier: A Natural Language Inference (NLI) model (e.g., DeBERTa‑large) fine‑tuned on a domain‑adaptive historical NLI dataset (2,000 premise–hypothesis pairs from historiography texts).
+2. Secondary verifier: A retrieval‑augmented LLM (e.g., GPT‑5) with access to a trusted corpus. The LLM must cite a source for its verdict.
+3. Fusion classifier: A logistic regression model trained on features including:
+   · NLI confidence c_{\text{NLI}}
+   · LLM confidence c_{\text{LLM}} (if invoked)
+   · Disagreement magnitude |c_{\text{NLI}} - c_{\text{LLM}}|
+   · Fact complexity (number of entities, tokens)
+   · Entity rarity (inverse document frequency)
+   · Source reliability score
+   · Fact novelty (whether fact appears in training data)
+
+The classifier outputs a calibrated probability of correctness. Temperature scaling is applied to NLI and LLM confidences before feature extraction.
+
+5.3 Metric Computation
+
+For each response, compute all metrics from Section 3 using the verified facts. For recall‑based metrics, align extracted facts with ground truth via entity linking and relation matching.
+
+5.4 Uncertainty Quantification
+
+For each response, we propagate uncertainties via Monte Carlo sampling:
+
+· Sample from extractor error distribution (based on precision/recall).
+· Sample from verifier confidence distributions.
+· Recompute metrics 1,000 times to obtain a distribution of possible scores.
+
+Final scores are reported as intervals (e.g., "F1‑fact ∈ [0.62, 0.78] with 95% confidence").
+
+5.5 Meta‑Evaluation Against Human Experts
+
+To validate the pipeline, conduct a human‑expert study on a stratified sample of 500 question–response pairs. Professional historians provide:
+
+· Binary judgment of each atomic fact's correctness.
+· Holistic factual quality (Likert scale).
+· Identification of temporal inconsistencies or attribution errors.
+
+Agreement is measured via:
+
+· Cohen's \kappa for categorical decisions (target \kappa > 0.75)
+· Spearman correlation for continuous scores
+· Confusion matrix to diagnose systematic biases
+
+Pre‑registration: The study design, hypotheses, sampling plan, and analysis code are pre‑registered on the Open Science Framework (OSF). Stopping rules (e.g., "stop when 95% CI width for Spearman ρ < 0.1") ensure efficient use of expert time.
+
+---
+
+6. Ablation Study Design
+
+To prove each component's contribution, we compare the full pipeline against ablated versions:
+
+· Without temporal consistency (only F1‑fact)
+· Without historiographical coverage (binary scoring using only atomic facts)
+· Without hybrid verification (NLI‑only with threshold γ)
+· Without uncertainty quantification (point estimates only)
+
+Hypothesis: The full pipeline will show the highest correlation with human experts.
+
+---
+
+7. Baselines for Comparison
+
+The framework will be compared against:
+
+· FactScore: atomic fact matching
+· RAGAS: attribution evaluation
+· LLM‑as‑a‑Judge: single‑prompt evaluation
+· TruthfulQA: binary accuracy on verifiable questions
+
+---
+
+8. Ethics and Societal Impact
+
+· Bias auditing: Measure whether the evaluator penalises non‑Western perspectives disproportionately. Test on a small set of non‑Western questions (e.g., Meiji Restoration) and report findings.
+· Misuse prevention: Release the tool with clear documentation of limitations (does not evaluate normative claims) and require transparency reports from users.
+· Stakeholder review: Engage historians and AI ethics researchers in an advisory board before public release.
+
+---
+
+9. Threats to Validity
+
+· Construct validity: Does temporal consistency truly capture historical anachronism? Validate by correlation with human‑identified anachronisms.
+· Internal validity: Fusion classifier may overfit; use cross‑validation and held‑out test sets.
+· External validity: Test on a non‑historical domain (e.g., SciFact) to assess generalizability.
+· Cultural bias: Acknowledge Western overrepresentation and provide extension protocol.
+
+---
+
+10. Expected Contributions
+
+· A formal framework for evaluating temporal and causal consistency in LLM responses, grounded in DAGs with uncertainty.
+· A methodology for handling interpretive ambiguity, including semantic embedding with intra‑stance variance and causal argument validation.
+· A hybrid verification architecture with learned fusion and calibrated uncertainty estimation.
+· An open‑source evaluation suite (Rust + PyTorch) implementing the entire pipeline.
+· Empirical Pareto analysis of LLM trade‑offs across factual dimensions, moving beyond single‑score leaderboards.
+· A cultural extension protocol enabling cross‑historical application.
+
+---
+
+11. Conclusion
+
+This document presents a comprehensive theoretical framework for evaluating factual accuracy in LLMs, with a focus on historical knowledge. By introducing metrics for temporal consistency, interpretive coverage, and attribution, and by validating the entire pipeline against expert judgment, the framework provides interpretable diagnostics rather than opaque scores. The mathematical formalization and architectural design serve as a blueprint for organizations and researchers aiming to build robust, trustworthy evaluation tools. All components are open‑source and designed for cross‑cultural portability, advancing the science of LLM auditing and contributing to safer AI deployment.

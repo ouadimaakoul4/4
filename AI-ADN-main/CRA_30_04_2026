@@ -1,0 +1,841 @@
+"""
+Certified Reasoning Architecture v2.1 – final production version
+================================================================
+Multi-axis hallucination detection with additive integrity scoring and
+per-trace local suspicion, backed by 2025‑2026 literature.
+
+Axes:
+  1. TDA (persistence homology – H0/H1 lifetime, entropy, spread, width)
+  2. Geometric kinematics (cumulative displacement × Menger curvature)
+  3. Cross‑trace coherence (Smith‑Waterman alignment of step sequences)
+  4. Graph‑theoretic features (top‑5 discriminative properties)
+  5. Semantic energy (average log‑probability → calibrated confidence)
+  6. Multi‑dimensional step verification (numeric, logic, data, restatement, format)
+
+Aggregation: additive weighted sum → causal‑depth penalty → per‑trace local
+suspicion multiplier → dynamic‑temperature softmax voting.
+"""
+
+ 
+
+import torch
+import torch.nn as nn
+import numpy as np
+from transformers import pipeline, AutoModelForSeq2SeqLM, AutoTokenizer
+from sentence_transformers import SentenceTransformer
+import gudhi as gd
+from scipy.spatial.distance import pdist, squareform
+from scipy.ndimage import gaussian_filter1d
+from scipy.spatial import ConvexHull
+import sympy as sp
+from sympy.parsing.sympy_parser import (
+    parse_expr,
+    standard_transformations,
+    implicit_multiplication_application,
+)
+import re
+from typing import List, Tuple, Optional, Dict
+from dataclasses import dataclass, field
+from collections import defaultdict
+import networkx as nx
+import json
+
+
+# ──────────────────────────────────────────────────────────
+# Configuration
+# ──────────────────────────────────────────────────────────
+
+@dataclass
+class CRAConfig:
+    # Generator / embedder
+    generator_model: str = "google/flan-t5-large"
+    embedder_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+
+    # Sampling
+    k_candidates: int = 5
+    theta: float = 0.25
+
+    # H1 / H0 weights
+    alpha: float = 1.0
+    beta: float = 1.0
+
+    # Additive integrity weights (should sum ≈ 1.0)
+    tda_weight: float = 0.40
+    kinematic_weight: float = 0.20
+    coherence_weight: float = 0.15
+    graph_weight: float = 0.10
+    semantic_weight: float = 0.10
+    verify_weight: float = 0.05
+
+    # Generation
+    max_length: int = 512
+    temperature: float = 0.7
+    do_sample: bool = True
+
+    # TDA
+    betti_sigma: float = 1.0
+    alpha_max_sq: float = 4.0
+
+    # Graph
+    sim_threshold: float = 0.7
+
+    # Local suspicion
+    hull_z_threshold: float = 2.0
+
+    # ── NEW validated fixes ──
+    light_mode: bool = False               # skip TDA + graph for speed
+    structured_output: bool = False        # prompt for JSON steps
+    semantic_center: float = -5.0          # calibrated centre for sigmoid
+    semantic_scale: float = 2.0            # calibrated scale for sigmoid
+    restatement_threshold: float = 0.92    # n‑gram overlap threshold
+    use_causal_depth: bool = True          # apply (1-cd) penalty
+    calibration_graph_stats: Optional[dict] = None  # pre‑computed {"mean": {...}, "std": {...}}
+
+
+# ──────────────────────────────────────────────────────────
+# Caches
+# ──────────────────────────────────────────────────────────
+
+_cache: Dict = {}
+
+def get_generator(cfg: CRAConfig):
+    if cfg.generator_model not in _cache:
+        _cache[cfg.generator_model] = pipeline(
+            "text2text-generation",
+            model=cfg.generator_model,
+            device=0 if torch.cuda.is_available() else -1,
+        )
+    return _cache[cfg.generator_model]
+
+
+def get_embedder(cfg: CRAConfig):
+    if cfg.embedder_model not in _cache:
+        _cache[cfg.embedder_model] = SentenceTransformer(cfg.embedder_model)
+    return _cache[cfg.embedder_model]
+
+
+# ──────────────────────────────────────────────────────────
+# Persistence / TDA utilities (unchanged)
+# ──────────────────────────────────────────────────────────
+
+def _smooth_lifetimes(bars: List[Tuple[float, float]], sigma: float) -> np.ndarray:
+    lifetimes = np.array([d - b for b, d in bars if d < np.inf and (d - b) > 1e-8])
+    if len(lifetimes) == 0:
+        return np.zeros(1)
+    smoothed = gaussian_filter1d(lifetimes, sigma=max(sigma, 1e-3))
+    return smoothed
+
+
+def persistence_entropy(bars: List[Tuple[float, float]], sigma: float = 1.0) -> float:
+    smoothed = _smooth_lifetimes(bars, sigma)
+    total = smoothed.sum()
+    if total < 1e-10:
+        return 0.0
+    probs = smoothed / total
+    return float(-np.sum(probs * np.log(probs + 1e-10)))
+
+
+def betti_spread_width(bars: List[Tuple[float, float]]) -> Tuple[float, float]:
+    lifetimes = np.array([d - b for b, d in bars if d < np.inf and (d - b) > 1e-8])
+    if len(lifetimes) == 0:
+        return 0.0, 0.0
+    return float(lifetimes.max() - lifetimes.min()), float(lifetimes.mean())
+
+
+def build_simplex_tree(embeddings: np.ndarray, cfg: CRAConfig):
+    n, d = embeddings.shape
+    if d <= 20:
+        try:
+            alpha = gd.AlphaComplex(points=embeddings.tolist())
+            st = alpha.create_simplex_tree()
+            return st
+        except Exception:
+            pass
+    dist = squareform(pdist(embeddings, metric="euclidean"))
+    rips = gd.RipsComplex(distance_matrix=dist, max_edge_length=2.0)
+    return rips.create_simplex_tree(max_dimension=2)
+
+
+# ──────────────────────────────────────────────────────────
+# Geometric Kinematics (unchanged)
+# ──────────────────────────────────────────────────────────
+
+def menger_curvature(p1: np.ndarray, p2: np.ndarray, p3: np.ndarray) -> float:
+    a = np.linalg.norm(p2 - p1)
+    b = np.linalg.norm(p3 - p2)
+    c = np.linalg.norm(p3 - p1)
+    if len(p1) > 2:
+        cross = np.cross(p2 - p1, p3 - p1) if len(p1) == 3 else None
+        if cross is not None:
+            area_x2 = float(np.linalg.norm(cross))
+        else:
+            s = (a + b + c) / 2
+            area_sq = max(s * (s - a) * (s - b) * (s - c), 0.0)
+            area_x2 = 2.0 * np.sqrt(area_sq)
+    else:
+        area_x2 = abs(np.cross(p2 - p1, p3 - p1))
+    denom = a * b * c
+    if denom < 1e-10:
+        return 0.0
+    return float(area_x2 / denom)
+
+
+def compute_kinematics(embeddings: np.ndarray) -> Tuple[float, float]:
+    n = len(embeddings)
+    if n < 2:
+        return 0.0, 0.0
+    diffs = np.linalg.norm(np.diff(embeddings, axis=0), axis=1)
+    cumulative_displacement = float(diffs.sum())
+    if n < 3:
+        return cumulative_displacement, 0.0
+    curvatures = [
+        menger_curvature(embeddings[i], embeddings[i + 1], embeddings[i + 2])
+        for i in range(n - 2)
+    ]
+    mean_curvature = float(np.mean(curvatures))
+    return cumulative_displacement, mean_curvature
+
+
+def kinematic_score(displacement: float, curvature: float, n_steps: int) -> float:
+    if n_steps < 2:
+        return 0.5
+    norm_disp = displacement / max(n_steps - 1, 1)
+    disp_score = 1.0 - np.exp(-norm_disp)
+    curv_penalty = np.exp(-curvature)
+    return float(np.sqrt(disp_score * curv_penalty))
+
+
+# ──────────────────────────────────────────────────────────
+# Reasoning Graph & Graph Features (unchanged)
+# ──────────────────────────────────────────────────────────
+
+def build_reasoning_graph(steps: List[str], embedder, threshold: float) -> nx.Graph:
+    G = nx.Graph()
+    G.add_nodes_from(range(len(steps)))
+    if len(steps) < 2:
+        return G
+    embs = embedder.encode(steps, normalize_embeddings=True)
+    sim = embs @ embs.T
+    for i in range(len(steps)):
+        for j in range(i + 1, len(steps)):
+            if sim[i, j] > threshold:
+                G.add_edge(i, j, weight=float(sim[i, j]))
+    return G
+
+
+def compute_graph_features(G: nx.Graph) -> Dict[str, float]:
+    n = G.number_of_nodes()
+    if n < 2:
+        return {"diameter": 0.0, "cycle_density": 0.0,
+                "small_world_index": 0.0, "clustering_coefficient": 0.0,
+                "graph_entropy": 0.0}
+    try:
+        diameter = nx.diameter(G) if nx.is_connected(G) else 2 * n
+    except:
+        diameter = 2 * n
+    try:
+        num_cycles = len(nx.cycle_basis(G))
+    except:
+        num_cycles = 0
+    max_cycles = n * (n - 1) / 2 if n > 1 else 0.0
+    cycle_density = num_cycles / max_cycles if max_cycles > 0 else 0.0
+    cc = nx.average_clustering(G) if n > 2 else 0.0
+    density = nx.density(G)
+    cc_rand = density if density > 0 else 0.0
+    small_world = cc / (cc_rand + 1e-8) if cc_rand > 0 else 0.0
+    degrees = [d for _, d in G.degree()]
+    if sum(degrees) == 0:
+        graph_entropy = 0.0
+    else:
+        probs = np.array(degrees) / sum(degrees)
+        graph_entropy = -np.sum(probs * np.log(probs + 1e-10))
+    return {
+        "diameter": diameter,
+        "cycle_density": cycle_density,
+        "small_world_index": small_world,
+        "clustering_coefficient": cc,
+        "graph_entropy": graph_entropy,
+    }
+
+
+def graph_anomaly_score(features: Dict[str, float],
+                        mean_feat: Dict[str, float],
+                        std_feat: Dict[str, float]) -> float:
+    bad_dirs = {
+        "diameter": 1,
+        "cycle_density": 1,
+        "small_world_index": 1,
+        "graph_entropy": 1,
+        "clustering_coefficient": -1,
+    }
+    anomaly = 0.0
+    for feat, direc in bad_dirs.items():
+        val = features.get(feat, 0.0)
+        mu = mean_feat.get(feat, 0.0)
+        sigma = max(std_feat.get(feat, 1e-8), 1e-8)
+        z = (val - mu) / sigma
+        if direc == 1:
+            anomaly += max(0.0, z)
+        else:
+            anomaly += max(0.0, -z)
+    return anomaly
+
+
+def graph_integrity_score(anomaly: float) -> float:
+    return float(1.0 / (1.0 + anomaly))
+
+
+# ──────────────────────────────────────────────────────────
+# Semantic Energy (with calibrated sigmoid)
+# ──────────────────────────────────────────────────────────
+
+def _load_model_tokenizer(model_name: str):
+    key = f"{model_name}_mod"
+    if key not in _cache:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+        device = 0 if torch.cuda.is_available() else -1
+        if device >= 0:
+            model = model.to("cuda")
+        _cache[key] = (model, tokenizer)
+    return _cache[key]
+
+
+def generate_traces_with_logprob(query: str, cfg: CRAConfig) -> List[Tuple[str, float]]:
+    model, tokenizer = _load_model_tokenizer(cfg.generator_model)
+    base_prompt = f"Think step by step and show all reasoning.\nQuestion: {query}\nAnswer:"
+    if cfg.structured_output:
+        base_prompt += "\nOutput your steps as a JSON array of strings, e.g., [\"step1\", \"step2\"]."
+    prompts = [base_prompt] * cfg.k_candidates
+    for i in range(1, cfg.k_candidates):
+        p = f"Think step by step using a different approach.\nQuestion: {query}\nAnswer:"
+        if cfg.structured_output:
+            p += "\nOutput your steps as a JSON array of strings."
+        prompts[i] = p
+
+    results = []
+    for prompt in prompts:
+        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=cfg.max_length,
+                temperature=cfg.temperature if cfg.do_sample else None,
+                do_sample=cfg.do_sample,
+                output_scores=True,
+                return_dict_in_generate=True,
+            )
+        gen_ids = outputs.sequences[0][inputs["input_ids"].shape[1]:]
+        trace = tokenizer.decode(gen_ids, skip_special_tokens=True)
+
+        # Average log‑probability
+        full_input = outputs.sequences
+        shift_logits = model(full_input).logits[..., :-1, :]
+        shift_labels = full_input[..., 1:]
+        loss_fct = nn.CrossEntropyLoss(reduction='none')
+        nll = loss_fct(shift_logits.permute(0, 2, 1), shift_labels)
+        mask = shift_labels != tokenizer.pad_token_id
+        avg_log_prob = -nll[mask].mean().item()
+        results.append((trace.strip() if trace.strip() else "(empty)", avg_log_prob))
+    return results
+
+
+def semantic_score(avg_logprob: float, cfg: CRAConfig) -> float:
+    """Calibratable sigmoid mapping average log‑prob → [0,1]."""
+    return float(1.0 / (1.0 + np.exp(-(avg_logprob - cfg.semantic_center) / cfg.semantic_scale)))
+
+
+# ──────────────────────────────────────────────────────────
+# Convex‑Hull Local Suspicion (unchanged)
+# ──────────────────────────────────────────────────────────
+
+def compute_hull_info(all_step_embs: List[np.ndarray]) -> dict:
+    stacked = np.vstack([emb for emb in all_step_embs if len(emb) > 0])
+    if stacked.shape[0] < 3:
+        return {"projected": None, "hull": None, "centroid": None, "std": 1.0}
+    mean = stacked.mean(axis=0)
+    U, _, _ = np.linalg.svd(stacked - mean, full_matrices=False)
+    proj = (stacked - mean) @ U[:, :2].T
+    try:
+        hull = ConvexHull(proj)
+        centroid = proj.mean(axis=0)
+        std = np.linalg.norm(proj - centroid, axis=1).std()
+        return {"U2": U[:, :2], "mean": mean, "proj_all": proj,
+                "hull": hull, "centroid": centroid, "std": max(std, 1e-8)}
+    except:
+        return {"U2": U[:, :2], "mean": mean, "proj_all": proj,
+                "hull": None, "centroid": proj.mean(axis=0),
+                "std": max(np.linalg.norm(proj - proj.mean(axis=0), axis=1).std(), 1e-8)}
+
+
+def trace_suspicion_mult(hull_info: dict, trace_embs: np.ndarray,
+                         hull_z_thresh: float = 2.0) -> float:
+    if hull_info.get("U2") is None or len(trace_embs) == 0:
+        return 1.0
+    U2 = hull_info["U2"]
+    mean = hull_info["mean"]
+    centroid = hull_info["centroid"]
+    std = hull_info["std"]
+    proj = (trace_embs - mean) @ U2
+    dists = np.linalg.norm(proj - centroid, axis=1)
+    mean_dist = dists.mean()
+    z = mean_dist / std if std > 0 else 0.0
+    if z <= hull_z_thresh:
+        return 1.0
+    return float(np.exp(-(z - hull_z_thresh)))
+
+
+# ──────────────────────────────────────────────────────────
+# Core integrity (TDA + kinematics), light‑mode aware
+# ──────────────────────────────────────────────────────────
+
+def compute_integrity(trace: str, embedder, cfg: CRAConfig) -> Tuple[float, float, Dict]:
+    steps = parse_steps(trace, cfg)
+    if len(steps) < 2:
+        return 0.0, 0.0, {"error": "too few steps"}
+    embeddings = embedder.encode(steps, normalize_embeddings=True)
+
+    if cfg.light_mode:
+        # Light mode: skip TDA, only kinematics
+        displacement, curvature = compute_kinematics(embeddings)
+        I_kin = kinematic_score(displacement, curvature, len(steps))
+        return 0.5, I_kin, {  # neutral TDA placeholder
+            "n_steps": len(steps),
+            "light_mode": True,
+            "displacement": displacement, "curvature": curvature,
+        }
+
+    # Full TDA
+    simplex_tree = build_simplex_tree(embeddings, cfg)
+    diag = simplex_tree.persistence()
+    dgm0 = [(b, d) for dim, (b, d) in diag if dim == 0]
+    dgm1 = [(b, d) for dim, (b, d) in diag if dim == 1]
+    sum_0 = sum(d - b for b, d in dgm0 if d < np.inf)
+    sum_1 = sum(d - b for b, d in dgm1)
+    ent_0 = persistence_entropy(dgm0, sigma=cfg.betti_sigma)
+    ent_1 = persistence_entropy(dgm1, sigma=cfg.betti_sigma)
+    spread_0, width_0 = betti_spread_width(dgm0)
+    spread_1, width_1 = betti_spread_width(dgm1)
+
+    I_lifetime = np.exp(-(cfg.alpha * sum_1 + cfg.beta * sum_0))
+    I_entropy = np.exp(-(cfg.alpha * ent_1 + cfg.beta * ent_0))
+    I_spread = np.exp(-(spread_1 * cfg.alpha + spread_0 * cfg.beta * 0.5))
+    I_width = np.exp(-width_1 * cfg.alpha)
+    I_tda = float((I_lifetime * I_entropy * I_spread * I_width) ** 0.25)
+
+    displacement, curvature = compute_kinematics(embeddings)
+    I_kin = kinematic_score(displacement, curvature, len(steps))
+
+    return I_tda, I_kin, {
+        "n_steps": len(steps),
+        "sum_0": sum_0, "sum_1": sum_1,
+        "ent_0": ent_0, "ent_1": ent_1,
+        "spread_0": spread_0, "spread_1": spread_1,
+        "width_0": width_0, "width_1": width_1,
+        "displacement": displacement, "curvature": curvature,
+    }
+
+
+# ──────────────────────────────────────────────────────────
+# Multi‑Dimensional Step Verification (with configurable threshold)
+# ──────────────────────────────────────────────────────────
+
+def _check_numeric_accuracy(step: str) -> bool:
+    transformations = standard_transformations + (implicit_multiplication_application,)
+    pattern = re.compile(r"([^=]+?)\s*=\s*(.+)")
+    for left, right in pattern.findall(step):
+        left_s, right_s = left.strip(), right.strip()
+        if any(c in left_s + right_s for c in ("$", "%")) or \
+           re.search(r"[a-zA-Z]{4,}", left_s + right_s):
+            continue
+        try:
+            l_expr = parse_expr(left_s, transformations=transformations)
+            r_expr = parse_expr(right_s, transformations=transformations)
+            if sp.simplify(l_expr - r_expr) != 0:
+                return False
+        except:
+            continue
+    return True
+
+
+def _check_logical_consistency(step: str, prev_step: str) -> bool:
+    num_re = re.compile(r"[-+]?\d+(?:\.\d+)?")
+    curr_nums = set(num_re.findall(step))
+    prev_nums = set(num_re.findall(prev_step))
+    neg_re = re.compile(r"\bnot\s+(\w+)", re.IGNORECASE)
+    curr_negs = set(neg_re.findall(step))
+    prev_pos = set(re.findall(r"\bis\s+(\w+)", prev_step, re.IGNORECASE))
+    if curr_negs & prev_pos:
+        return False
+    return True
+
+
+def _check_data(step: str, defined_vars: set) -> Tuple[bool, set]:
+    assign_re = re.compile(r"\b([A-Za-z_]\w*)\s*=")
+    use_re = re.compile(r"\b([A-Za-z_]\w*)\b")
+    new_vars = set(assign_re.findall(step))
+    used = set(use_re.findall(step)) - {
+        "and", "or", "not", "is", "in", "if", "the",
+        "of", "to", "a", "an", "that", "with", "for",
+    }
+    undefined = {v for v in used if len(v) > 1 and v not in defined_vars and v not in new_vars}
+    ok = len(undefined) == 0
+    return ok, defined_vars | new_vars
+
+
+def _check_restatement(step: str, prev_steps: List[str], threshold: float) -> bool:
+    def _ngrams(text: str, n: int = 3) -> set:
+        return {text[i:i + n] for i in range(len(text) - n + 1)}
+    curr_ng = _ngrams(step.lower())
+    for ps in prev_steps:
+        prev_ng = _ngrams(ps.lower())
+        union = curr_ng | prev_ng
+        if not union:
+            continue
+        sim = len(curr_ng & prev_ng) / len(union)
+        if sim > threshold:
+            return False
+    return True
+
+
+def _check_format(step: str) -> bool:
+    return len(step.strip()) > 10
+
+
+def verify_trace_scored(trace: str, cfg: CRAConfig) -> float:
+    steps = parse_steps(trace, cfg)
+    if not steps:
+        return 1.0
+    total_score = 0.0
+    defined_vars: set = set()
+    for i, step in enumerate(steps):
+        prev = steps[i - 1] if i > 0 else ""
+        prev_steps = steps[:i]
+        dim_scores = {
+            "format": float(_check_format(step)),
+            "restatement": float(_check_restatement(step, prev_steps, cfg.restatement_threshold)),
+            "numeric": float(_check_numeric_accuracy(step)),
+            "logical": float(_check_logical_consistency(step, prev)),
+        }
+        data_ok, defined_vars = _check_data(step, defined_vars)
+        dim_scores["data"] = float(data_ok)
+        total_score += sum(dim_scores.values()) / len(dim_scores)
+    return total_score / len(steps)
+
+
+# ──────────────────────────────────────────────────────────
+# Cross‑Trace Coherence (Smith‑Waterman, unchanged)
+# ──────────────────────────────────────────────────────────
+
+def sw_step_similarity(steps_a: List[str], steps_b: List[str], embedder) -> float:
+    if not steps_a or not steps_b:
+        return 0.0
+    emb_a = embedder.encode(steps_a, normalize_embeddings=True)
+    emb_b = embedder.encode(steps_b, normalize_embeddings=True)
+    sim = emb_a @ emb_b.T
+    n, m = len(emb_a), len(emb_b)
+    H = np.zeros((n + 1, m + 1))
+    gap = 0.2
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            H[i, j] = max(
+                0,
+                H[i - 1, j - 1] + sim[i - 1, j - 1],
+                H[i - 1, j] - gap,
+                H[i, j - 1] - gap,
+            )
+    max_possible = min(n, m)
+    return float(H.max()) / max_possible if max_possible > 0 else 0.0
+
+
+def compute_cross_trace_coherence(raw_traces: List[str], embedder, cfg: CRAConfig) -> List[float]:
+    all_steps = [parse_steps(t, cfg) for t in raw_traces]
+    n = len(raw_traces)
+    coherence = []
+    for i in range(n):
+        scores = [
+            sw_step_similarity(all_steps[i], all_steps[j], embedder)
+            for j in range(n)
+            if i != j and all_steps[j]
+        ]
+        coherence.append(float(np.mean(scores)) if scores else 0.0)
+    return coherence
+
+
+# ──────────────────────────────────────────────────────────
+# Answer extraction & dynamic‑temperature voting (unchanged)
+# ──────────────────────────────────────────────────────────
+
+def extract_final_answer(trace: str) -> Optional[str]:
+    match = re.search(
+        r"(?:final answer|answer|result)[:\s]+([0-9\.\-\$,]+)",
+        trace,
+        re.IGNORECASE,
+    )
+    return match.group(1).strip() if match else None
+
+
+def _softmax(values: np.ndarray, temperature: float = 1.0) -> np.ndarray:
+    v = np.array(values, dtype=float) / max(temperature, 1e-6)
+    v -= v.max()
+    e = np.exp(v)
+    return e / e.sum()
+
+
+def aggregate_answers(candidates) -> Optional[str]:
+    if not candidates:
+        return None
+    certs = np.array([c.certification for c in candidates])
+    T = max(0.5, len(candidates) / 2.0)
+    weights = _softmax(certs, temperature=T)
+    vote_weights: Dict[str, float] = defaultdict(float)
+    for c, w in zip(candidates, weights):
+        ans = extract_final_answer(c.trace)
+        if ans:
+            vote_weights[ans] += w
+    return max(vote_weights, key=vote_weights.get) if vote_weights else None
+
+
+# ──────────────────────────────────────────────────────────
+# Causal depth (can be disabled)
+# ──────────────────────────────────────────────────────────
+
+def causal_depth(query: str) -> Tuple[int, float]:
+    q = query.lower()
+    L3_patterns = ["would have", "had i", "had she", "had he", "had they",
+                   "if i had", "if only", "imagine if", "counterfactual"]
+    L2_patterns = ["causes", "caused by", "prevents", "what if", "intervention",
+                   "do(", "set x", "force", "manipulate", "effect of"]
+    if any(p in q for p in L3_patterns):
+        level = 3
+    elif any(p in q for p in L2_patterns):
+        level = 2
+    else:
+        level = 1
+    cd = (level - 1) / (2.0 * level)
+    return level, cd
+
+
+# ──────────────────────────────────────────────────────────
+# Step parsing (with JSON‑aware structured output)
+# ──────────────────────────────────────────────────────────
+
+def parse_steps(trace: str, cfg: CRAConfig = None) -> List[str]:
+    # Attempt JSON extraction if structured_output enabled
+    if cfg and cfg.structured_output:
+        # Look for a JSON array anywhere in the trace
+        json_match = re.search(r'\[.*\]', trace, re.DOTALL)
+        if json_match:
+            try:
+                parsed = json.loads(json_match.group(0))
+                if isinstance(parsed, list) and all(isinstance(s, str) for s in parsed):
+                    return [s.strip() for s in parsed if s.strip()]
+            except:
+                pass  # fall back to regex
+
+    # Original regex‑based parsing
+    lines = [l.strip() for l in trace.split("\n") if l.strip()]
+    steps = []
+    current = ""
+    step_pattern = re.compile(
+        r"^(step\s*\d+|\d+[\.\)]|first,|second,|third,|next,|finally,|then,)",
+        re.IGNORECASE,
+    )
+    for line in lines:
+        if step_pattern.match(line) and current:
+            steps.append(current.strip())
+            current = line
+        else:
+            current += " " + line if current else line
+    if current:
+        steps.append(current.strip())
+    if len(steps) <= 2:                     # fallback sentence splitting
+        sentences = re.split(r"(?<=[.!?])\s+", trace)
+        steps = [s.strip() for s in sentences if len(s.strip()) > 15]
+    return steps
+
+
+# ──────────────────────────────────────────────────────────
+# Data class
+# ──────────────────────────────────────────────────────────
+
+@dataclass
+class CertifiedAnswer:
+    trace: str
+    certification: float
+    integrity: float
+    integrity_tda: float
+    integrity_kin: float
+    integrity_coherence: float
+    integrity_graph: float
+    semantic_score: float
+    verify_score: float
+    causal_depth_score: float
+    coherence_score: float
+    tda_details: Dict = field(default_factory=dict)
+    trace_rank: int = 0
+
+
+# ──────────────────────────────────────────────────────────
+# Main pipeline (with light‑mode and calibrated stats)
+# ──────────────────────────────────────────────────────────
+
+def certify_query(query: str, cfg: CRAConfig):
+    embedder = get_embedder(cfg)
+    _, cd = causal_depth(query)
+
+    # 1. Generate traces + log‑probs
+    traces_with_logprob = generate_traces_with_logprob(query, cfg)
+    raw_traces = [t for t, _ in traces_with_logprob]
+    avg_logprobs = [lp for _, lp in traces_with_logprob]
+
+    # 2. Coherence
+    coherence_scores = compute_cross_trace_coherence(raw_traces, embedder, cfg)
+
+    # 3. Graph features (pre‑calibrated or batch stats)
+    if not cfg.light_mode:
+        graph_feat_list = []
+        for t in raw_traces:
+            G = build_reasoning_graph(parse_steps(t, cfg), embedder, cfg.sim_threshold)
+            graph_feat_list.append(compute_graph_features(G))
+        feat_names = ["diameter", "cycle_density", "small_world_index",
+                      "clustering_coefficient", "graph_entropy"]
+        if cfg.calibration_graph_stats is not None:
+            # use pre‑computed calibration statistics
+            mean_feat = cfg.calibration_graph_stats["mean"]
+            std_feat = cfg.calibration_graph_stats["std"]
+        else:
+            mean_feat = {f: np.mean([d[f] for d in graph_feat_list]) for f in feat_names}
+            std_feat = {f: max(np.std([d[f] for d in graph_feat_list]), 1e-8) for f in feat_names}
+    else:
+        # dummy graph features (will not be used)
+        graph_feat_list = [{}] * len(raw_traces)
+        mean_feat = {}
+        std_feat = {}
+
+    # 4. Convex‑hull projection
+    all_step_embs = [embedder.encode(parse_steps(t, cfg)) for t in raw_traces]
+    hull_info = compute_hull_info(all_step_embs)
+
+    candidates: List[CertifiedAnswer] = []
+    for i, (trace, logp) in enumerate(zip(raw_traces, avg_logprobs)):
+        I_tda, I_kin, tda_info = compute_integrity(trace, embedder, cfg)
+
+        if not cfg.light_mode:
+            anomaly = graph_anomaly_score(graph_feat_list[i], mean_feat, std_feat)
+            I_graph = graph_integrity_score(anomaly)
+        else:
+            I_graph = 0.5  # neutral placeholder
+
+        sem_score = semantic_score(logp, cfg)
+        coherence = coherence_scores[i]
+
+        # gate on raw TDA + kinematics (light_mode uses placeholder 0.5 for TDA)
+        if (0.7 * I_tda + 0.3 * I_kin) <= 1.0 - cfg.theta:
+            continue
+
+        verify_score = verify_trace_scored(trace, cfg)
+
+        # ── additive integrity ──
+        # Note: if light_mode, graph weight is redistributed proportionally
+        if cfg.light_mode:
+            # Remove graph_weight, rescale remaining weights to sum to 1
+            remaining_weights = {
+                "tda": cfg.tda_weight,
+                "kinematic": cfg.kinematic_weight,
+                "coherence": cfg.coherence_weight,
+                "semantic": cfg.semantic_weight,
+                "verify": cfg.verify_weight,
+            }
+            total_rem = sum(remaining_weights.values())
+            I_final = (
+                cfg.tda_weight * I_tda / total_rem +
+                cfg.kinematic_weight * I_kin / total_rem +
+                cfg.coherence_weight * coherence / total_rem +
+                cfg.semantic_weight * sem_score / total_rem +
+                cfg.verify_weight * verify_score / total_rem
+            )
+        else:
+            total_w = (cfg.tda_weight + cfg.kinematic_weight +
+                       cfg.coherence_weight + cfg.graph_weight +
+                       cfg.semantic_weight + cfg.verify_weight)
+            I_final = (cfg.tda_weight * I_tda +
+                       cfg.kinematic_weight * I_kin +
+                       cfg.coherence_weight * coherence +
+                       cfg.graph_weight * I_graph +
+                       cfg.semantic_weight * sem_score +
+                       cfg.verify_weight * verify_score) / total_w
+
+        # Per‑trace hull penalty
+        trace_embs = embedder.encode(parse_steps(trace, cfg))
+        hull_mult = trace_suspicion_mult(hull_info, trace_embs, cfg.hull_z_threshold)
+
+        # Certification score
+        cert = I_final
+        if cfg.use_causal_depth:
+            cert *= (1.0 - cd)
+        cert *= hull_mult
+
+        if cert <= 0:
+            continue
+
+        candidates.append(
+            CertifiedAnswer(
+                trace=trace, certification=cert,
+                integrity=I_final,
+                integrity_tda=I_tda, integrity_kin=I_kin,
+                integrity_coherence=coherence, integrity_graph=I_graph,
+                semantic_score=sem_score, verify_score=verify_score,
+                causal_depth_score=cd, coherence_score=coherence,
+                tda_details=tda_info, trace_rank=i,
+            )
+        )
+
+    if not candidates:
+        return None, None
+
+    consensus = aggregate_answers(candidates)
+    best = max(candidates, key=lambda x: (x.certification, -x.trace_rank))
+    return best, consensus
+
+
+# ──────────────────────────────────────────────────────────
+# Entry point
+# ──────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    cfg = CRAConfig(
+        k_candidates=3,
+        max_length=256,
+        theta=0.25,
+        light_mode=True,              # faster demo
+        structured_output=False,      # set True to test JSON parsing
+        semantic_center=-5.0,
+        semantic_scale=2.0,
+        restatement_threshold=0.92,
+        use_causal_depth=True,
+    )
+
+    test_queries = [
+        "What is 17 * 43?",
+        "If train A leaves at 9am at 60mph and train B at 10am at 80mph, when do they meet?",
+        "What would have happened if Newton had not discovered calculus?",
+    ]
+
+    for q in test_queries:
+        print(f"\n{'='*60}")
+        print(f"Query: {q}")
+        best, consensus = certify_query(q, cfg)
+        if best:
+            print(f"Certification : {best.certification:.4f}")
+            print(f"  TDA            : {best.integrity_tda:.4f}")
+            print(f"  Kinematics     : {best.integrity_kin:.4f}")
+            print(f"  Coherence      : {best.coherence_score:.4f}")
+            print(f"  Graph          : {best.integrity_graph:.4f}")
+            print(f"  Semantic       : {best.semantic_score:.4f}")
+            print(f"  Verify         : {best.verify_score:.4f}")
+            print(f"  Causal depth   : {best.causal_depth_score:.4f}")
+            print(f"Consensus answer : {consensus}")
+            print(f"Best trace:\n{best.trace[:400]}...")
+        else:
+            print("No certified candidates found.")              

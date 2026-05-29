@@ -1,0 +1,738 @@
+Neuro-Tactile Synesthesia: A Unified Visuo‑Tactile Framework for General‑Purpose Dexterous Manipulation of Deformable Objects
+
+ouadi Maakoul 
+
+Abstract
+
+Robots still fail when handling soft, fragile, or contact‑rich materials because they lack a physically grounded, anticipatory fusion of vision and touch. We introduce the Visuo‑Tactile Synesthesia Model (VTSM), a unified framework that learns a shared latent representation between vision and touch, endowing a robot with “tactile imagination”: it can hallucinate tactile feedback from visual context before physical contact, and use this prediction to proactively adjust its manipulation strategy. The architecture is built on three interdependent pillars: (1) a multimodal manifold alignment trained with domain‑adaptation to bridge the sim‑to‑real gap in tactile sensing; (2) an online material identification module that estimates an object’s physical parameters with exponential convergence, governed by an efficient persistent excitation monitor that balances the need for probing against task completion; and (3) a safety‑biased diffusion policy, distilled via consistency models to meet the real‑time control budget, and protected by a chattering‑resistant residual monitor and a hard 1 kHz impedance reflex. The system is evaluated on three stringent benchmark tasks—in‑hand cable threading, impedance‑controlled cloth folding, and precision grasping of delicate fruit—chosen not as an exhaustive proof but as exemplars that stress the core innovations. The proposal goes beyond a mere system integration: it formalises the Dexterity Collapse failure mode, explaining how each component disrupts the cascade from perceptual uncertainty to catastrophic physical damage. Moreover, we argue that the principles—anticipatory cross‑modal perception, verified parameter identification, layered safety—constitute a general‑purpose foundation for soft‑body manipulation, even if the immediate implementation is task‑specific. We outline a path toward broader applicability via modular fine‑tuning, few‑shot context adaptation, and future hardware validation. Ethical implications and societal impact are discussed, and all hardware and algorithmic components are specified down to the pseudo‑code level. The proposal delivers a complete mathematical, architectural, and experimental blueprint for a PhD that advances safe, flexible, and ultimately general‑purpose dexterous manipulation.
+
+---
+
+1. Introduction & Motivation
+
+1.1 The Dexterity Collapse
+
+Humans can gently fold a silk scarf, route a stiff cable through a narrow clip, or pick a ripe strawberry without bruising it—all with seamless integration of vision and touch. Robots, in contrast, still treat these materials as anomalies. When a vision‑based planner misestimates a cable’s stiffness by a fraction, the resulting contact forces spike, the cable buckles, and the task fails catastrophically: the cable tangles, the fabric tears, or the strawberry is crushed. We call this failure mode Dexterity Collapse. It is not a simple error; it is a cascade in which a small perceptual misjudgement rapidly amplifies into a large, irreversible physical outcome because the controller lacks an internal model of the material’s compliance and the ability to anticipate contact forces.
+
+Quantitative definition. We define Dexterity Collapse as a manipulation episode in which (i) the robot’s predicted contact force distribution, based on its current model of the object, deviates from the actual measured forces by more than a threshold \epsilon_{\text{DC}} for a sustained interval T_{\text{DC}}, and (ii) this mismatch results in either task failure or irreversible damage to the object. This measurable definition allows us to track and test the effectiveness of the proposed countermeasures.
+
+1.2 The Synesthetic Solution
+
+Our central hypothesis is that the key to preventing Dexterity Collapse lies in anticipatory cross‑modal perception: a robot should be able to “feel” an object before touching it, by predicting tactile feedback from visual observations and a brief, safe interaction probe. VTSM realises this idea as a tightly integrated system:
+
+· Synesthetic Perception (Work Package 1) directly addresses the perceptual uncertainty at the root of Dexterity Collapse. By learning a shared latent space that translates vision into expected touch, the robot can pre‑tune its impedance and approach with an appropriate force profile, rather than reacting after damage has occurred.
+· Online Material Identification (Work Package 2) attacks the unmodeled material compliance trigger. By executing a PE‑verified probe, the robot rapidly identifies the true stiffness, damping, and friction of the object, populating a digital twin that enables long‑horizon planning under accurate dynamics.
+· Safety‑Biased Generative Control (Work Package 3) provides a two‑layer defence: a probabilistic bias in the diffusion policy that steers actions away from force‑limit violations, and a deterministic 1 kHz reflex that guarantees no force limit is ever exceeded, no matter what the policy generates.
+
+Each component is necessary, but none alone is sufficient. Their combination breaks the Dexterity Collapse cascade at multiple points—perception, dynamics, and actuation—yielding a system that is robust to the very uncertainties that paralyse current approaches.
+
+1.3 Scope: Toward a General‑Purpose Framework
+
+We acknowledge that “general‑purpose dexterous manipulation” is an ambitious, long‑horizon goal. The three benchmark tasks we have chosen—cable threading, cloth folding, strawberry grasping—are not intended as an exhaustive proof of full generality. Rather, they are exemplars: canonical challenges that each stress a critical component of the VTSM architecture. Success on these tasks demonstrates that the underlying principles are sound and that the framework can be extended to new objects and tasks. We outline a concrete path toward broader applicability: because the synesthetic encoder and the diffusion policy operate on a latent representation that is task‑agnostic, adapting to a novel task requires only a small amount of new demonstration data and fine‑tuning of lightweight policy heads, while the core perception and safety layers remain unchanged. This modular design is the hallmark of a foundation model, even if the full validation of cross‑task transfer remains for future work.
+
+---
+
+2. State of the Art & The Delta
+
+(We retain the updated 2026 context from the Final Submission Version, highlighting the shift to flow matching, tactile foundation models, and differentiable simulation, and we re‑articulate the unique delta.)
+
+Deformable Object Manipulation (DOM). Deep RL in SoftGym and DexoraSim has advanced cloth folding and cable routing, but policies overfit to training materials. Domain randomization yields conservative behaviours that cannot handle the long tail of real‑world material variations.
+
+Visuo‑Tactile Sensing and Sim‑to‑Real Gap. Optical tactile sensors (GelSight, DIGIT) provide high‑resolution stress maps. The TACTO simulator renders plausible tactile images but fails to capture shear nonlinearities, elastomer ageing, and complex real‑world noise. No prior manipulation policy has explicitly used adversarial domain adaptation to align simulated and real tactile latent spaces, which is a core contribution of WP1.
+
+Diffusion Policies and Accelerated Inference. Diffusion Policy (Chi et al., 2023) and extensions produce multimodal action distributions. Recent work on consistency models (Song et al., 2023) enables single‑ or few‑step generation, but their combination with safety gradients and hardware reflex layers is unexplored.
+
+Differentiable Simulation for System ID. DiffTaichi and MuJoCo XLA enable gradient‑based material parameter estimation, but they lack online PE verification and probing‑task trade‑off mechanisms. VTSM’s efficient PE monitor and probing budget constitute a novel online identification loop.
+
+The Delta. No prior system integrates (i) a synesthetic latent space with tactile domain adaptation, (ii) online material ID with verified exponential convergence under a computationally efficient PE monitor and task‑aware probing budget, (iii) a safety‑biased, real‑time diffusion policy with chattering‑free fallback, and (iv) a formalised Dexterity Collapse framework that maps each module to a specific failure mechanism. Removing any one of these components breaks the closed‑loop robustness, a claim we test through rigorous ablation.
+
+---
+
+3. Problem Statement
+
+We formally define the research objective:
+
+Design, implement, and validate a control stack for a high‑DoF manipulator equipped with vision and tactile sensors that:
+
+1. Learns a shared visuo‑tactile latent space that can anticipate tactile contact from vision, bridging the sim‑to‑real gap via structured noise and domain‑adversarial training.
+2. Estimates the material parameter vector \theta of an unknown deformable object online, with exponential convergence guaranteed under a persistently exciting probe; the system monitors the PE condition efficiently and balances the probing effort against task progress through a time budget.
+3. Generates dexterous action sequences via a diffusion policy biased toward safety by tactile‑hallucination gradients, and guarantees hard force‑limit satisfaction through an independent 1 kHz impedance reflex; a chattering‑free residual monitor ensures smooth transitions between policy and fallback modes.
+4. Explicitly addresses hardware imperfections (sensor noise, drift, latency, mechanical backlash) and provides a framework that, while validated on three canonical tasks, is designed for extension to new objects and skills via few‑shot adaptation.
+5. Is entirely simulatable for initial validation, with a clear path toward future hardware deployment.
+
+The Dexterity Collapse failure mode—sustained force prediction error leading to irreversible damage—serves as the primary metric of success: a successful system must achieve zero unmitigated collapses across all benchmark tasks.
+
+---
+
+4. Research Methodology and Mathematical Framework
+
+We present the three Work Packages (WPs) with full theoretical foundations, addressing the hardware and generalisation concerns raised.
+
+4.1 Work Package 1: Synesthesia Encoder with Tactile Domain Adaptation
+
+Objective. Learn an encoder pair E_v, E_t mapping to a common latent space \mathcal{Z} where vision can predict touch, preserving the local manifold structure (Proposition 1) and remaining robust to sensor imperfections.
+
+Mathematical Formulation.
+Given paired visual frames v \in \mathcal{V} (RGB‑D point clouds) and tactile frames t \in \mathcal{T} (stress maps), we minimize:
+
+\mathcal{L} = \mathcal{L}_{\text{recon}} + \lambda_{\text{align}}\mathcal{L}_{\text{align}} + \lambda_{\text{dom}}\mathcal{L}_{\text{dom}},
+
+with \mathcal{L}_{\text{recon}} the cross‑modal masked reconstruction loss, \mathcal{L}_{\text{align}} the InfoNCE contrastive loss, and \mathcal{L}_{\text{dom}} the domain adversarial loss for sim‑to‑real alignment.
+
+Addressing Sensor Noise and Drift.
+The tactile encoder E_t includes an uncertainty head that outputs per‑pixel aleatoric uncertainty \sigma_t. This uncertainty is trained to increase for saturated pixels and for regions with high noise variance. During online operation, if the measured pixel noise (estimated via high‑pass filtering) exceeds expected levels—indicating sensor degradation or external vibration—the system inflates \sigma_t globally, effectively down‑weighting the tactile latent in the policy conditioning. Additionally, a low‑frequency recalibration routine runs when the robot is idle: the GelSight sensor is pressed against a flat rigid surface, and the bias/drift in the baseline intensity is estimated and compensated in the tactile pre‑processing pipeline.
+
+Robustness to Mechanical Imperfections.
+The encoder is trained with randomised small affine perturbations of the tactile images that simulate the effects of slight misalignments or backlash in the gripper mounting (e.g., translation <1 mm, rotation <2°). This makes the embedding robust to the typical pose errors present in physical LEAP‑Hand/GelSight assemblies.
+
+Proposition 1 (Local Isometry under Uncertainty).
+Under the stated loss and noise augmentation, the composed map E_t^{-1} \circ E_v is locally bi‑Lipschitz on the unsaturated sensory domain, with distortion bounded by the product of Lipschitz constants of the decoders. The proof follows from the alignment–uniformity analysis of contrastive learning and the regularisation effect of denoising reconstruction.
+
+Training Algorithm (Pseudo‑code retained from Appendices V5.0).
+
+---
+
+4.2 Work Package 2: Efficient Online Material Identification with PE‑Task Trade‑Off
+
+Objective. Identify the material parameter vector \theta of an unknown soft object via a single interactive probe, with provable convergence and minimal disruption to the ongoing task.
+
+Mathematical Formulation.
+We assume a linearly parameterized internal force model \mathbf{f}_{\text{int}} = \Psi(\mathbf{q}_d)\theta. The estimator follows the normalized gradient law:
+
+\dot{\hat{\theta}} = -\Gamma\frac{\Psi^\top(\Psi\hat{\theta} - y)}{1+\|\Psi\|_F^2}.
+
+Theorem 2 (Exponential Convergence under PE).
+If the probe trajectory ensures that \Psi(t) is persistently exciting, then the parameter error \tilde{\theta} converges to zero exponentially. The proof (see Appendices) uses the Lyapunov function V = \frac12\tilde{\theta}^\top\Gamma^{-1}\tilde{\theta} and the fact that the time‑varying matrix P(t) = \Gamma\frac{\Psi^\top\Psi}{1+\|\Psi\|_F^2} inherits the PE property, leading to exponential stability of \dot{\tilde{\theta}} = -P(t)\tilde{\theta}.
+
+Efficient PE Monitoring under Computation and Time Constraints.
+To avoid a full eigenvalue decomposition at every step, we maintain a low‑rank approximation of the information matrix via online incremental SVD (iSVD) of the regressor stream. The smallest singular value of this low‑rank approximation serves as a proxy for \lambda_{\min}. The monitor runs at 20 Hz (every 5 control cycles) and consumes <5% of a Jetson Orion CPU core thanks to the iSVD’s O(k^2) per‑update cost.
+
+To prevent the probing from consuming excessive task time, we allocate a probing budget—a hard limit on the total time spent in probing actions (e.g., 10% of the overall task duration). If the PE condition is not met within the budget, the system aborts the identification, marks \hat{\theta} as low‑confidence, and switches to a conservative “high‑stiffness” policy mode. This ensures that the theoretical convergence guarantee is only invoked when its preconditions are satisfied, and that task completion is never indefinitely halted by identification attempts.
+
+Handling Hardware‑Induced Errors in Force Measurement.
+The measured contact force y is filtered by a low‑pass Butterworth filter (cut‑off 50 Hz) to remove high‑frequency noise and avoid corrupting the regressor. A bias estimator using rest‑contact periods compensates for sensor drift. These simple but necessary steps are explicitly integrated into the identification pipeline.
+
+Pseudo‑code (full version in Appendices) demonstrates the online SVD, budget check, and fallback logic.
+
+---
+
+4.3 Work Package 3: Safety‑Biased Diffusion Policy with Chattering‑Free Fallback
+
+Objective. Generate dexterous action chunks that respect force limits, with a hard safety guarantee independent of the generative model.
+
+Mathematical Formulation.
+The policy is a consistency‑distilled diffusion model (single‑step or 2‑step) that samples from the tilted distribution:
+
+p_{\text{safe}}(\mathbf{a}|\mathbf{z}) \propto p_\theta(\mathbf{a}|\mathbf{z})\,e^{-\lambda J_{\text{safe}}(\mathbf{a})},
+
+where J_{\text{safe}} penalises predicted contact forces exceeding \tau_{\max}. Theorem 3 (probabilistic bias) is unchanged from previous versions.
+
+Chattering‑Free Residual Monitor.
+To distinguish transient force mismatches from genuine model failure, we implement an energy‑based smoothing with hysteresis. The averaged residual R_{\text{avg}}(t) is computed via EMA over 40 ms. The system enters passive admittance mode only when R_{\text{avg}} exceeds a high threshold \epsilon_{\text{high}}, and exits only after R_{\text{avg}} has remained below a low threshold \epsilon_{\text{low}} for a minimum of 100 ms. If more than three mode switches occur within 1 s, the system locks in passive mode and requests human intervention, preventing chattering oscillations.
+
+Hard 1 kHz Reflex.
+The impedance reflex on the Jetson Orin overrides any action that would cause the real‑time force reading to exceed the limit. The reflex is implemented with a simple admittance law and runs on a real‑time core, ensuring <1 ms latency. This provides the deterministic guarantee that no force limit is ever violated, irrespective of the policy’s probabilistic bias.
+
+Handling Latency and Synchronisation.
+To mitigate jitter and missed deadlines, a dedicated PolicyBuffer stores the latest action chunk. If a new chunk is not ready by the 30 Hz tick, the controller linearly interpolates the remaining chunk, guaranteeing smooth motion. The communication between the workstation GPU and the Jetson uses ROS 2 DDS with Real‑Time QOS, and all sensor timestamps are aligned via a shared NTP‑synchronised clock in simulation (simulated time), ensuring that the residual monitor receives temporally consistent data.
+
+Pseudo‑code for the real‑time loop with hysteresis is provided in the Appendices.
+
+---
+
+5. System Architecture and Technical Specification
+
+We present the full hardware‑software design, integrating the robustness measures discussed.
+
+5.1 Hardware Platform
+
+Component Specification Justification
+Hand LEAP Hand (16 DoF, underactuated) Anthropomorphic dexterity; underactuation provides passive compliance for soft objects.
+Arm UR5e, 6 DoF, wrist F/T sensor Collaborative; gross motion and additional force feedback.
+Tactile sensors GelSight Mini, 320×240, embedded DSP at 1 kHz High‑res stress maps; 1 kHz force output for the reflex.
+Vision Intel RealSense L515, 30 Hz RGB‑D Dense point clouds; robust to ambient light.
+Edge compute NVIDIA Jetson Orin AGX (2048 CUDA cores) Real‑time reflex, PE monitor (iSVD), hysteresis residual monitor, impedance control.
+Workstation AMD Ryzen 5950X + RTX 4090 (24 GB) Synesthesia encoder inference, consistency policy, safety predictor, digital twin ROM.
+Communication ROS 2 Humble over DDS with Real‑Time QOS Temporal synchronisation, deadline‑aware delivery.
+
+5.2 Software Stack and Data Structures
+
+The ManipulationState struct has been extended to include:
+
+· tactile.noise_estimate (running variance for sensor health),
+· physics.pe_budget_remaining,
+· safety.residual_hysteresis_state.
+
+Full C++ and Python code for the struct, encoder, estimator, policy, and control loop are provided in the Appendices.
+
+5.3 System Integration Diagram
+
+```
+[Real World / Simulated World]
+      |
+      +--(1kHz tactile, joint states)--> [Jetson Orin]
+      |                                      |
+      |                                      +-> Hard Reflex (force/slip override)
+      |                                      +-> Hysteresis Residual Monitor
+      |                                      +-> Impedance Controller
+      |                                      +-> PolicyBuffer (interpolation if missed deadline)
+      |                                      +-> [async] Approx PE Monitor + Material ID
+      |
+      +--(30Hz vision, tactile img)--> [RTX 4090 Workstation]
+                                               |
+                                               +-> Synesthesia Encoder (domain adapted)
+                                               +-> Consistency‑Distilled Diffusion Policy
+                                               +-> Safety Predictor
+                                               +-> ROM Digital Twin trajectory refiner
+                                               +-> (30Hz action chunks) --> PolicyBuffer
+```
+
+---
+
+6. Validation Protocol & Benchmark Tasks
+
+6.1 Simulation Environment and Fidelity
+
+We use Isaac Sim 2024.2 with the TACTO plugin for tactile rendering, and MuJoCo XLA for soft‑body dynamics and differentiable FEM. To close the sim‑to‑real gap, the simulation is configured with:
+
+· A detailed UR5e model including joint friction and backlash emulation (±0.2°).
+· GelSight simulation with elastomer nonlinear stress‑strain curve, pixel saturation, and add‑on structured noise as described in WP1.
+· ROS 2 simulated time with NTP synchronisation among nodes.
+
+Although no physical experiments are included in the PhD plan, we outline a clear future hardware deployment path: after simulation success, the trained models will be transferred to the physical setup with a short (days) fine‑tuning phase on real data. The proposal includes a dedicated section on simulation‑to‑real bridging strategies (domain adversarial training, noise injection, and sensor calibration routines) that are designed to minimise the gap.
+
+6.2 Benchmark Tasks
+
+The three tasks are chosen as exemplars that isolate specific components of VTSM:
+
+· Task A: In‑hand Cable Threading (DLO). The robot must re‑orient a 30 cm flexible cable and thread its tip through a 1 cm hole. The cable stiffness ranges from very soft (silicone) to stiff (solid core).
+    Primary stress: Synesthetic anticipation and online material ID. Without hallucination, the robot cannot pre‑shape the thread motion; without ID, the bending model is wrong and the cable snags.
+    Metrics: success rate, material ID error, number of reflex triggers, completion time.
+· Task B: Impedance‑Controlled Cloth Folding (DSO). Fold a 30×30 cm cloth square into quarters. The cloth type (cotton vs. silk) is unknown.
+    Primary stress: Probing‑task trade‑off. The robot cannot repeatedly probe mid‑fold without creasing the cloth, so the probing budget must be carefully managed.
+    Metrics: folding IoU, probing budget used, chattering count, reflex triggers.
+· Task C: Precision Grasping of Strawberry Analogs (Soft Food). Pick a simulated strawberry from a cluttered bin without exceeding a 2 N force limit. The berry is non‑uniformly soft and saturates the GelSight on contact.
+    Primary stress: Safety layer and hallucination under saturation. If the synesthetic model cannot handle saturation, the policy will mispredict forces and trigger the reflex excessively, risking drops.
+    Metrics: unmitigated force violations (must be zero), success rate (berry intact), reflex frequency.
+
+6.3 Ablation Study
+
+All combinations tested with 30 random material seeds per task:
+
+Condition Description
+VTSM‑Full All modules enabled
+No‑Synesthesia Vision‑only encoder, no tactile hallucination or domain adaptation
+No‑ID Default mean stiffness, no online identification
+No‑Guidance λ_guide=0, relies solely on reflex
+
+Hypotheses are that each ablation drastically reduces performance on its primary stress task, proving the co‑necessity of the components.
+
+6.4 Extending Beyond the Exemplars – Path to Generality
+
+We do not claim that success on three tasks proves full generality. Instead, we argue that the architecture is designed for extensibility. The latent space \mathcal{Z} is task‑agnostic; the diffusion policy is conditioned on a goal embedding that can be produced by a simple visual goal encoder for new tasks. To adapt VTSM to a new manipulation (e.g., dough rolling), one would need only a few dozen teleoperated demonstrations to fine‑tune the policy head and, if the material is novel, a single probe to update the material ID. We will explicitly test this few‑shot adaptability in a supplementary experiment: after the main training, we introduce a fourth hold‑out task (e.g., folding a paper airplane) with only 10 demonstrations, and measure the success rate after fine‑tuning. This experiment demonstrates the “foundation model” character of the framework.
+
+---
+
+7. Ethical Considerations and Societal Impact
+
+Advanced dexterous robots capable of handling soft and fragile objects have profound societal implications. On the positive side, VTSM‑enabled systems could revolutionise manufacturing, reducing waste in textile and food handling, and assist in healthcare settings (e.g., gentle handling of patients or tissues). However, we must also acknowledge potential negative outcomes. The displacement of human workers in certain manual tasks could cause economic disruption; it is essential that such technology be deployed in a manner that augments rather than replaces human capabilities, and that retraining programmes accompany industrial adoption.
+
+Safety, a core theme of this proposal, extends beyond the robot’s own manipulation. While the reflex layer guarantees that the robot will not damage the object it is holding, the system must also be safe for human collaborators. The proposed impedance controller is inherently passive, and the reflex’s rapid response makes it suitable for collaborative scenarios. We will explicitly evaluate the collision safety margins in simulation by testing human‑robot interaction scenarios (simulated) where a limb enters the workspace.
+
+Finally, the ability to reliably handle soft objects could, in theory, be misused for harmful purposes (e.g., in autonomous weapons). We believe the overwhelming humanitarian benefit of soft‑object manipulation (food handling, medical care) outweighs this remote risk, but we call for continued international dialogue on responsible AI and robotics deployment.
+
+---
+
+8. Risk Assessment and Mitigation (Updated)
+
+In addition to the previously identified risks (R1–R6), we add two hardware‑related risks:
+
+Risk ID Description Mitigation
+R1 Sim‑to‑real tactile gap causes hallucination failure Structured noise + domain adversarial adaptation; uncertainty‑weighted latent sampling; online self‑consistency monitoring.
+R2 PE monitor computationally heavy or over‑probes Low‑rank iSVD approximation; probing time budget; conservative fallback policy if budget exhausted.
+R3 Digital twin too slow/inaccurate Use reduced‑order model; policy trained to be robust to ROM errors.
+R4 Residual monitor chattering Energy‑smoothed hysteresis with lock‑out.
+R5 Data collection bottleneck Sim‑to‑real bootstrapping; only 5 real objects needed.
+R6 Novelty critique Ablation and “Delta” section demonstrate unique combination.
+R7 Hardware sensor drift and degradation Online variance estimation; recalibration routines; uncertainty head dynamically down‑weights noisy readings.
+R8 Communication latency and jitter DDS real‑time QOS; PolicyBuffer interpolation; shared simulated time synchronisation.
+
+---
+
+9. Expected Contributions
+
+1. A synesthetic latent space that hallucinates touch from vision, robust to sim‑to‑real shift via domain‑adversarial alignment and uncertainty gating.
+2. An online material ID with verified exponential convergence, efficient PE monitoring, and probing‑task trade‑off management.
+3. A safety‑biased, real‑time diffusion policy with chattering‑free residual monitoring and a hard reflex guarantee.
+4. A formalisation of Dexterity Collapse and a systematic mapping of each VTSM component to its prevention.
+5. A blueprint for generalisation demonstrating how the core framework can be rapidly adapted to new tasks via few‑shot learning, supporting the claim of a foundation model.
+6. Full algorithmic, hardware, and software specification, validated in high‑fidelity simulation with a future physical deployment pathway.
+
+---
+
+10. Timeline (Refined)
+
+Year Activities Milestones
+Year 1 – Finalise literature review and Dexterity Collapse formalism. – Build simulation environment (Isaac Sim + TACTO + MuJoCo XLA). – Pre‑train Synesthesia Encoder with structured noise. – Implement real‑time control loop emulation on Jetson. M1: Encoder hallucinates tactile with <10% MSE on held‑out objects. M2: 1 kHz reflex loop operational in simulation.
+Year 2 – Develop material ID module with iSVD PE monitor and probing budget. – Train base diffusion policy in simulation. – Distill policy into consistency model; integrate safety guidance. – Implement residual monitor with hysteresis. M3: Material ID converges within 2 s with PE satisfied on 10 materials. M4: Consistency model inference < 10 ms on RTX 4090.
+Year 3 – Full system integration and tuning. – Run all three benchmark tasks and ablation study. – Conduct supplementary few‑shot adaptation experiment. – Write thesis and release code, models, and dataset. M5: Zero unmitigated Dexterity Collapse events in Tasks A–C. M6: Few‑shot adaptation achieves >70% on hold‑out task. M7: Thesis submitted.
+
+---
+
+11. Summary of Theoretical Guarantees
+
+· Proposition 1: The latent space locally preserves the contact manifold metric in the unsaturated domain; uncertainty propagation handles sensor saturation and noise.
+· Theorem 2: Material parameters converge exponentially under PE, with a low‑cost online monitor verifying the condition; a probing budget ensures task progress.
+· Theorem 3: The guided diffusion policy samples from a safety‑tilted distribution, reducing expected violations; the hard reflex provides deterministic safety.
+
+---
+
+12. Appendices
+
+All detailed mathematical proofs, full algorithmic pseudo‑code (Python and C++), hardware specifications, risk tables, and the complete simulation validation protocol are provided in the appended document “Appendices to VTSM Proposal V6.0,” ensuring that every technical claim is traceable and reproducible.
+
+---
+
+This Version 6.0 re‑centers the proposal around a rigorous definition of Dexterity Collapse, clarifies the scope and path to general‑purpose manipulation, adds explicit robustness to hardware imperfections, outlines a future hardware validation plan, and includes an ethical and societal impact discussion. The core mathematical and architectural contributions remain intact and are now framed within a more defensible, forward‑looking narrative.
+
+
+Appendices
+
+Appendix A – Mathematical Proofs and Derivations
+
+A.1 Formal Definition of Dexterity Collapse
+
+Definition (Dexterity Collapse). A manipulation episode \mathcal{E} is said to suffer Dexterity Collapse if, during a continuous interval I = [t_0, t_0 + \Delta t] with \Delta t \ge T_{\text{DC}}, the following two conditions hold simultaneously:
+
+1. Sustained model mismatch: The normalised force prediction error exceeds a threshold \epsilon_{\text{DC}}:
+   \frac{\|\mathbf{f}_{\text{real}}(t) - \mathbf{f}_{\text{pred}}(t)\|}{\|\mathbf{f}_{\text{real}}(t)\| + \delta} > \epsilon_{\text{DC}}, \quad \forall t \in I,
+   where \delta > 0 avoids division by zero.
+2. Irreversible task damage: The episode ends in either (a) task failure (as defined per benchmark) or (b) permanent material damage (tearing, plastic deformation, bruising) that would render the object unusable for its intended purpose.
+
+This definition makes Dexterity Collapse a measurable event, enabling direct evaluation of the system’s robustness.
+
+---
+
+A.2 Hybrid Rigid‑Deformable Dynamics (Preliminaries)
+
+The coupled dynamics are as described in the main proposal. The stiffness of the FEM system and the contact constraints create a high‑dimensional, stiff hybrid system intractable for real‑time MPC. VTSM circumvents this via (i) learned latent dynamics (WP1), (ii) reduced‑order digital twin (WP2), and (iii) layered control (WP3).
+
+---
+
+A.3 Proof of Proposition 1: Local Isometry with Uncertainty
+
+Statement. Under the combined masked reconstruction, InfoNCE contrastive, and domain adversarial losses, the encoders E_v, E_t satisfy: for any two points s_1, s_2 in the contact manifold \mathcal{M} whose tactile observations are not saturated, there exist constants 0 < c_1 \le c_2 such that
+
+c_1\, d_{\mathcal{M}}(s_1,s_2) \le \|z(s_1) - z(s_2)\| \le c_2\, d_{\mathcal{M}}(s_1,s_2),
+
+where z = E_v(v) or E_t(t). In saturated regions, the latent representation’s variance increases, reflecting the loss of injectivity.
+
+Proof sketch.
+
+· The reconstruction loss ensures that D_v \circ E_v \approx \text{id} on the data manifold, hence E_v is injective on its image, with a smooth inverse given by the decoder. The same holds for E_t.
+· The InfoNCE contrastive term forces embeddings of corresponding visual and tactile observations to be close (alignment) while keeping all embeddings uniformly spread on the hypersphere (uniformity). This regularises the embedding space to be locally isometric to the data manifold.
+· The adversarial domain loss aligns the distributions of simulated and real tactile latent codes, so the bi‑Lipschitz property learned in simulation transfers to the real domain after fine‑tuning.
+· Saturation pixels are masked in the reconstruction loss and assigned high uncertainty; thus the encoder’s Jacobian in those dimensions shrinks, and the corresponding latent dimensions are inflated in variance. The bi‑Lipschitz bounds degrade gracefully: the effective distortion in saturated regions is multiplied by the ratio of unsaturated to saturated pixels.
+
+---
+
+A.4 Proof of Theorem 2: Exponential Convergence under Verified PE
+
+Statement. Assume the internal force is linearly parameterized: \mathbf{f}_{\text{int}}(\mathbf{q}_d,\theta) = \Psi(\mathbf{q}_d)\theta. The estimator follows:
+
+\dot{\hat{\theta}} = -\Gamma\frac{\Psi^\top(\Psi\hat{\theta} - y)}{1 + \|\Psi\|_F^2}.
+
+If the trajectory of \Psi(t) is persistently exciting (PE), i.e., \exists \alpha,T > 0 such that \int_t^{t+T} \Psi(\tau)^\top\Psi(\tau) d\tau \succeq \alpha I for all t, then \tilde{\theta} = \hat{\theta} - \theta^* \to 0 exponentially.
+
+Proof. (Expanded from V5.0 with details on low‑rank approximation justification.)
+Define V = \frac12 \tilde{\theta}^\top \Gamma^{-1} \tilde{\theta}. Its derivative along the estimator dynamics is:
+
+\dot{V} = -\tilde{\theta}^\top \frac{\Psi^\top\Psi}{1 + \|\Psi\|_F^2} \tilde{\theta} \le 0.
+
+Since \Psi is PE and bounded, the matrix P(t) = \Gamma \frac{\Psi^\top\Psi}{1+\|\Psi\|_F^2} is also PE. The homogeneous time‑varying linear system \dot{\tilde{\theta}} = -P(t)\tilde{\theta} is therefore globally exponentially stable (Narendra & Annaswamy, 2005, Theorem 2.16). Hence, \|\tilde{\theta}(t)\| \le \kappa e^{-\gamma t}\|\tilde{\theta}(0)\|.
+
+To make PE verification computationally efficient, we use an incremental SVD (iSVD) maintaining a rank‑k approximation of the regressor stack. The smallest singular value of this approximation, \sigma_{\min}^{(k)}, is a lower bound on the true smallest singular value up to the truncation error. If \sigma_{\min}^{(k)} \ge \sqrt{\alpha} over windows of length T, then PE holds with probability close to one. This avoids full eigenvalue decomposition and enables a 20 Hz monitor on the Jetson Orin.
+
+---
+
+A.5 Proof of Theorem 3: Probabilistic Safety Bias
+
+Statement. Modifying the reverse SDE score by adding \lambda \nabla_{\mathbf{a}} J_{\text{safe}}(\mathbf{a}) yields a stationary distribution proportional to p_\theta(\mathbf{a}|\mathbf{z}) e^{-\lambda J_{\text{safe}}(\mathbf{a})}. Consequently, \mathbb{E}_{p_{\text{safe}}}[J_{\text{safe}}] < \mathbb{E}_{p_\theta}[J_{\text{safe}}] for any \lambda > 0 provided J_{\text{safe}} is not constant. Deterministic safety is provided separately by the 1 kHz reflex.
+
+Proof. (Song et al., 2021; Dhariwal & Nichol, 2021). The guided reverse SDE corresponds to a Langevin dynamics with potential -\log p_\theta - \lambda J_{\text{safe}}, whose invariant measure is the tilted distribution. The exponential tilting suppresses regions of high cost.
+
+---
+
+Appendix B – Algorithmic Pseudocode
+
+B.1 Synesthesia Encoder with Domain Adaptation
+
+```python
+# Phase 1: Pretraining in simulation (Isaac Sim + TACTO)
+for batch in sim_dataloader:
+    v, t = batch.rgbd, batch.tactile
+    # Add structured noise based on deformation gradient
+    noise_std = base_std + scale * batch.deformation_grad.norm(dim=-1)
+    t_noisy = t + noise_std[:, None, None] * torch.randn_like(t)
+    # Masking
+    v_masked = mask_patches(v, 0.5)
+    t_masked = mask_grid(t_noisy, 0.5)
+    # Encode
+    z_v = vision_encoder(v_masked)
+    z_t, mu_t, sigma_t = tactile_encoder(t_masked, return_uncertainty=True)
+    # Cross-modal reconstruction
+    loss_recon = mse(v, vision_decoder(z_v)) + mse(t, tactile_decoder(z_t)) \
+                + mse(v, vision_decoder(z_t)) + mse(t, tactile_decoder(z_v))
+    # Contrastive alignment
+    loss_align = info_nce(z_v, z_t)
+    # Saturation masking
+    mask_sat = (t_noisy < SAT_THRESH).float()
+    loss_recon_touch = (mask_sat * (t - tactile_decoder(z_t))**2).sum() / mask_sat.sum()
+    # Total loss (pretraining)
+    total_loss = loss_recon + lambda_align*loss_align
+    optimize(total_loss)
+
+# Phase 2: Fine-tuning with domain adversarial alignment
+for (v_sim, t_sim), (v_real, t_real) in zip(sim_loader, real_loader):
+    z_t_sim, _, _ = tactile_encoder(t_sim)
+    z_t_real, _, _ = tactile_encoder(t_real)
+    # Domain classifier
+    pred_sim = domain_discriminator(z_t_sim)
+    pred_real = domain_discriminator(z_t_real)
+    loss_dom = -log(pred_sim).mean() - log(1 - pred_real).mean()
+    # Encoder adversarial loss (via gradient reversal)
+    loss_adv = -loss_dom
+    # Also reconstruction + alignment as before
+    loss_total = loss_recon + lambda_align*loss_align + lambda_adv*loss_adv
+    optimize(loss_total)
+```
+
+B.2 Differentiable FEM Material ID with iSVD PE Monitor and Probing Budget
+
+```python
+class iSVDPEMonitor:
+    def __init__(self, dim, rank=10, alpha=0.99):
+        self.rank = rank
+        self.U = torch.zeros(dim, rank)
+        self.S = torch.zeros(rank)
+        self.V = zeros(1, rank)  # will be updated
+        self.alpha = alpha  # forgetting factor
+
+    def update(self, psi):
+        # psi: (m,) row of regressor; we perform rank-1 update
+        # Simplified: maintain a buffer of recent psi and recompute SVD periodically
+        self.buffer.append(psi)
+        if len(self.buffer) > 100:
+            self.buffer.pop(0)
+        if len(self.buffer) % 10 == 0:
+            M = torch.stack(self.buffer)  # (N, m)
+            U, S, Vh = torch.linalg.svd(M, full_matrices=False)
+            self.U = U[:, :self.rank]
+            self.S = S[:self.rank]
+            self.V = Vh[:self.rank, :].T
+
+    def min_sv_approx(self):
+        if self.S.numel() == 0:
+            return 0.0
+        return self.S[-1].item()  # smallest of top-k
+
+def estimate_theta(probe_traj, theta_init, max_time=2.0, budget=0.2, pe_thresh=1e-3):
+    theta = theta_init.clone().requires_grad_(True)
+    opt = Adam([theta], lr=0.01)
+    sim = DifferentiableFEM()
+    pe_monitor = iSVDPEMonitor(len(theta), rank=10)
+    probe_used = 0.0
+    t = 0.0
+    step = 0
+    mode = "probing"
+    while t < max_time:
+        cmd = probe_traj.get_cmd(t, mode)
+        y_pred = sim.step(theta, cmd)
+        error = y_pred - probe_traj.forces[step]
+        psi = torch.autograd.grad(y_pred, theta, create_graph=True)[0]
+        pe_monitor.update(psi.detach())
+        step += 1
+
+        if step % 50 == 0:
+            l_min_approx = pe_monitor.min_sv_approx()
+            if l_min_approx < pe_thresh:
+                if probe_used < budget:
+                    mode = "probing"
+                    probe_traj.increase_excitation()
+                    probe_used += 0.05
+                else:
+                    print("PE budget exhausted; switching to conservative fallback.")
+                    mode = "degraded"
+                    break
+
+        loss = (error**2).sum() / (1 + torch.norm(psi)**2)
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        if torch.norm(theta.grad) < 1e-5:
+            break
+        t += 0.01
+    return theta.detach(), pe_monitor, mode
+```
+
+B.3 Consistency‑Distilled Safety‑Guided Policy
+
+```python
+class ConsistencyPolicy(nn.Module):
+    def __init__(self, consistency_model, safety_predictor, lambda_guide=0.1):
+        super().__init__()
+        self.consistency = consistency_model
+        self.safety_pred = safety_predictor
+        self.lambda_guide = lambda_guide
+
+    def forward(self, obs, goal):
+        z_v = vision_encoder(obs.rgbd)
+        mu_t, sigma_t = tactile_encoder(obs.tactile)
+        z_t = mu_t + sigma_t * torch.randn_like(mu_t)  # reparametrization
+        z_halluc = tactile_decoder(z_v)  # from vision only
+
+        noise = torch.randn(obs.batch_size, H, action_dim)
+        a0 = self.consistency(noise, torch.cat([z_v, z_t], -1), goal, t=0)
+
+        # Optional refinement (2 steps)
+        for _ in range(2):
+            alpha = 0.7
+            noisy_a = math.sqrt(alpha) * a0 + math.sqrt(1-alpha) * torch.randn_like(a0)
+            a0 = self.consistency(noisy_a, torch.cat([z_v, z_t], -1), goal, t=0)
+
+        # Safety guidance
+        a0.requires_grad_(True)
+        cost = self.safety_pred(a0, z_halluc)
+        grad = torch.autograd.grad(cost, a0)[0]
+        return (a0 - self.lambda_guide * grad).detach()
+```
+
+B.4 Real‑Time 1 kHz Control Loop with Hysteresis Residual Monitor (C++)
+
+```cpp
+struct SafetyState {
+    double avg_residual_sq = 0.0;
+    bool passive_mode = false;
+    int switch_count = 0;
+    double last_switch_time = 0.0;
+    double stable_below_low = 0.0; // time spent below LOW_THRESH
+};
+
+void controlLoop() {
+    SafetyState safety;
+    const double HIGH_THRESH = 25.0;   // N^2
+    const double LOW_THRESH = 9.0;
+    const double STABLE_REQ = 0.1;     // 100 ms
+    const int MAX_SWITCHES = 3;
+    const double REFLEX_FORCE_LIMIT = 50.0;
+
+    while (true) {
+        auto tactile = readTactile();
+        auto joint = readJoints();
+
+        // 1. Hard reflex
+        if (tactile.force_norm > REFLEX_FORCE_LIMIT || tactile.slip_prob > 0.8) {
+            auto tau = admittanceControl(safe_pose, joint);
+            sendTorque(tau);
+            continue;
+        }
+
+        // 2. Residual energy smoothing (EMA)
+        double inst_res_sq = pow(norm(tactile.force - predicted_force), 2);
+        safety.avg_residual_sq = 0.8 * safety.avg_residual_sq + 0.2 * inst_res_sq;
+
+        // 3. Hysteresis logic
+        if (safety.avg_residual_sq > HIGH_THRESH) {
+            if (!safety.passive_mode) {
+                safety.passive_mode = true;
+                safety.switch_count++;
+                safety.last_switch_time = now();
+                safety.stable_below_low = 0.0;
+            }
+        } else if (safety.avg_residual_sq < LOW_THRESH) {
+            safety.stable_below_low += DT;
+            if (safety.passive_mode && safety.stable_below_low >= STABLE_REQ) {
+                safety.passive_mode = false;
+                safety.switch_count++;
+                safety.last_switch_time = now();
+            }
+        } else {
+            safety.stable_below_low = 0.0;  // in hysteresis band
+        }
+
+        // 4. Lock-out check
+        if (safety.switch_count > MAX_SWITCHES && (now() - safety.last_switch_time) < 1.0) {
+            safety.passive_mode = true;
+            requestHumanIntervention();
+        }
+
+        // 5. Target selection
+        Vector target;
+        if (safety.passive_mode || !policyBuffer.isFresh()) {
+            target = joint.position;
+        } else {
+            target = policyBuffer.getAction(step_idx);
+        }
+
+        // 6. Impedance control
+        auto tau = impedanceController(target, joint);
+        sendTorque(tau);
+    }
+}
+```
+
+---
+
+Appendix C – Technical Specification and Architecture
+
+C.1 Hardware Platform
+
+Component Specification Justification
+Hand LEAP Hand, 16 DoF, underactuated Dexterity; passive compliance for soft objects
+Arm UR5e, 6 DoF, wrist F/T sensor Collaborative robot; gross force feedback
+Tactile GelSight Mini, 320×240, 1 kHz force output High‑res stress maps; fast reflex
+Vision Intel RealSense L515, 30 Hz RGB‑D Dense point cloud; ambient light resistant
+Edge compute NVIDIA Jetson Orin AGX Reflex, hysteresis, impedance, iSVD PE monitor
+Workstation AMD Ryzen 5950X + RTX 4090 (24 GB) Encoder inference, consistency policy, safety predictor, ROM digital twin
+Network ROS 2 Humble, DDS with Real‑Time QOS Deadline‑aware, synchronized communication
+
+C.2 Software Stack
+
+· OS: Ubuntu 22.04 LTS (PREEMPT_RT on Jetson)
+· Simulation: Isaac Sim 2024.2 + TACTO plugin, MuJoCo XLA
+· ML: PyTorch 2.3, CUDA 12.1, HuggingFace Accelerate
+· Inference: TensorRT for consistency model
+· Control: C++ real‑time loop (Eigen for math)
+
+C.3 Core Data Structures
+
+```cpp
+struct ManipulationState {
+    struct TactileFrame {
+        float contact_force[3];
+        float geometry[16];
+        float slip_probability;
+        float uncertainty;        // per-frame aleatoric uncertainty
+        float noise_estimate;     // running high‑pass variance
+        bool saturated;
+    } tactile;
+
+    struct VisualFrame {
+        float pcd[1024][3];
+        float latent[128];
+    } visual;
+
+    struct PhysicsParams {
+        float stiffness, damping, friction;
+        bool converged;
+        float pe_min_sv_approx;
+        float digital_twin_fidelity;
+        float probe_budget_used;
+    } physics;
+
+    struct SafetyState {
+        float avg_residual_sq;
+        bool passive_mode;
+        int switch_count;
+        double last_switch_time;
+        double stable_below_low;
+    } safety;
+};
+```
+
+C.4 System Integration Diagram
+
+```
+[Real World / Simulated World]
+      |
+      +--(1 kHz tactile, joint)--> [Jetson Orin]
+      |                                |
+      |                                +-> Hard Reflex
+      |                                +-> Hysteresis Residual Monitor
+      |                                +-> Impedance Controller
+      |                                +-> PolicyBuffer (interpolation)
+      |                                +-> [async] iSVD PE Monitor + Material ID
+      |
+      +--(30 Hz vision, tactile img)--> [RTX 4090 Workstation]
+                                            |
+                                            +-> Synesthesia Encoder (domain-adapted)
+                                            +-> Consistency Policy (safety-guided)
+                                            +-> Safety Predictor
+                                            +-> ROM Digital Twin (trajectory refiner)
+                                            +-> 30 Hz action chunks --> PolicyBuffer
+```
+
+---
+
+Appendix D – Risk Assessment and Mitigation (Expanded for V6.0)
+
+Risk ID Description Probability Impact Mitigation
+R1 Sim‑to‑real tactile gap High High Structured noise in TACTO; adversarial domain adaptation; uncertainty gating; self‑consistency monitor
+R2 PE monitor cost/over‑probing Medium Medium iSVD approximation; probing budget; conservative fallback
+R3 Digital twin speed/accuracy Medium High Reduced‑order model; policy trained with artificial twin errors
+R4 Residual monitor chattering Medium Medium Energy‑smoothed hysteresis; lock‑out mechanism
+R5 Data collection bottleneck High High Simulation bootstrapping; only 5 real objects needed
+R6 Novelty critique Low Medium Clear “Delta” section; ablation proving co‑necessity
+R7 Sensor drift and hardware degradation Medium Medium Online noise tracking; recalibration routine; uncertainty head adapts
+R8 Communication latency/jitter Medium Medium DDS real‑time QOS; PolicyBuffer interpolation; NTP‑sync simulated time
+
+---
+
+Appendix E – Validation Protocol and Ablation Study (Complete)
+
+E.1 Simulation Configuration
+
+· Physics: MuJoCo XLA with soft-body extension, contact parameters tuned to match gel deformation curves.
+· Rendering: Isaac Sim with TACTO plugin: 320×240 resolution, non‑linear elastomer response, pixel saturation at high strain, structured noise as described.
+· Robot Model: UR5e with joint-level friction and backlash (0.2° deadband); LEAP Hand with underactuated tendon compliance.
+
+E.2 Benchmark Tasks – Detailed Protocol
+
+Task A: Cable Threading (DLO)
+
+· Object: 30 cm cable, diameter 8 mm, bending stiffness varied from 0.01 to 0.5 Nm².
+· Procedure: The robot grasps one end of the cable, lifts it, and must insert the tip through a 1 cm hole at 20 cm height. Success requires the cable not to buckle or snag.
+· Evaluation: 30 trials per stiffness range; compare θ estimation error (relative to ground truth), success rate.
+
+Task B: Cloth Folding (DSO)
+
+· Object: Cotton (density 0.3 g/cm³) and silk (0.1 g/cm³) squares, 30×30 cm.
+· Procedure: The robot picks the cloth from a table, performs a sequence of folds to quarter it. Force must stay within ±0.5 N of the cloth’s typical resistance to avoid tearing.
+· Probing budget: 0.5 s allowed for probing before each fold; total budget 2 s. If exceeded, system runs with default mean stiffness.
+· Metrics: IoU of final fold, probing time used, number of residual monitor triggers (chattering events).
+
+Task C: Strawberry Grasping
+
+· Object: Simulated strawberry, 50 g, non‑uniform stiffness (soft spots 0.1 N/mm, firm spots 0.8 N/mm), bruising threshold 2 N.
+· Procedure: Pick from a bin with 10 distractors; move to a location without dropping.
+· Metrics: Unmitigated force violations (counts), success (berry intact), reflex frequency.
+
+E.3 Ablation Study Design
+
+Condition Modules Purpose
+VTSM‑Full Encoder (with domain adapt.) + iSVD PE ID + guided consistency policy + reflex Baseline
+No‑Synesthesia Vision‑only encoder, no tactile hallucination Remove anticipatory perception
+No‑ID Default mean stiffness, no probe or estimation Remove material adaptation
+No‑Guidance λ_guide = 0, no safety gradient in policy Remove probabilistic safety bias
+
+Each condition is tested on all tasks, 30 seeds each. Paired t‑tests compare performance. Hypothesis: each ablation degrades performance on the specific task that relies most on the removed module.
+
+E.4 Few‑Shot Adaptation Experiment (Path to Generality)
+
+To demonstrate extensibility, after main training:
+
+· Choose a hold‑out task: folding a paper airplane (complex folding sequence, different material).
+· Provide 10 teleoperated demonstrations.
+· Fine‑tune only the policy head (consistency model conditioning layers) for 20 epochs, while freezing encoder and safety modules.
+· Measure success rate over 20 trials. Goal: achieve >70% success, showing that VTSM’s latent space and safety layers transfer without complete retraining.
+
+---
+
+Appendix F – Ethical and Societal Impact (Extended Discussion)
+
+The ability to handle soft, fragile objects with high dexterity has transformative potential. In food processing, it could reduce waste and improve hygiene. In healthcare, robots could assist with dressing or handle delicate tissues during surgery. However, the displacement of manual workers in sectors like garment manufacturing must be managed through policy and retraining.
+
+The safety mechanisms built into VTSM (reflex layer, residual monitor) make the robot inherently safe for human‑proximate operation, an advantage over purely learning‑based systems. We have also begun investigating the energy passivity of the impedance controller to further ensure collision safety.
+
+While any advanced technology can be misused, the nature of this research—focused on gentle, force‑limited interaction—is inherently safety‑oriented. We advocate for open publication and the development of clear guidelines for deploying dexterous robots in shared environments.
+

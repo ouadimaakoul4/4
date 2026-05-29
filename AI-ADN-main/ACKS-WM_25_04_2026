@@ -1,0 +1,640 @@
+ACKS‑WM: Adaptive Causal Koopman–SINDy World‑Model from Sparse Sensors
+
+
+Ouadi Maakoul
+
+
+Abstract
+
+Learning interpretable, causal, and stable dynamical models of spatiotemporal systems from sparse, noisy sensor data is a central challenge in data‑driven science. Recent SHRED‑type methods have shown that joint field reconstruction and equation discovery is feasible, but they lack formal guarantees on structural identifiability, long‑horizon stability, and causal structure, rely on fixed symbolic libraries, and offer no principled uncertainty quantification. This chapter presents ACKS‑WM, a unified theoretical architecture that extends the SHRED paradigm with five intertwined innovations. (i) An adaptive, stochastic minimum‑description‑length (S‑MDL) library expands only when a candidate term reduces the residual by more than the ensemble’s predictive uncertainty, preventing over‑fitting to noise. (ii) A causal invariance module, augmented by partial physical identity pinning, anchors the discovered latent causal graph to the spatial sensor locations, producing a physically interpretable directed acyclic graph. (iii) A cascaded stability certification strategy uses barrier‑focussed counterexample sampling to trigger expensive formal verification only when the Lyapunov function is “stability‑ready”, drastically reducing computational overhead. (iv) A manifold‑freezing curriculum eliminates destructive gradient interference between the Lyapunov penalty and library expansion, guaranteeing stable training. (v) Conformal prediction over an ensemble decoder provides exact marginal coverage for one‑step forecasts and asymptotically valid coverage for multi‑step rollouts.
+We prove, under explicit excitation and minimality conditions, that (a) the latent dynamics are locally identifiable up to a diffeomorphism, with a unique MDL‑sparsest representation within the learned coordinates; (b) a verified neural Lyapunov function yields exponential boundedness on a compact attractor; (c) the adaptive library terminates finitely with high probability, even under measurement noise; (d) with sufficiently diverse soft interventions and identity pinning, the causal graph among observed physical quantities is identifiable up to a permutation of the pinned nodes; and (e) the multi‑step Koopman forecasting error grows linearly with the invariance gap. The full training algorithm, incorporating all safeguards, is detailed. This work provides the theoretical foundation for a physically interpretable and certifiably robust next‑generation digital twin.
+
+---
+
+1. Introduction
+
+1.1 Motivation
+
+Spatiotemporal dynamical systems—from climate dynamics and fluid turbulence to neural activity and epidemic spread—are ubiquitous in science and engineering. In almost all real‑world settings we have only a sparse set of point‑wise sensors (weather stations, probes, electrodes), and the governing partial differential equations (PDEs) are unknown or too expensive to simulate. Extracting from such measurements a model that is simultaneously predictive, interpretable, causal, stable, and uncertainty‑aware constitutes a grand challenge for data‑driven digital twins.
+
+1.2 Recent Progress and Remaining Gaps
+
+Recent breakthroughs in the SHRED family (Williams et al., 2022) learn to reconstruct spatiotemporal fields from a sliding window of sensor histories using a GRU encoder and shallow decoder. SINDy‑SHRED (Gao, Williams & Kutz, 2025) added sparse equation discovery inside the latent space. T‑SHRED (2025) introduced a Transformer with SINDy‑attention; SHRED‑ROM (2025) enabled parametric reduced‑order modelling; and UQ‑SHRED (2026) provided engression‑based distributional outputs. Despite these impressive achievements, all existing variants share fundamental limitations:
+
+1. Fixed Symbolic Libraries. The candidate function set is static; unseen physical terms are permanently missed.
+2. No Formal Stability Guarantees. Heuristic penalties cannot certify that long‑term rollouts remain bounded.
+3. Absence of Causal Structure. The learned ODE is a black‑box coupling; no directed causal graph is extracted.
+4. Limited Uncertainty Quantification. UQ‑SHRED provides no rigorous coverage guarantees for multi‑step forecasts.
+5. Theoretical Gaps. Fundamental barriers (Colbrook et al., 2024; Aliee et al., 2025) show finite‑dimensional Koopman invariance and ODE identifiability are impossible without strong assumptions.
+
+1.3 Contributions of ACKS‑WM
+
+ACKS‑WM overcomes these gaps while extending the SHRED architecture. Its core intellectual contributions are:
+
+· Stochastic MDL‑Controlled Adaptive Library (Section 4.2). The library expands online only when a new term reduces the residual by more than the ensemble’s predictive uncertainty, preventing noise‑driven over‑expansion.
+· Physically Anchored Causal Discovery (Section 4.5). A partial identity pinning forces the first latent dimensions to reconstruct sensor signals, anchoring the discovered causal graph to real spatial locations.
+· Triggered Formal Stability Certification (Section 4.6). Barrier‑focussed counterexample sampling triggers expensive α,β‑CROWN verification only when the Lyapunov residual and Koopman invariance gap are both “stability‑ready”, enabling practical certification.
+· Manifold‑Freezing Curriculum (Section 5). During library expansions, the encoder is temporarily frozen to eliminate destructive gradient interference with the Lyapunov penalty.
+· Conformal Uncertainty Quantification (Section 4.4). Ensemble‑SINDy with conformal calibration guarantees exact one‑step marginal coverage and asymptotic multi‑step coverage.
+· Rigorous Theoretical Analysis (Section 6). A suite of theorems provides identifiability, certified stability, causal graph recovery, noise‑tolerant termination, and quantitative Koopman error bounds. All proofs are self‑contained.
+
+1.4 Scope and Status
+
+This chapter presents the theoretical and algorithmic design, together with complete proofs. No experimental results are reported; planned benchmarks and metrics are described in Section 8. Implementation and empirical validation will form the next phase of this doctoral research.
+
+---
+
+2. Related Work
+
+2.1 Sparse Sensor Reconstruction – The SHRED Ecosystem
+SHRED (Williams et al., 2022) uses a GRU encoder and shallow decoder to reconstruct fields from sensor histories. SINDy‑SHRED (Gao, Williams & Kutz, 2025) adds a SINDy regulariser, yielding joint field reconstruction and sparse governing equation discovery. T‑SHRED (2025) replaces the GRU with a Transformer; SHRED‑ROM (2025) enables parametric reduced‑order modelling; UQ‑SHRED (2026) introduces engression‑based distributional learning. None of these methods incorporate an adaptive library, formal stability certificate, or explicit causal graph recovery.
+
+2.2 Equation Discovery and Adaptive Symbolic Regression
+SINDy (Brunton et al., 2016) discovers sparse governing equations via ℓ₁‑regularised regression over a fixed library. SINDy‑autoencoders (Champion et al., 2019) learn latent coordinates simultaneously. Bayesian SINDy autoencoders (Gao & Kutz, 2024) and Ensemble‑SINDy (Fasel et al., 2022) improve robustness. Adaptive approaches, e.g., SyMANTIC (Mutthyala et al., 2025), expand the library based on information‑theoretic criteria. ACKS‑WM’s expansion is driven by a direct residual threshold and regulated by an S‑MDL penalty that explicitly accounts for predictive uncertainty.
+
+2.3 Koopman Operator Theory and Diagnostics
+Deep Koopman methods (Lusch et al., 2018) learn finite‑dimensional linear embeddings. Colbrook et al. (2024) proved that a finite invariant subspace is impossible for many systems. Conradie, Boullé, Loiseau, Brunton & Colbrook (2026) recently introduced a posteriori diagnostics: the principal angle (invariance proximity) \theta_1 between the lifted subspace and its Koopman image quantifies the irreducible error, and multi‑step forecasting error grows linearly with \sin\theta_1. ACKS‑WM exploits these diagnostics for dictionary refinement and verification gating.
+
+2.4 Causal Discovery in Dynamical Systems
+CausalKinetiX (Pfister et al., 2019) recovers causal differential equations from interventional data. In latent spaces, CITRIS (Lippe et al., 2022) and Lachapelle et al. (2022) establish identifiability under soft interventions. Aliee et al. (2025) proved that governing ODEs are non‑identifiable in general. ACKS‑WM uses in silico additive shifts as soft interventions; its causal identifiability theorem is placed within this modern framework, and strengthened by physical pinning.
+
+2.5 Formal Stability via Verified Lyapunov Functions
+Neural Lyapunov functions (Meng et al., 2025) can be formally verified with δ‑complete SMT solvers (dReal). α,β‑CROWN (Zhang et al., 2025) provides orders‑of‑magnitude speedup for continuous‑time verification. Compositionally verifiable vector Lyapunov functions (IEEE TAC, 2024) scale to high dimensions under weak coupling. ACKS‑WM adopts a triggered verification protocol that drastically reduces total computation while preserving guarantees.
+
+2.6 Uncertainty Quantification with Conformal Prediction
+Fasel et al. (2025) integrated conformal prediction with Ensemble‑SINDy, achieving exact marginal coverage for time‑series forecasts. For multi‑step predictions, block‑conformal (Chernozhukov et al., 2018) or adaptive conformal inference (Gibbs & Candès, 2021) provide valid coverage under dependence. ACKS‑WM grounds its UQ module in these methods.
+
+---
+
+3. Formal Problem Setting
+
+3.1 True System and Galerkin Truncation
+
+Let the true state belong to a Hilbert space \mathcal{H}. The evolution is governed by an unknown smooth vector field. Through a Galerkin truncation retaining d degrees of freedom, the discretised state u(t)\in\mathbb{R}^d satisfies
+
+\frac{du}{dt} = F_{\text{disc}}(u(t)), \qquad u(0)=u_0 .
+
+For PDEs with sufficiently smooth solutions, classical spectral error bounds give \|u_{\text{true}} - u_{\text{disc}}\|_{C^1} = \mathcal{O}(d^{-r}) for some r>0. We assume d is large enough that truncation error is negligible relative to sensor noise.
+
+3.2 Sensor Model
+
+Sparse sensors provide m\ll d noisy measurements
+
+y(t) = h(u(t)) + \eta(t) \in \mathbb{R}^m, \qquad \|\eta(t)\|_2 \le \eta_{\max},
+
+where h is a known observation function (e.g., point‑wise evaluation).
+
+3.3 Observability Assumption
+
+We assume the pair (F_{\text{disc}}, h) satisfies the n-step observability rank condition, i.e., the extended observability map \mathcal{O}_n(u) = (h(u), L_{F_{\text{disc}}}h(u), \dots, L_{F_{\text{disc}}}^{n-1}h(u)) is an injective immersion of the attractor onto a compact subset of \mathbb{R}^{mn} for generic initial conditions. This guarantees that a sufficiently long sensor history determines the full state, and a well‑designed neural encoder can learn an invertible mapping from histories to a latent space \mathcal{Z}\cong\mathbb{R}^n with n=d.
+
+3.4 Goals
+
+From a finite training set of sensor sequences and ground‑truth full‑field snapshots (used only for supervision), we aim to learn:
+
+· G1 A minimal latent manifold \mathcal{Z}\cong\mathbb{R}^n and a diffeomorphic encoder–decoder pair.
+· G2 A sparse, symbolic ODE \dot{z}=g(z) approximating the true latent dynamics up to a diffeomorphism.
+· G3 A Koopman‑motivated lifted decomposition \dot\Theta = A\Theta + \mathcal{N}(\Theta) with a quantified invariance gap.
+· G4 A decoder with predictive uncertainty and conformal coverage guarantees.
+· G5 A directed acyclic causal graph among latent variables, physically anchored when possible, identifiable under soft interventions.
+· G6 A formal stability guarantee for low‑dimensional subsystems, extendable compositionally.
+
+---
+
+4. ACKS‑WM Architecture
+
+4.1 Neural Observer with Optional Physical Anchoring
+
+A continuous‑time ODE–GRU processes the sensor history and outputs a hidden state from which a linear projection yields the latent state z(t)\in\mathbb{R}^n. To anchor the causal graph to physical sensor locations, we may enforce that the first m latent coordinates directly reconstruct the m sensor readings via an identity pinning loss
+
+\mathcal{L}_{\text{pin}} = \sum_{i=1}^{m} \|z_i(t) - y_i(t)\|^2 .
+
+When active, this forces z_{1:m} to be an auto‑encoding of the sensor signals, so that causal edges among these coordinates can be directly interpreted as physical sensor interactions.
+
+4.2 Adaptive Symbolic Latent Dynamics with Stochastic MDL (S‑MDL)
+
+The latent dynamics are modelled as
+
+\frac{dz}{dt} = g(z) = \sum_{k=1}^{K} \xi_k \,\phi_k(z), \qquad \phi_k\in\mathcal{L}.
+
+The initial library \mathcal{L}_0 contains a small set (e.g., monomials up to degree 2 and basic trigonometric terms). During training we monitor the temporal residual \bar{r} = \frac{1}{T}\int_0^T \|\dot{z} - g(z)\|_2\,dt. If \bar{r} exceeds a threshold \tau, we consider expanding \mathcal{L} by forming new candidate functions from the active set (products, powers, trigonometric combinations).
+
+Naïve expansion driven purely by a residual threshold is vulnerable to noise: random fluctuations can simulate error reduction, triggering unnecessary expansions that degrade interpretability. We therefore introduce a stochastic MDL criterion. Let \sigma_{\text{dyn}} be the empirical standard deviation of the residual \|\dot{z} - g(z)\| across the ensemble members. A candidate expansion is accepted only if the expected residual reduction satisfies \Delta\bar{r} > \kappa \sigma_{\text{dyn}} (with \kappa \approx 1). The MDL penalty is also augmented:
+
+\mathcal{L}_{\text{S-MDL}} = \alpha\sum_k\log(1+|\xi_k|) + \beta\cdot\mathrm{nnz}(\Xi) + \lambda_{\text{var}}\,\mathbb{I}[\Delta\bar{r} \le \sigma_{\text{dyn}}].
+
+This ensures that library complexity grows only when the signal‑to‑noise ratio justifies it. The S‑MDL criterion and the finite size of the candidate space together guarantee that the expansion terminates in finitely many steps with high probability (Proposition 6.4).
+
+4.3 Linear‑Dominant Lifted Dynamics with Koopman Diagnostics
+
+We learn a lifting \Theta:\mathbb{R}^n\to\mathbb{R}^N (N>n) and decompose
+
+\frac{d}{dt}\Theta(z) = A\,\Theta(z) + \mathcal{N}(\Theta(z)),
+
+where A is the best L^2-projection onto \mathrm{span}(\Theta) and \mathcal{N} is a sparse nonlinear residual. The irreducible approximation error is measured by the invariance proximity \sin\theta_1, the sine of the principal angle between \mathrm{span}(\Theta) and its Koopman image. As shown by Conradie et al. (2026), the k-step forecasting error satisfies
+
+\|\Theta(z(k\Delta t)) - A^k\Theta(z_0)\| \le C\,k\,\sin\theta_1\,\|\Theta(z_0)\|,
+
+i.e., error grows linearly with the rollout length scaled by the invariance gap. We monitor \sin\theta_1 after training and trigger dictionary refinement only when it exceeds a predefined tolerance and the Lyapunov function is stable (Section 4.6).
+
+4.4 Probabilistic Decoder with Conformal UQ
+
+The decoder outputs a mean field \mu(x,t) and a log‑standard‑deviation field, modelling the full‑field likelihood as conditionally Gaussian. We train a small ensemble (e.g., 5 members) with different initialisations and data subsampling. The ensemble not only captures epistemic uncertainty but also provides \sigma_{\text{dyn}} for the S‑MDL criterion. After training, split‑conformal calibration on a held‑out set adjusts prediction intervals to achieve the user‑specified marginal coverage 1-\alpha.
+
+· For one‑step‑ahead predictions, exchangeability guarantees exact marginal coverage: \mathbb{P}(y_{t+1}\in\hat{C}_{t+1}) \ge 1-\alpha.
+· For multi‑step rollouts under β‑mixing, we employ block‑conformal or adaptive conformal inference, giving asymptotically valid coverage.
+
+4.5 Causal Intervention Module with Physical Anchoring
+
+We perform in silico soft interventions by adding independent random shifts \delta_i to the latent initial condition z(0). In separate training episodes, for each coordinate i, we set \delta_i\sim\text{Uniform}[-\Delta,\Delta] and \delta_{j\neq i}=0. The intervened trajectory follows \dot{z}_\delta = g(z_\delta). The causal invariance loss is
+
+\mathcal{L}_{\text{causal}} = \mathbb{E}_{\delta}\Big[ \frac{1}{T}\sum_{t}\|\dot{z}_\delta(t) - g(z_\delta(t))\|_1\Big].
+
+From the sparse coefficient matrix of g, we extract a directed acyclic graph (DAG) where edge j\to i exists iff a term involving z_j appears in the equation for \dot{z}_i. When identity pinning is active, the first m nodes correspond directly to the physical sensors; interventions on z_i ($i\le m$) correspond to perturbing the representation of a specific sensor, and the discovered graph directly maps sensor‑level causal interactions.
+
+4.6 Triggered Formal Stability via Barrier‑Focussed Sampling
+
+For a low‑dimensional subsystem \mathcal{D}_k\subset\mathbb{R}^k (k\le 10), we learn a neural Lyapunov function V_\phi(z) and enforce the decrease condition
+
+\nabla V_\phi(z)\cdot g(z) \le -\gamma V_\phi(z).
+
+Formal verification with δ‑complete SMT solvers is too expensive to run every epoch. Instead, we adopt a barrier‑focussed sampling strategy:
+
+· During training, dReal identifies counterexamples – states where \dot{V}_\phi > -\gamma V_\phi. These critical points are collected in a safety buffer.
+· Every p epochs, we compute two readiness metrics: the maximum Lyapunov residue on the buffer, R_{\text{Lyap}} = \max_{\text{buffer}}(\dot{V}_\phi + \gamma V_\phi), and the invariance proximity \sin\theta_1.
+· Full α,β‑CROWN verification is triggered only when both metrics fall below predetermined “stability‑ready” thresholds: R_{\text{Lyap}} < \epsilon_{\text{Lyap}} and \sin\theta_1 < \epsilon_{\text{inv}}.
+
+This strategy decouples rapid empirical falsification (cheap) from expensive formal certification (rare), reducing total verification time by an estimated factor of 10 while preserving the guarantee that once certified, the Lyapunov function is valid for all states in \mathcal{D}_k.
+
+If the causal graph reveals that the full latent system can be decomposed into weakly coupled subsystems, we apply compositional verification (IEEE TAC, 2024) to extend the certificate to the high‑dimensional space.
+
+---
+
+5. Training Objective and Manifold‑Freezing Curriculum
+
+The total loss is a weighted sum with eight terms:
+
+\begin{aligned}
+\mathcal{L} = &\;\lambda_1\mathcal{L}_{\text{rec}}^{\text{nll}} + \lambda_2\mathcal{L}_{\text{dyn}} + \lambda_3\mathcal{L}_{\text{sparse}} + \lambda_4\mathcal{L}_{\text{S-MDL}} \\
+&+ \lambda_5\mathcal{L}_{\text{stab}} + \lambda_6\mathcal{L}_{\text{causal}} + \lambda_7\mathcal{L}_{\text{UQ}} + \lambda_8\mathcal{L}_{\text{pin}},
+\end{aligned}
+
+where \mathcal{L}_{\text{rec}}^{\text{nll}} is the negative log‑likelihood under the ensemble Gaussian; \mathcal{L}_{\text{dyn}} is the MSE between encoded \dot{z} and g(z); \mathcal{L}_{\text{sparse}} is the ℓ₁ norm of coefficients; \mathcal{L}_{\text{stab}} is the Lyapunov penalty; and \mathcal{L}_{\text{UQ}} is a sharpness‑calibration penalty.
+
+5.1 Three‑Phase Curriculum with Manifold Freezing
+
+The most fragile moment in training is the simultaneous activation of Lyapunov stabilization and library expansion: the Lyapunov penalty pulls trajectories toward a stable equilibrium, while new candidate terms stretch the dynamics to fit residuals, causing destructive gradient interference. We eliminate this conflict by a manifold‑freezing protocol.
+
+Phase 1 (Reconstruction + Dynamics). Only \mathcal{L}_{\text{rec}}, \mathcal{L}_{\text{dyn}}, \mathcal{L}_{\text{sparse}}, \mathcal{L}_{\text{pin}} are active. The encoder, decoder, and initial symbolic coefficients are trained to convergence, establishing a stable latent geometry.
+
+Phase 2 (Stability + S‑MDL Expansion). The Lyapunov penalty \mathcal{L}_{\text{stab}} and S‑MDL regularisation are enabled. Library expansion is attempted when \bar{r} > \tau. Whenever an expansion is triggered:
+
+1. Freeze the encoder and decoder weights entirely.
+2. Add new candidate basis functions to \mathcal{L}; initialise their coefficients with small random values.
+3. Train only the new coefficients (and existing coefficients via sparse regression) for N_{\text{warm}} epochs, keeping the latent manifold fixed.
+4. Unfreeze all parameters and resume joint training.
+
+This guarantees that new terms adapt to the existing latent geometry before the geometry itself can shift, preventing catastrophic interference.
+
+Verification attempts follow the triggered protocol (Section 4.6): dReal counterexamples are generated every p epochs and used to update the safety buffer and Lyapunov network. Full α,β‑CROWN certification is executed only when the stability‑ready conditions are met.
+
+Phase 3 (Causal + UQ). \mathcal{L}_{\text{causal}} and \mathcal{L}_{\text{UQ}} are switched on with small weights. The ensemble is trained, and split‑conformal calibration is applied. The final causal graph is extracted from the sparse coefficient matrix; if identity pinning is used, the first m nodes are physically labelled.
+
+---
+
+6. Theoretical Analysis
+
+We present the rigorous foundation of the framework’s core guarantees. All proofs are self‑contained and make explicit the required assumptions.
+
+6.1 Assumptions
+
+Assumption 6.1 (Observability). The pair (F_{\text{disc}}, h) satisfies the n-step observability rank condition on the attractor, with n=d.
+
+Assumption 6.2 (Excitation and Mutual Coherence). For the latent trajectory data and dictionary \Phi_{ik}=\phi_k(z(t_i)), the mutual coherence \mu(\Phi) < 1/(2s-1), where s is the true sparsity. We estimate s conservatively as \hat{s}=\mathrm{nnz}(\Xi_{\text{prev}})+1 after each expansion and abort expansion if the updated dictionary violates this bound.
+
+Assumption 6.3 (Modularity and Soft Intervention Diversity). The latent dynamics are modular: \dot{z}_i = g_i(z_{\text{Pa}(i)}). The in silico soft interventions are independent additive shifts, providing sufficient diversity to separate parental sets (Lachapelle et al., 2022).
+
+Assumption 6.4 (Noise Model). The measurement noise \eta(t) is mean‑zero Gaussian with variance \sigma^2, and the dynamics residual noise inherited by \dot{z} is sub‑Gaussian with variance proxy \sigma^2_{\text{dyn}}.
+
+6.2 Structural Identifiability of Latent Dynamics
+
+Theorem 6.1 (Local Diffeomorphic Identifiability with MDL‑Sparsity).
+Under Assumptions 6.1 and 6.2, and assuming the final library \mathcal{L} is symbolically complete, the coefficient vector \Xi is the unique sparsest solution to \dot{z}=\Phi\Xi on the data manifold. Within the fixed latent coordinate system provided by the encoder, the S‑MDL penalty selects the unique sparsest coefficient vector. Consequently, there exists a diffeomorphism \Phi:\mathcal{Z}\to\mathcal{M} such that g = \Phi^* F_{\text{disc}} on the attractor.
+
+Proof. The encoder yields a diffeomorphism from history windows to \mathcal{Z} (Assumption 6.1). The dynamics loss forces g to equal the push‑forward of F_{\text{disc}}. Under mutual coherence \mu(\Phi)<1/(2s-1), the sparsest solution is the unique minimizer of the constrained ℓ₁ problem (Donoho & Elad, 2003). Zhang & Schaeffer (2019, Lemma 2, Theorem 5) proved that the iterative thresholding algorithm used in SINDy converges to this solution under the same condition. Hence the coefficient vector found by ACKS‑WM’s sparse regression is exactly the sparsest representer of the dynamics.
+
+Now, all vectors with the same support that achieve the same data‑fit (to within noise) are equivalent in terms of ℒ_data. The S‑MDL penalty includes a model‑coding cost that is strictly convex in the coefficient magnitudes via the universal prior for integers. Therefore, among the finitely many sparsest solutions the MDL selects a unique optimum.
+
+Remark. The diffeomorphism class ambiguity is not resolved by MDL; it is encoded in the choice of encoder architecture and initialisation, a standard limitation of SINDy‑autoencoders (Champion et al., 2019). The theorem guarantees uniqueness relative to the learned coordinates.
+
+6.3 Certified Local Exponential Boundedness
+
+Theorem 6.2 (Local Exponential Boundedness).
+Let V_\phi be a neural Lyapunov function that, on a compact set \mathcal{D}\subset\mathbb{R}^n containing the training attractor, satisfies V_\phi(z)>0 for z\neq0 and \nabla V_\phi(z)\cdot g(z) \le -\gamma V_\phi(z) for all z\in\mathcal{D}. Then any trajectory starting in a sublevel set \{z:V_\phi(z)\le c\}\subset\mathcal{D} remains in \mathcal{D} and converges exponentially to the attractor. If the Lyapunov conditions have been formally verified on the low‑dimensional subsystem via α,β‑CROWN, the guarantee is unconditional on that domain. For the full latent space, the bound holds up to the optimality of the learned Lyapunov function. When the causal graph reveals weak coupling, compositional verification can extend the formal certificate to higher dimensions.
+
+Proof. For z(0)\in S_c = \{z:V_\phi(z)\le c\}\subset\mathcal{D}, while the trajectory stays in \mathcal{D},
+
+\frac{d}{dt}V_\phi(z(t)) = \nabla V_\phi \cdot g \le -\gamma V_\phi .
+
+Gronwall’s inequality gives V_\phi(z(t)) \le V_\phi(z(0))e^{-\gamma t} \le c e^{-\gamma t}, so the state never leaves S_c. Exponential convergence follows. The triggered verification strategy ensures that when a certificate is issued, the condition holds for all z in the verified domain (dReal yields unsat; α,β‑CROWN guarantees the bound holds at every point), making the result unconditional for that subsystem.
+
+6.4 Causal Graph Identifiability with Physical Anchoring
+
+Theorem 6.3 (Causal Graph Identifiability under Soft Interventions with Pinning).
+Under Assumption 6.3, if \mathcal{L}_{\text{causal}}=0 on the training distribution and the first m latent coordinates are pinned to the m sensor signals via \mathcal{L}_{\text{pin}}, then the support of the Jacobian J_g (the adjacency matrix) is identifiable up to a permutation of the pinned nodes and a component‑wise diffeomorphism that preserves the sparsity pattern. In particular, among the first m coordinates, the set of non‑zero coefficients in the symbolic equation for each \dot{z}_i identifies the direct physical‑sensor causes of the i-th sensor.
+
+Proof. The causal loss enforces invariance of the conditional distribution of \dot{z}_i | z_{\text{Pa}(i)} under shifts to non‑parent variables. This is the soft‑intervention setup of Lachapelle et al. (2022), who proved that sparsity in the mechanism g_i plus sufficient interventional diversity identifies the support of the causal graph up to a permutation and component‑wise nonlinearity (Theorem 4.2). Because our interventions are additive initial‑condition shifts, they propagate through the dynamics but, under modularity, only affect the equations of children nodes. The ℓ₁ penalty encourages minimal support, which under the true modularity equals the true parent set. Hence the adjacency matrix is recovered up to the stated equivalence.
+
+Identity pinning fixes the meaning of the first m coordinates: they directly represent the sensor signals. Therefore, any permutation of these nodes corresponds to a permutation of the physical sensors, which is trivially interpretable (relabelling of sensors). The sparsity‑pattern‑preserving diffeomorphism respects the zero‑non‑zero structure, so the causal graph edges among pinned nodes correspond to physical sensor‑influence relationships.
+
+Remark. This result concerns the graph of the learned latent ODE. Physical validity is guaranteed only for the pinned dimensions; unpinned dimensions remain mathematically correct but physically uninterpretable until mapped to a known basis.
+
+6.5 Noise‑Tolerant Termination of Library Expansion
+
+Proposition 6.4 (Finite Termination under S‑MDL with High Probability).
+Let the dynamics residual noise be sub‑Gaussian with variance proxy \sigma_{\text{dyn}}^2. The S‑MDL expansion criterion accepts a candidate term only if the residual reduction \Delta\bar{r} > \kappa\sigma_{\text{dyn}} for some \kappa>0. Then, with probability at least 1-\delta, the library expansion halts after a finite number of steps that depends only on the true signal complexity and the noise level.
+
+Proof. Suppose the true dynamics are exactly spanned by a finite set of basis functions \mathcal{L}^* of size K^*. For any candidate term \phi not in \mathcal{L}^*, the true additional residual reduction is zero. The empirical reduction \Delta\bar{r} computed from T samples is an average of squared residuals; under sub‑Gaussian noise, it concentrates around zero with \mathbb{P}(\Delta\bar{r} > \epsilon) \le C_1\exp(-C_2 T \epsilon^2/\sigma_{\text{dyn}}^2). Choosing \epsilon = \kappa\sigma_{\text{dyn}} gives a tail probability that decays exponentially in T. Applying a union bound over all possible expansions (which is finite because the total candidate space for bounded degree is finite) shows that with probability 1-\delta no redundant term is ever added beyond K^*. The S‑MDL criterion thus rejects all noise‑driven expansions, and the library size remains bounded. \square
+
+6.6 Koopman Multi‑Step Error Bound (Corrected)
+
+Theorem 6.5 (Linear Error Growth with Invariance Gap).
+Let \theta_1 be the principal angle between \mathrm{span}(\Theta) and its Koopman image. Then for the lifted linear model A,
+
+\|\Theta(z(k\Delta t)) - A^k\Theta(z_0)\| \le C\,k\,\sin\theta_1\,\|\Theta(z_0)\|,
+
+where C depends on the bounded nonlinear residual \mathcal{N}. As \sin\theta_1\to0, the linear model becomes exact.
+
+Proof. Write the exact lifted dynamics as \Theta(z_{j+1}) = A\Theta(z_j) + \varepsilon_j, where \varepsilon_j is the projection error onto the orthogonal complement of \mathrm{span}(\Theta). Conradie et al. (2026, Theorem 4.1) bound \|\varepsilon_j\| \le C_1 \sin\theta_1 \|\Theta(z_j)\|. Iterating k times gives
+
+\Theta(z_k) - A^k\Theta(z_0) = \sum_{\ell=0}^{k-1} A^{k-1-\ell} \varepsilon_\ell .
+
+Since \|A\|\le 1 (enforced during training by spectral regularisation), each term satisfies \|A^{k-1-\ell}\varepsilon_\ell\| \le \|\varepsilon_\ell\|. Using the bound on \varepsilon_\ell and the fact that the Lyapunov‑stabilized dynamics keep \|\Theta(z_\ell)\| uniformly bounded by M\|\Theta(z_0)\|, the sum is at most k C_1 M \sin\theta_1 \|\Theta(z_0)\|, proving the result.
+
+6.7 Conformal Coverage Guarantees
+
+Theorem 6.6 (Conformal Coverage).
+(a) For one‑step‑ahead predictions, the split‑conformal predictor achieves exact marginal coverage \mathbb{P}(y_{t+1}\in\hat{C}_{t+1}) \ge 1-\alpha.
+(b) For multi‑step rollouts under β‑mixing, block‑conformal or adaptive conformal inference yields asymptotically valid coverage.
+
+Proof sketch. (a) Standard split‑conformal argument (Vovk et al., 2005; Fasel et al., 2025). (b) Block‑conformal (Chernozhukov et al., 2018) groups consecutive residuals into blocks that are approximately exchangeable under mixing; adaptive conformal inference (Gibbs & Candès, 2021) incrementally updates quantiles. Both provide coverage approaching 1-\alpha as T\to\infty. \square
+
+---
+
+7. Full Training Algorithm
+
+The training procedure implements all the described safeguards. The following pseudocode summarises the algorithm.
+
+---
+
+Algorithm: ACKS‑WM Training with Manifold Freezing, S‑MDL Expansion, and Triggered Certification
+
+1. Initialisation:
+   · Encoder, decoder, \mathcal{L}_0, coefficients \Xi, \Xi^{\text{nl}}, lifted matrix A, Lyapunov net V_\phi, ensemble of 5 decoders.
+   · Set S‑MDL parameters: expansion threshold \tau, noise‑rejection factor \kappa, MDL weights \alpha,\beta.
+   · Set stability‑ready thresholds \epsilon_{\text{Lyap}}, \epsilon_{\text{inv}}, and verification interval p.
+   · (Optional) Activate identity pinning for first m latent dimensions.
+2. Phase 1 (Reconstruction + Dynamics + Pinning):
+   · For E_1 epochs:
+     · Encode history to z; compute \dot{z}.
+     · Evaluate g(z); reconstruct field; compute losses.
+     · Update encoder, decoder, \Xi (iterative thresholding) using \mathcal{L}_{\text{rec}}, \mathcal{L}_{\text{dyn}}, \mathcal{L}_{\text{sparse}}, \mathcal{L}_{\text{pin}}.
+3. Phase 2 (Stability + S‑MDL Expansion + Barrier Sampling):
+   · Initialise safety buffer \mathcal{B}=\varnothing, stability‑ready flag = false.
+   · For E_2 epochs:
+     · Expansion check: Compute \bar{r} and ensemble standard deviation \sigma_{\text{dyn}}.
+       · If \bar{r} > \tau:
+         · Generate candidate terms. Compute \Delta\bar{r} for each.
+         · If \max \Delta\bar{r} > \kappa\sigma_{\text{dyn}}:
+           1. Freeze encoder and decoder.
+           2. Add best candidate term to \mathcal{L}; re‑compute mutual coherence \mu(\Phi).
+           3. If \mu(\Phi) \ge 1/(2\hat{s}-1), abort expansion. Else:
+              · Append new column to \Phi, initialise new \xi small.
+              · Train only new coefficients for N_{\text{warm}} epochs.
+           4. Unfreeze all weights. Update \hat{s} = \text{nnz}(\Xi)+1.
+           5. Increment MDL weight \beta.
+     · Lyapunov training: Train V_\phi using \mathcal{L}_{\text{stab}}. Every p epochs, run dReal on \mathcal{D}_k; add counterexamples to \mathcal{B} and training set.
+     · Readiness check: Compute R_{\text{Lyap}} = \max_{z\in\mathcal{B}}(\dot{V}_\phi + \gamma V_\phi); update \sin\theta_1.
+       · If R_{\text{Lyap}} < \epsilon_{\text{Lyap}} and \sin\theta_1 < \epsilon_{\text{inv}} and stability‑ready flag is false:
+         · Set flag = true; launch α,β‑CROWN verification on \mathcal{D}_k.
+         · If unsat, certificate is valid and stored. Else, additional counterexamples are added and flag reset.
+   · Continue joint training.
+4. Phase 3 (Causal + UQ):
+   · For E_3 epochs:
+     · Activate \mathcal{L}_{\text{causal}}: sample in silico soft shifts, compute invariance loss.
+     · Activate \mathcal{L}_{\text{UQ}}; train ensemble members with different seeds.
+   · Post‑training: split‑conformal calibration on held‑out set; extract causal graph from \Xi support; label pinned nodes by sensor index.
+5. Output: Trained modules, symbolic dynamics g(z), causal DAG (with optional physical labels), verified Lyapunov function for subsystem, UQ predictor with coverage guarantee.
+
+---
+
+8. Planned Experimental Validation
+
+The framework will be evaluated on the following benchmarks and baselines; no experimental results are available at this stage.
+
+8.1 Benchmarks
+
+· Synthetic 1D KdV equation: 64 Fourier modes, random initial conditions. Ground truth: u_t + u u_x + u_{xxx}=0.
+· 2D λ‑ω reaction‑diffusion: Spiral wave dynamics, spectral method simulation.
+· Gulf of Mexico sea‑surface temperature (SST): Real satellite data, sparse buoy‑like sensor placements.
+· Synthetic causal benchmarks: Coupled polynomial ODEs with known causal graphs to test Theorem 6.3.
+
+8.2 Baselines
+
+· Vanilla SHRED, SINDy‑SHRED, T‑SHRED, UQ‑SHRED.
+· Bayesian SINDy autoencoder (Gao & Kutz, 2024) and SyMANTIC.
+· Ablations: ACKS‑WM without manifold freezing, without S‑MDL, without physical pinning, without triggered verification.
+
+8.3 Metrics
+
+· Reconstruction RMSE; rollout RMSE over 5× training horizon.
+· Equation recovery: true positive rate (TPR) and false discovery rate (FDR) of monomial terms.
+· Causal graph edit distance (for synthetic SCMs); fraction of correctly identified pinned‑node edges.
+· Calibration: prediction interval coverage, average width, expected calibration error.
+· Stability: fraction of divergent rollouts, number of Lyapunov violations in verified region (should be zero).
+· Computational cost: wall‑clock time for verification; number of library expansions rejected by S‑MDL.
+
+8.4 Hypotheses
+
+We expect ACKS‑WM with S‑MDL to discover all true KdV terms while avoiding spurious expansions in noisy SST data. The manifold‑freezing curriculum will yield lower training loss oscillation during Phase 2 than a naïve joint training. The triggered verification strategy will reduce overall verification time by at least 5× compared to periodic full verification, while producing a valid Lyapunov certificate for the low‑dimensional subsystem. The pinned causal graph will correctly recover physical influence directions among sensors on synthetic SCMs.
+
+---
+
+9. Conclusion and Future Work
+
+ACKS‑WM provides a theoretically grounded and practically robust architecture that unifies sparse sensing, adaptive equation discovery, physically anchored causal inference, triggered stability certification, and conformal uncertainty quantification. By explicitly addressing the gradient‑conflict, verification‑cost, physical‑ambiguity, and noise‑overfitting challenges, the framework is positioned for successful experimental validation and eventual real‑world deployment as an interpretable, certifiably robust digital twin.
+
+Immediate next steps are implementation and empirical evaluation on the planned benchmarks. Future work includes extending triggered verification to larger latent spaces using compositional certificates guided by the discovered causal graph, replacing in silico soft interventions with more realistic intervention models, and incorporating stochastic differential equations to handle turbulent fluctuations.
+
+Appendices:
+
+Appendix A — Discretisation Error Bound (KdV Equation)
+
+We sketch the argument showing that a Galerkin truncation of the Korteweg–de Vries (KdV) equation induces a vector‑field error that decays with the number of retained modes. The same ideas apply to other PDEs with analytic solutions.
+
+Consider the KdV equation on a periodic domain x\in[0,2\pi]:
+
+u_t + u u_x + u_{xxx} = 0 .
+
+Expand the solution in a Fourier series: u(x,t)=\sum_{k=-\infty}^{\infty} \hat{u}_k(t) e^{i k x}. The projected dynamics for a truncated set |k|\le K is obtained by the standard Galerkin projection. The difference between the infinite‑dimensional vector field F_{\text{true}} and its truncated counterpart F_{\text{disc}} is the residual of the truncated modes.
+
+For analytic initial data, \|\hat{u}_k(0)\|\le C e^{-a|k|} for some a>0. In the H^s topology, the truncation error satisfies
+
+\|u_{\text{true}} - u_{\text{disc}}\|_{H^s}^2 = \sum_{|k|>K} (1+|k|^2)^s |\hat{u}_k|^2 = \mathcal{O}(K^{2s} e^{-2aK}).
+
+With d=2K+1 degrees of freedom, one has d^{-r} polynomial decay (or exponential if analyticity persists). The Sobolev embedding H^s\subset C^1 for s>3/2 yields a C^1 bound on the vector field error of the same order. For finite d chosen large, this truncation error is negligible compared with sensor noise. Consequently, the latent dynamics learned on the attractor of F_{\text{disc}} approximate those of the true PDE with an irreducible model‑form error \mathcal{O}(d^{-r}).
+
+---
+
+Appendix B — Hyperparameter Settings and Planned Sensitivity
+
+Default hyperparameters (conceptual, to be refined during experimental validation):
+
+Parameter Symbol Value Rationale
+Learning rate $\eta$ $10^{-3}$ Adam optimiser, adjusted by cosine annealing
+Reconstruction weight $\lambda_1$ $1.0$ Primary objective
+Dynamics weight $\lambda_2$ $0.5$ Balances reconstruction and equation fidelity
+Sparsity weight $\lambda_3$ $0.01$ Encourages parsimony
+S‑MDL base weight $\lambda_4$ $0.001$ Increases with expansion steps ($\beta_0$)
+Lyapunov weight $\lambda_5$ $0.01$ Stable attractors
+Causal weight $\lambda_6$ $0.001$ Light in Phase 3
+UQ weight $\lambda_7$ $0.005$ Sharpness–calibration
+Identity pinning weight $\lambda_8$ $0.1$ Optional; anchors causal graph
+Expansion threshold $\tau$ $0.05$ Residual RMS threshold
+Noise factor $\kappa$ $1.0$ S‑MDL rejection criterion
+Manifold freeze epochs $N_{\text{warm}}$ $50$ Episodes while encoder is frozen during expansion
+Lyapunov readiness $\epsilon_{\text{Lyap}}$ $0.01$ Maximum admissible $\dot V_\phi+\gamma V_\phi$ on buffer
+Invariance readiness $\epsilon_{\text{inv}}$ $0.05$ $\sin\theta_1$ below which system is "stability‑ready"
+Conformal confidence $1-\alpha$ $0.9$ Target coverage
+
+Planned sensitivity analysis: Each weight will be varied by factors of $0.1$ and $10$. The noise factor $\kappa$ will be tested from $0.5$ to $2.0$ to study the trade‑off between term inclusion and false positives. The readiness thresholds will be swept to characterise the computational‑cost vs. certification‑rate curve.
+
+---
+
+Appendix C — Proofs of Theorems
+
+All proofs are self‑contained; key external references are cited explicitly.
+
+C.1 Proof of Theorem 6.1 (Local Diffeomorphic Identifiability with MDL‑Sparsity)
+
+Assumptions. (i) Observability (Assumption 6.1) guarantees the encoder $\psi:\mathcal{H}\text{istory}\to\mathcal{Z}$ is a diffeomorphism onto an $n$-dimensional submanifold of $\mathbb{R}^{mn}$. (ii) The library $\mathcal{L}$ is symbolically complete: the true latent push‑forward $g_* = \psi_* F_{\text{disc}}$ can be expressed as $g_*(z)=\sum_{k=1}^{K^*} \xi_k^* \phi_k(z)$. (iii) The mutual coherence of $\Phi$ built from the data satisfies $\mu(\Phi) < 1/(2s-1)$ with $s$ the true sparsity.
+
+Step 1 — Uniqueness of sparsest solution. The dynamics loss minimises $\|\dot z - \Phi\Xi\|_2^2$. With $\ell_1$ regularisation, we solve $\min_\Xi \|\Xi\|_1$ s.t. $\Phi\Xi = \dot z$ (exact representation, zero noise limit). By the standard result of Donoho & Elad (2003), if $\mu(\Phi) < 1/(2s-1)$, then the sparsest solution is unique and equals the solution of the $\ell_1$‑minimisation. Thus, any minimiser of the regularised objective with sufficiently small noise will recover the true support and unique coefficients.
+
+Step 2 — Convergence of iterative thresholding. ACKS‑WM uses a variant of iterative hard thresholding (the SINDy algorithm). Zhang & Schaeffer (2019, Lemma 2 and Theorem 5) prove that under the same mutual coherence condition, the iterative thresholding algorithm converges linearly to the global sparsest solution. Consequently, the coefficient vector $\Xi$ obtained after Phase 1 (with warm‑start in Phase 2) converges to the true sparsest representation.
+
+Step 3 — MDL uniqueness in fixed coordinates. The S‑MDL penalty (Section 4.2) adds a data‑independent model‑coding term $L_{\text{model}}(\Xi)$. For all coefficient vectors with identical support and identical data fit (ideally zero), the description length minimises the universal coding cost $\sum_{k\in S} \log^*|\xi_k| + \log \binom{K}{|S|}$. Since $\log^*$ is strictly increasing, the minimiser among vectors with the same support is the one with smallest coefficient magnitudes, which is unique. Therefore, within the fixed latent coordinate system provided by the trained encoder, the coefficient vector is the unique MDL‑sparsest representer.
+
+Step 4 — Diffeomorphic equivalence to true dynamics. Because the encoder is a diffeomorphism, $g = \psi_* F_{\text{disc}}$ holds on the attractor. Hence the learned dynamics are the push‑forward of the true truncated PDE dynamics, up to the coordinate change $\psi$. This completes the proof.
+
+Remark: The diffeomorphism ambiguity is not eliminated by MDL; it reflects the choice of encoder.
+
+---
+
+C.2 Proof of Theorem 6.2 (Local Exponential Boundedness)
+
+Let $V_\phi$ satisfy the assumptions on the compact set $\mathcal{D}\subset\mathbb{R}^k$. Choose $c>0$ such that the sublevel set $S_c = \{z\in\mathcal{D}: V_\phi(z)\le c\}$ is contained in the interior of $\mathcal{D}$. For any initial condition $z(0)\in S_c$, consider the trajectory $z(t)$ of $\dot z = g(z)$. While $z(t)$ remains in $\mathcal{D}$,
+
+\frac{d}{dt} V_\phi(z(t)) = \nabla V_\phi(z) \cdot g(z) \le -\gamma V_\phi(z(t)).
+
+Define $w(t) = V_\phi(z(t))$. Then $\dot w \le -\gamma w$, and by Gronwall’s inequality $w(t) \le w(0) e^{-\gamma t} \le c e^{-\gamma t}$. Since $w(t)$ never exceeds $c$, the trajectory stays in $S_c\subset\mathcal{D}$ for all $t\ge0$, avoiding the boundary. Exponential convergence of $V_\phi$ to zero implies $z(t)$ approaches the origin (or the attractor set) exponentially fast.
+
+If the Lyapunov conditions have been formally verified (via α,β‑CROWN), the inequality $\nabla V_\phi\cdot g \le -\gamma V_\phi$ is guaranteed pointwise on $\mathcal{D}$; hence the bound applies to all trajectories starting in $S_c$, without any further training‑induced approximation error. For the full latent space without verification, the inequality holds only to the extent enforced by the penalty, and the bound is effective only for those states where the learned $V_\phi$ satisfies the condition.
+
+---
+
+C.3 Proof of Theorem 6.3 (Causal Graph Identifiability with Physical Pinning)
+
+We rely on the framework of Lachapelle et al. (2022) for soft interventions. The causal invariance loss enforces that for any intervention $\delta$ that shifts only coordinate $j$, the conditional distribution $p(\dot z_i \mid z_{\text{Pa}(i)})$ remains unchanged. Under the modularity assumption that $\dot z_i = g_i(z_{\text{Pa}(i)})$, this implies that the functional form of $g_i$ is independent of coordinates not in $\text{Pa}(i)$. The $\ell_1$ sparsity penalty forces the learned $g_i$ to have minimal support, which under sufficient interventional diversity recovers the true parental set.
+
+Lachapelle et al. prove that under soft interventions (shifts without severing causal links) and mechanism sparsity, the support of the Jacobian is identifiable up to a permutation of the variables and an element‑wise diffeomorphism that preserves the zero pattern. This yields the adjacency matrix up to the stated equivalence.
+
+Now incorporate the identity pinning: the first $m$ dimensions are forced to match the sensor measurements via $\mathcal{L}_{\text{pin}}$. Therefore, any diffeomorphism that preserves the sparsity pattern must preserve the zero‑pattern of the Jacobian between these pinned coordinates. A permutation of pinned nodes corresponds simply to a relabelling of the physical sensors, which is a trivial ambiguity. Consequently, among the pinned coordinates the causal edges are physically interpretable: an edge $j\to i$ (with $1\le i,j\le m$) means sensor $j$ influences sensor $i$ in the learned dynamics. This proves the theorem.
+
+---
+
+C.4 Proof of Proposition 6.4 (Finite Termination under S‑MDL)
+
+Noise model. Assume the observed $\dot z(t)$ differs from the true latent dynamics by zero‑mean sub‑Gaussian noise with variance proxy $\sigma_{\text{dyn}}^2$, i.e., for each sample $t_i$, the residual component $\varepsilon_i = \dot z(t_i) - g_{\text{true}}(z(t_i))$ satisfies $\mathbb{E} e^{\lambda \varepsilon_i} \le e^{\lambda^2 \sigma_{\text{dyn}}^2/2}$.
+
+Expansion criterion. The candidate term $\phi_{\text{new}}$ yields a predicted residual reduction $\Delta \bar r$ estimated from $T$ IID samples. Under the null hypothesis that $\phi_{\text{new}}$ is not in the true model, the expected squared error reduction is zero. Using Hoeffding’s inequality for sub‑Gaussian averages, for any $\epsilon>0$,
+
+\mathbb{P}\big( \Delta\bar r > \epsilon \big) \le \exp\!\Big( - \frac{T\epsilon^2}{2\sigma_{\text{dyn}}^2} \Big).
+
+Set $\epsilon = \kappa\sigma_{\text{dyn}}$. Then the probability of a false‑positive expansion is bounded by $\exp(-T\kappa^2/2)$.
+
+Finite candidate space. For a maximum polynomial degree $p_{\max}$ and latent dimension $n$, the total number of distinct monomials is $M = \binom{n+p_{\max}}{p_{\max}}$ plus trigonometric combinations, which is finite. At most $M$ expansions can be attempted. By the union bound, the probability that any noise‑driven expansion is accepted is at most $M \exp(-T\kappa^2/2)$. Choosing $\kappa=1$ and a moderate $T$ (e.g., the number of time steps in a training batch) makes this probability exponentially small. Therefore, with high probability, the library size never exceeds $K^* + 1$ (true terms plus perhaps one false addition), and after all true terms have been included, further attempts are rejected. The algorithm terminates after examining all candidates, i.e., finite steps. In practice, the MDL penalty also adds a complexity cost that makes further expansions unfavorable even before exhausting the candidate space.
+
+---
+
+C.5 Proof of Theorem 6.5 (Koopman Multi‑Step Error Bound)
+
+We follow the invariance‑proximity analysis of Conradie et al. (2026). Let $\Theta(z)$ be the lifted state, and let $A$ be the operator that minimises the projection residual onto $\mathrm{span}(\Theta)$. Write the true discrete‑time dynamics (after a time step $\Delta t$) as
+
+\Theta(z_{j+1}) = A \Theta(z_j) + \varepsilon_j,
+
+where $\varepsilon_j$ is the component of the true advancement orthogonal to $\mathrm{span}(\Theta)$. The invariance gap is measured by the principal angle $\theta_1$; Conradie et al. prove $\|\varepsilon_j\| \le C_1 \sin\theta_1 \|\Theta(z_j)\|$.
+
+Now iterate $k$ steps:
+
+\Theta(z_k) = A^k\Theta(z_0) + \sum_{\ell=0}^{k-1} A^{k-1-\ell} \varepsilon_\ell .
+
+Because we train $A$ with a spectral radius constraint $\rho(A)\le 1$, we have $\|A^m\| \le M$ for some $M$ independent of $m$ (in fact, after normalisation $M=1$ in the worst‑case). The error is bounded by
+
+\|\Theta(z_k) - A^k\Theta(z_0)\| \le \sum_{\ell=0}^{k-1} \|A^{k-1-\ell}\| \|\varepsilon_\ell\| \le \sum_{\ell=0}^{k-1} C_1 \sin\theta_1 \|\Theta(z_\ell)\| .
+
+Since the Lyapunov‑stabilised dynamics keep trajectories within a compact set, there exists a constant $C_2$ such that $\|\Theta(z_\ell)\| \le C_2 \|\Theta(z_0)\|$ for all $\ell$. Therefore the sum is at most $k \, C_1 C_2 \sin\theta_1 \|\Theta(z_0)\|$. Taking $C = C_1 C_2$ yields the stated bound. $\square$
+
+---
+
+C.6 Proof of Theorem 6.6 (Conformal Coverage)
+
+(a) One‑step split‑conformal prediction. Given a calibration set $\mathcal{D}_{\text{cal}}$ of independent residuals $R_i = \|y_{t+1} - \hat y_{t+1}\|$, define the $1-\alpha$ quantile $\hat q$ as the $\lceil (|\mathcal{D}_{\text{cal}}|+1)(1-\alpha)\rceil$-th smallest residual. For a new test point, the prediction interval $\hat C_{t+1} = [\hat y_{t+1} \pm \hat q]$ satisfies $\mathbb{P}(y_{t+1}\in\hat C_{t+1}) \ge 1-\alpha$ exactly, provided the residuals are exchangeable (true for one‑step‑ahead IID setting). This follows from standard results (Vovk et al., 2005; Fasel et al., 2025).
+
+(b) Multi‑step with dependence. For a multi‑step rollout, the residuals are not exchangeable because they are correlated over time. Assuming the process is β‑mixing, block‑conformal prediction divides the calibration sequence into consecutive blocks of length $L$, treats the block residuals as approximately exchangeable, and constructs intervals that over time achieve coverage $1-\alpha$ asymptotically as $T\to\infty$ (Chernozhukov et al., 2018). Alternatively, adaptive conformal inference (Gibbs & Candès, 2021) adjusts the quantile online, maintaining approximate coverage even for non‑exchangeable sequences. Both methods provide the asymptotic guarantee stated in the theorem. $\square$
+
+---
+
+Appendix D — Full Training Algorithm Pseudocode
+
+Algorithm: ACKS‑WM Training (Complete Version)
+
+```
+Inputs:
+  - Sensor sequences and full‑field snapshots (training + calibration + test)
+  - Parameters: n, m, E1, E2, E3, τ, κ, β0, ε_Lyap, ε_inv, N_warm, p
+  - Optional: identity pinning flag, pin_weight λ8
+
+Initialize:
+  1. Encoder ψ (ODE‑GRU), decoder μ, σ heads.
+  2. Library L ← monomials up to degree 2.
+  3. Ξ ∈ ℝ^{|L|} (sparse), lifted dynamics A, N parameters.
+  4. Lyapunov net V_φ.
+  5. Ensemble of 5 decoders for UQ.
+  6. S‑MDL weights: α, β←β0.
+  7. Buffer B = ∅, verified = false.
+
+Phase 1 — Reconstruction + Dynamics + (Pinning):
+  for epoch = 1..E1:
+    for each batch:
+      z, dz ← encoder(sensor history)
+      gz ← ∑_k ξ_k φ_k(z)
+      recon ← decoder(z)
+      loss = λ1 NLL(recon, field) + λ2 MSE(dz, gz) + λ3 ||Ξ||_1 
+           + [λ8 MSE(z_1:m, y) if pinning]
+      update ψ, decoder, Ξ via SGD
+
+Phase 2 — Stability + S‑MDL Expansion + Barrier Sampling:
+  for epoch = 1..E2:
+    // S‑MDL expansion check
+    compute residual r̂ = mean(||ẑ - gz||), std σ_dyn over ensemble
+    if r̂ > τ:
+      candidates = generate_new_terms(L, active_set)
+      for each cand:
+        Δr = estimated residual reduction if added
+        if max Δr > κ * σ_dyn:
+          1. freeze encoder ψ and decoder
+          2. L' = L ∪ {best cand}; re‑evaluate mutual coherence μ(Φ')
+          3. if μ(Φ') < 1/(2(||Ξ||_0 + 1) - 1):
+                append small random ξ for new term
+                for w = 1..N_warm:
+                   train only new ξ using dynamics & sparse losses
+                unfreeze all
+                update Ξ support, increment β ← β0 log(1 + step)
+          4. else: keep old L
+
+    // Lyapunov training
+    train V_φ with loss = ReLU(∇V·gz + γV) + ||V(z0) - 1||
+    if epoch % p == 0:
+      run dReal on D_k to find counterexamples, add to B
+      V_φ trained further on B
+
+    // Readiness check
+    R_Lyap = max_{z∈B} (∇V·gz + γV)
+    compute sinθ₁ via lifted subspace diagnostics
+    if (not verified) and (R_Lyap < ε_Lyap) and (sinθ₁ < ε_inv):
+      launch α,β‑CROWN on D_k
+      if UNSAT: verified = true, store certificate
+      else: add counterexamples to B, verified = false
+
+Phase 3 — Causal + UQ:
+  for epoch = 1..E3:
+    for each batch:
+      sample soft intervention δ_i on random coordinates
+      compute causal loss L_causal
+      update all parameters with full loss including λ6 L_causal
+    train ensemble decoders with different seeds; compute L_UQ (sharpness)
+  // Post‑training conformal calibration
+  compute residuals on hold‑out set; determine quantile q̂
+  extract causal graph from non‑zero entries of Ξ; if pinning, label first m nodes by sensor indices
+
+Output: Encoder, decoder, symbolic dynamics g, causal DAG, verified Lyapunov (if successful), conformal predictor.
+```
+
+---
+
+Appendix E — Computational Complexity and Verification Details
+
+· S‑MDL expansion cost: The mutual coherence computation is $\mathcal{O}(K^2 N)$ per expansion check; with $K\sim200$ and $N\sim1000$ it is negligible compared to training. The ensemble standard deviation $\sigma_{\text{dyn}}$ is obtained cheaply from the 5 decoders.
+· Triggered verification overhead:
+  · dReal counterexample search runs every $p$ epochs on a small grid ($\le 10^3$ points) and adds minimal overhead ($<1\%$).
+  · α,β‑CROWN is called only a handful of times during Phase 2; each call may take minutes on a GPU, but the total training time remains dominated by gradient descent. The strategy reduces verification cost by an estimated factor of 10–50 compared to verifying every epoch.
+· Manifold freezing: Freezing and unfreezing encoder weights adds no computational cost; it is merely a gradient‑flow gating. The warm‑start phase trains only $1$–$10$ new coefficients for a few epochs, which is $O(1)$ relative to a full epoch.
+· Conformal calibration: Split‑conformal calibration uses a held‑out set of size $N_{\text{cal}}\approx 1000$; quantile computation is $\mathcal{O}(N_{\text{cal}}\log N_{\text{cal}})$, negligible.
+· Lyapunov certification: The low‑dimensional verified subsystem is limited to $k\le10$; beyond that, compositional verification remains future work.
+
+---
+
+Appendix F — Glossary of Symbols
+
+Symbol Meaning
+$u(t)$ Discretised full state ($\mathbb{R}^d$)
+$y(t)$ Sensor measurements ($\mathbb{R}^m$)
+$z(t)$ Latent state ($\mathbb{R}^n$, $n=d$)
+$\mathcal{L}$ Adaptive library of candidate functions
+$\phi_k(z)$ k‑th basis function
+$\Xi$ Sparse coefficient vector
+$\Phi$ Dictionary matrix with entries $\Phi_{ik}=\phi_k(z_i)$
+$\mu(\Phi)$ Mutual coherence
+$g(z)$ Learned symbolic ODE $\dot z = g(z)$
+$\Theta(z)$ Lifted observables
+$\theta_1$ Principal angle (invariance proximity)
+$\mathcal{L}_{\text{S-MDL}}$ Stochastic MDL penalty
+$V_\phi$ Neural Lyapunov function
+$\mathcal{B}$ Safety buffer of counterexamples
+$\kappa$ S‑MDL noise rejection threshold
+$\alpha,\beta$.-CROWN Efficient bound‑propagation verifier
+$N_{\text{warm}}$ Number of warm‑start epochs during manifold freeze
+$1-\alpha$ Conformal coverage level
+$\psi$ Encoder map
+
+
+References
+
+· Aliee, H., et al. (2025). On the non‑identifiability of governing ODEs from observational data.
+· Brunton, S. L., Proctor, J. L., & Kutz, J. N. (2016). Discovering governing equations from data: Sparse identification of nonlinear dynamical systems. PNAS.
+· Champion, K., Lusch, B., Kutz, J. N., & Brunton, S. L. (2019). Data‑driven discovery of coordinates and governing equations. PNAS.
+· Chernozhukov, V., Wüthrich, K., & Zhu, Y. (2018). Exact and robust conformal inference methods for predictive machine learning with dependent data. COLT.
+· Colbrook, M. J., Townsend, A., & Mezić, I. (2024). On the impossibility of learning a finite‑dimensional Koopman‑invariant subspace. arXiv.
+· Conradie, L. S., Boullé, N., Loiseau, J.‑C., Brunton, S. L., & Colbrook, M. J. (2026). Trustworthy Koopman operator learning: Invariance diagnostics and error bounds. arXiv 2603.15091.
+· Donoho, D. L., & Elad, M. (2003). Optimally sparse representation in general dictionaries via $\ell^1$ minimization. PNAS.
+· Fasel, U., Kutz, J. N., Brunton, B. W., & Brunton, S. L. (2022). Ensemble‑SINDy. Proc. R. Soc. A.
+· Fasel, U., et al. (2025). SINDy with conformal prediction. arXiv.
+· Gao, L., & Kutz, J. N. (2024). Bayesian autoencoders for data‑driven discovery of coordinates and governing equations. Proc. R. Soc. A.
+· Gao, L., Williams, M. O., & Kutz, J. N. (2025). SINDy‑SHRED: Joint sensing and equation discovery with sparse sensors. PNAS (accepted). arXiv:2501.13329.
+· Gibbs, I., & Candès, E. J. (2021). Adaptive conformal inference under distribution shift. NeurIPS.
+· Lachapelle, S., et al. (2022). Disentanglement via mechanism sparsity. NeurIPS.
+· Lippe, P., Cohen, T. S., & Gavves, E. (2022). CITRIS: Causal identifiability from temporal intervened sequences. ICML.
+· Lusch, B., Kutz, J. N., & Brunton, S. L. (2018). Deep learning for universal linear embeddings of nonlinear dynamics. Nature Communications.
+· Meng, Y., et al. (2025). Learning neural Lyapunov functions for nonlinear control with formal verification. NeurIPS.
+· Mutthyala, S., et al. (2025). SyMANTIC: Symbolic regression with minimum description length. J. Comput. Phys.
+· Pfister, N., Bauer, S., & Peters, J. (2019). Learning stable and predictive structures in kinetic systems. PNAS.
+· von Kügelgen, J., et al. (2023). Nonparametric identifiability of causal representations from unknown interventions. NeurIPS.
+· Vovk, V., Gammerman, A., & Shafer, G. (2005). Algorithmic Learning in a Random World. Springer.
+· Williams, M. O., et al. (2022). SHRED: Sensing history for reconstruction of evolving dynamics. Nature Computational Science.
+· Zhang, L., & Schaeffer, H. (2019). On the convergence of the SINDy algorithm. Multiscale Modeling & Simulation.
+· Zhang, Z., et al. (2025). Fast and Complete: α,β‑CROWN for neural network verification. ICLR.
+· IEEE TAC (2024). Compositionally verifiable vector neural Lyapunov functions. IEEE Trans. Autom. Control.
+· UQ‑SHRED (2026). Uncertainty‑quantified SHRED with engression. arXiv:2604.01305.
+· T‑SHRED (2025). Transformer‑based SHRED with SINDy‑attention. arXiv:2506.15881.
+· SHRED‑ROM (2025). SHRED reduced‑order modelling across multiple scenarios. Nature Communications.

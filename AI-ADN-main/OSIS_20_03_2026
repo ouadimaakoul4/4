@@ -1,0 +1,1006 @@
+Formal Architectural Patterns for Operationally Stable Intelligent Systems: A Mathematical Framework for Cognitive Robotics Software
+
+Author: Ouadi Maakoul
+Field: Robotics / Artificial Intelligence / Formal Methods / Software Architecture
+
+---
+
+Abstract
+
+This dissertation establishes a rigorous mathematical framework for the software architecture of autonomous intelligent systems. While contemporary robotics research often focuses on the stability of physical dynamics, the software architectures governing cognitive processes frequently lack formal guarantees of convergence, stability, and safety. This work bridges that gap by defining a class of invariant‑driven design patterns where software structural motifs are isomorphic to mathematical stability conditions. We present the Operationally Stable Software Architecture (OSSA), a formal specification that maps discrete contraction theory, input‑to‑state stability (ISS) small‑gain theorems, symplectic integration, and sum‑of‑squares programming to software components, interfaces, and communication protocols. We prove that, provided each component satisfies a local contraction certificate and the inter‑component coupling complies with a discrete‑time nonlinear small‑gain condition, the software system satisfies exponential convergence guarantees even in the presence of non‑smooth dynamics and stochastic noise. The central contribution is a set of formally verified design patterns that ensure the cognitive software remains contractive and stable under perturbation, supported by theoretical analysis of the structural conditions required for stability. This work provides a blueprint for certifiable autonomous systems where correctness is derived from architectural structure and verified through a combination of compile‑time SOS programming and runtime martingale monitoring.
+
+---
+
+Chapter 1: Introduction
+
+1.1 Motivation
+
+The deployment of autonomous systems in critical infrastructure—self‑driving vehicles, surgical robots, industrial automation—requires guarantees that extend beyond mechanical safety to cognitive stability. A robot may have perfectly tuned PID controllers for its joints, yet its decision‑making software can exhibit logical drift, race conditions, or unbounded error propagation, leading to catastrophic failures. Current software architectures for robotics, typically based on modular frameworks like ROS or actor models, prioritize flexibility, throughput, and ease of development over formal stability properties. Consequently, there is no standard way to ensure that the information processing in a cognitive software system converges to a unique consistent state, that inter‑module communication does not amplify noise, or that the system can monitor its own stability at runtime.
+
+This dissertation posits that software stability is not an emergent property to be discovered through extensive testing, but a design constraint that can be enforced through mathematical isomorphism between architectural patterns and dynamical systems theory. By treating the flow of information through a software system as a dynamical system, we can apply the tools of contraction theory, input‑to‑state stability, and geometric integration to guarantee exponential convergence, robustness to disturbances, and modular compositionality.
+
+1.2 The Architectural Gap
+
+Existing software design patterns (e.g., Publisher‑Subscriber, Model‑View‑Controller, Mediator) describe how data moves between components but lack semantic grounding in stability theory. Specifically, there is no standard pattern that enforces:
+
+1. Contraction: Guaranteeing that the distance between any two trajectories of the system’s information state decreases exponentially over time, preventing divergence.
+2. Bounded Coupling: Ensuring that inter‑module communication respects an ISS small‑gain condition derived from the contraction rates and nonlinear coupling functions of individual modules.
+3. Meta‑Recursive Monitoring: Providing formal mechanisms for the software to verify its own stability conditions at runtime and trigger safe fallbacks when those conditions are violated.
+
+This work addresses these gaps by redefining design patterns as mathematical operators subject to stability proofs. The patterns are not merely advisory; they are provably correct building blocks that, when instantiated with components that satisfy certain interface contracts, yield a globally stable system.
+
+1.3 Contributions
+
+1. A semantic mapping from software states to a metric space of information variables, using a hybrid system formulation that explicitly handles mode switches and ensures Lipschitz continuity.
+2. A discrete‑time nonlinear small‑gain theorem based on input‑to‑state stability (ISS) that directly informs the design of middleware (the Hamiltonian Mediator) for hierarchically coupled systems.
+3. A symplectic mediator that preserves the Hamiltonian structure of the coupled system, and a rigorous reconciliation of symplecticity with contraction through modular composition.
+4. A set of stability‑preserving design patterns—the Symplectic Hamiltonian Mediator, Martingale Lyapunov Observer, LipSwish Contractive Decorator, and Markov State Monitor—each accompanied by a theorem proving that they enforce the necessary contraction conditions under stated assumptions.
+5. A verification methodology that uses sum‑of‑squares (SOS) programming at compile time to construct polynomial contraction metrics valid over entire operating regions, with explicit discussion of scalability via modular decomposition.
+
+1.4 Scope and Methodology
+
+This work is theoretical in nature, focusing on the mathematical foundations and architectural principles for provably stable cognitive software. All results are presented as theorems with full proofs; where known results are used, they are cited precisely and the novel adaptations are highlighted. The framework is defined in a way that can be implemented in existing middleware, but implementation and empirical validation are left for future work.
+
+1.5 Related Work
+
+A detailed survey of related work is deferred to Appendix E, but a brief positioning is necessary. Formal methods for robotics have traditionally focused on model checking of reactive plans (e.g., PRISM, UPPAAL) or contract‑based design (e.g., assume‑guarantee reasoning). Control‑theoretic approaches to software have been explored in the context of control‑theoretic software adaptation (Klein et al., 2009), but these typically treat the software as a plant with a controller, not as a system whose structure itself guarantees stability. The closest antecedents are the works of Lohmiller and Slotine on contraction analysis and the extension to discrete‑time systems by Tsukamoto, Chung & Slotine (2021). The use of ISS small‑gain for modular robotics software has been advocated by Jiang & Wang (2001) and more recently by Bullo et al. (2025). This dissertation extends these ideas by making them architectural—embedding the mathematical constraints into design patterns that can be implemented in standard middleware. The discrete‑time small‑gain theorem used here follows the adaptation of Laila & Nešić (2003).
+
+---
+
+Chapter 2: Mathematical Foundations
+
+This chapter establishes the mathematical machinery upon which the OSSA framework is built. We adopt a modern, unified approach that handles non‑smooth dynamics, categorical states, and stochastic disturbances. To make the framework accessible, we introduce a running example—a simple perception‑planning system—that will be used throughout the chapter to illustrate each concept.
+
+Running Example (Perception‑Planning System):
+Consider a robot with a perception module that outputs a bounding box x \in \mathbb{R}^4 and a planning module that outputs a trajectory y \in \mathbb{R}^T. The perception module is a neural network with weights w; the planning module is a model predictive controller with state z. The information state for perception is s_{\mathcal{P}} = (x, w); for planning, s_{\mathcal{T}} = (y, z). Coupling occurs when perception results influence planning. The discrete modes are “detected” and “not detected”; these are encoded as one‑hot vectors (1,0) and (0,1).
+
+2.1 From Software States to Information States
+
+A software system consists of processes, threads, memory, and communication channels. Its full state is too complex to be modeled as a smooth manifold. However, the information that the software processes—the variables that encode perception, beliefs, plans, and control commands—can be embedded in a metric space that accommodates both continuous and discrete components.
+
+Definition 2.1 (Information State Model)
+Let \mathcal{X} be the set of all possible software states (memory contents, program counters, etc.). We define a semantic mapping
+
+\mathcal{I} : \mathcal{X} \to \mathcal{S}
+
+where \mathcal{S} is a metric space (in the simplest case a Riemannian manifold) such that:
+
+1. \mathcal{I} is Lipschitz continuous with respect to an appropriate metric on \mathcal{X} (e.g., the Hamming distance for memory states and the Euclidean norm for numerical values) and the chosen metric on \mathcal{S}.
+2. The dynamics of the software induce a discrete‑time map \Phi : \mathcal{S} \times \mathcal{D} \to \mathcal{S} that captures the evolution of the information state under disturbances d \in \mathcal{D}.
+
+Construction for a Concrete Model
+We restrict attention to software that can be modeled as a finite set of continuous variables (floating‑point numbers) and a finite‑state automaton representing the control flow (e.g., modes like “idle”, “planning”, “executing”). The state space is then \mathcal{X} = Q \times \mathbb{R}^n where Q is a finite set of modes. The mapping \mathcal{I} can be defined as an embedding into a continuous manifold by assigning each mode q \in Q to a distinct point in \mathbb{R}^m (e.g., using a one‑hot encoding) and then concatenating with the continuous variables. To obtain a smooth structure, we can replace the discrete mode by a barrier function that penalizes transitions, effectively embedding the mode into a continuous coordinate with a potential that forces the system to stay near the discrete points. The resulting \mathcal{S} is then \mathbb{R}^{n+m} with a Riemannian metric that is the Euclidean metric away from the mode points and adjusted to ensure Lipschitz continuity of the embedding.
+
+Example (Perception‑Planning System):
+For the perception module, the discrete modes are “detected” and “not detected”. We encode them as v_{\text{detected}} = (1,0) and v_{\text{not}} = (0,1). The information state for perception is then s_{\mathcal{P}} = (v_q, x, w). The mapping from the actual memory state (including the mode variable) to this tuple is clearly Lipschitz (the mode assignment is a constant mapping, and the continuous variables are read directly).
+
+Proposition 2.1 (Lipschitz Continuity of \mathcal{I})
+If the software’s memory layout and control flow are such that (i) the number of discrete modes is finite, (ii) each mode’s continuous update functions are Lipschitz, and (iii) the mode transitions occur only when a Lipschitz condition on the continuous variables holds (e.g., a guard crossing), then the embedding \mathcal{I} can be constructed to be Lipschitz.
+
+Proof. We construct \mathcal{I} explicitly as a piecewise‑defined map on the product space Q \times \mathbb{R}^n. Let each mode q be assigned a distinct point v_q \in \mathbb{R}^m with pairwise distance at least \delta > 0. Define \mathcal{I}(q, x) = (v_q, x). This map is trivially Lipschitz with respect to the product metric (discrete on Q, Euclidean on \mathbb{R}^n) because the discrete distance is either 0 or at least \delta, and the Euclidean part is Lipschitz. The induced map on the continuous embedding (after smoothing) can be made Lipschitz by using a smooth bump function that transitions between modes; the Lipschitz constant depends on the smoothing radius. For the purpose of stability analysis, we may work directly with the discrete‑continuous product space and treat the dynamics as a hybrid system (see Appendix B). This simpler approach avoids the need for a Finsler manifold and is used in the remainder of the dissertation. ∎
+
+Remark 2.1
+The embedding into a Finsler manifold was originally considered to handle non‑smooth dynamics, but a hybrid system formulation is sufficient for the class of software we consider (finite modes + Lipschitz continuous dynamics). For the sake of simplicity and rigor, we adopt the hybrid system viewpoint for the rest of the dissertation. The Finsler approach remains an interesting extension for future work.
+
+2.2 Discrete Contraction Metrics and Input‑to‑State Stability
+
+We now combine contraction analysis with ISS to handle disturbances and nonlinear coupling. For the discrete‑time case, we use the following definitions.
+
+Definition 2.2 (Contraction with ISS)
+Let \mathcal{S} be a Riemannian manifold with metric g. The map \Phi : \mathcal{S} \times \mathcal{D} \to \mathcal{S} is contracting with ISS rate if there exist \alpha \in (0,1) and a \mathcal{K} function \gamma such that for any two trajectories s_k, s'_k with disturbances d_k, d'_k,
+
+d(s_{k+1}, s'_{k+1}) \le \alpha \, d(s_k, s'_k) + \gamma(\|d_k - d'_k\|),
+
+where d(\cdot,\cdot) is the Riemannian distance induced by g.
+
+Theorem 2.1 (Incremental Exponential Convergence with ISS)
+If \Phi is contracting with ISS rate, then for any two trajectories starting from initial states s_0, s'_0 and subjected to disturbances bounded by \bar{d}, we have
+
+d(s_k, s'_k) \le \alpha^k d(s_0, s'_0) + \frac{\gamma(2\bar{d})}{1-\alpha}.
+
+In particular, all trajectories converge exponentially to a ball whose radius is determined by the disturbance bound.
+
+Proof. See Appendix A.1 for a full induction argument. ∎
+
+Definition 2.3 (ISS Lyapunov Function)
+A function V : \mathcal{S} \to \mathbb{R}_{\ge 0} is an ISS Lyapunov function for \Phi if there exist \underline{\alpha}, \overline{\alpha} \in \mathcal{K}_\infty and \lambda \in (0,1) such that
+
+\underline{\alpha}(\|s\|) \le V(s) \le \overline{\alpha}(\|s\|), \qquad
+V(\Phi(s,d)) \le \lambda V(s) + \sigma(\|d\|),
+
+where \sigma is a \mathcal{K} function. The existence of such a function implies input‑to‑state stability (ISS).
+
+2.3 Nonlinear Small‑Gain Theorem for Hierarchical Systems
+
+Consider two interconnected subsystems:
+
+\begin{aligned}
+z_{0,k+1} &= f_0(z_{0,k}, z_{1,k}, d_{0,k}), \\
+z_{1,k+1} &= f_1(z_{0,k}, z_{1,k}, d_{1,k}),
+\end{aligned}
+
+with ISS Lyapunov functions V_0, V_1 satisfying:
+
+V_0(z_{0,k+1}) \le \max\{\alpha_0 V_0(z_{0,k}), \beta_0(\|z_{1,k}\|), \sigma_0(\|d_{0,k}\|)\},
+
+V_1(z_{1,k+1}) \le \max\{\alpha_1 V_1(z_{1,k}), \beta_1(\|z_{0,k}\|), \sigma_1(\|d_{1,k}\|)\},
+
+with \alpha_0, \alpha_1 \in (0,1) and \beta_0, \beta_1, \sigma_0, \sigma_1 \in \mathcal{K}_\infty.
+
+Theorem 2.2 (Discrete‑Time Nonlinear Small‑Gain)
+If the gain functions satisfy
+
+\beta_0 \circ \beta_1(s) < s \quad \text{for all } s > 0,
+
+then the interconnected system is ISS with respect to the combined disturbance (d_0, d_1). Moreover, a composite ISS Lyapunov function can be constructed as
+
+V(z_0, z_1) = \max\{V_0(z_0), \rho(V_1(z_1))\}
+
+for a suitably chosen \rho \in \mathcal{K}_\infty satisfying \rho(s) > \beta_0(s) and \rho^{-1}(s) > \beta_1(s) for all s>0.
+
+Proof. This is a discrete‑time adaptation of the classic small‑gain theorem (Laila & Nešić, 2003; Jiang & Wang, 2001). The existence of such a \rho is guaranteed by the small‑gain condition; the detailed construction is given in Appendix A.2, which also shows that under the uniform small‑gain margin \sup_{s>0} \frac{\beta_0(\rho^{-1}(s))}{s} < 1, the composite Lyapunov function decays with rate \max\{\alpha_0,\alpha_1\}. ∎
+
+Example (Perception‑Planning System, continued):
+For the perception‑planning system, the small‑gain condition reduces to a linear inequality. Suppose the perception module’s ISS gain is \beta_{\mathcal{P}}(s) = k_{\mathcal{P}} s and the planning module’s gain is \beta_{\mathcal{T}}(s) = k_{\mathcal{T}} s. Then the small‑gain condition \beta_{\mathcal{P}} \circ \beta_{\mathcal{T}}(s) < s becomes k_{\mathcal{P}} k_{\mathcal{T}} s < s, i.e., k_{\mathcal{P}} k_{\mathcal{T}} < 1. This simple product condition will guide the design of the mediator’s coupling strength in later chapters.
+
+2.4 Symplectic Integration for Hamiltonian Systems
+
+The Hamiltonian Mediator implements a discrete‑time Hamiltonian system:
+
+q_{k+1} = q_k + \frac{\partial H}{\partial p}(q_k, p_{k+1}), \qquad
+p_{k+1} = p_k - \frac{\partial H}{\partial q}(q_k, p_{k+1}),
+
+which is a symplectic Euler (or variational integrator) scheme. This scheme preserves the symplectic form \omega = dq \wedge dp, ensuring that the discrete map is symplectic.
+
+Proposition 2.2 (Symplecticity)
+The symplectic Euler update is a symplectic map, i.e., \omega(D\Phi \cdot \xi, D\Phi \cdot \eta) = \omega(\xi, \eta) for all tangent vectors \xi, \eta.
+
+Proof. See Appendix A.3 for the Jacobian calculation and verification of D\Phi^\top J D\Phi = J. ∎
+
+2.5 Sum‑of‑Squares Programming for Contraction Metrics
+
+Instead of solving pointwise LMIs, we search for a polynomial contraction metric M(s) (or a polynomial Lyapunov function V(s) = \delta s^\top M(s) \delta s) that satisfies the contraction LMI over the entire operating region \mathcal{S}. This is cast as a sum‑of‑squares (SOS) feasibility problem:
+
+Theorem 2.3 (SOS Contraction)
+If there exists a polynomial matrix M(s) \succ 0 and a constant \alpha \in (0,1) such that
+
+M(s) - \alpha^2 \left(\frac{\partial \Phi}{\partial s}\right)^\top M(\Phi(s)) \frac{\partial \Phi}{\partial s} \succeq 0 \quad \text{for all } s \in \mathcal{S},
+
+and the left‑hand side is a sum‑of‑squares polynomial matrix, then \Phi is contracting over \mathcal{S} with rate \alpha.
+
+Proof. This is a direct application of the SOS relaxation for polynomial matrix inequalities; see Appendix A.4. ∎
+
+Remark 2.2 (Scalability)
+SOS programming scales polynomially with the number of variables and the degree of the polynomials; it is practical for subsystems with state dimension up to about 20. For larger subsystems, one can use alternative methods such as Lipschitz constant estimation or neural network verification. The OSSA framework relies on modular verification: each component’s contraction metric is computed independently, and the global stability follows from the small‑gain theorem. This decomposition keeps the SOS problems tractable.
+
+2.6 Compositionality of Contraction
+
+Lemma 2.1 (Product of Contractive Systems)
+If (\mathcal{S}_1, \Phi_1) and (\mathcal{S}_2, \Phi_2) are contractive with rates \alpha_1, \alpha_2, then their product (\mathcal{S}_1 \times \mathcal{S}_2, \Phi_1 \times \Phi_2) is contractive with rate \max(\alpha_1, \alpha_2) under a suitably weighted product metric.
+
+Proof. Choose the product metric as the maximum of the individual distances: d((s_1,s_2),(s_1',s_2')) = \max\{d_1(s_1,s_1'), d_2(s_2,s_2')\}. Then the contraction inequality follows directly from the componentwise contraction. ∎
+
+This compositionality result underlies the layered architecture of OSSA.
+
+---
+
+Chapter 3: The Operationally Stable Software Architecture (OSSA)
+
+3.1 Layered Product Space
+
+The OSSA defines the system as a tuple \mathcal{E} = \langle \mathcal{P}, \mathcal{F}, \mathcal{C}, \mathcal{T}, \mathcal{M} \rangle, corresponding to Perception, Fusion, Cognition, Task, and Manipulation layers. Each layer \mathcal{L} is a software component that:
+
+· Maintains a local information state s_{\mathcal{L}} \in \mathcal{S}_{\mathcal{L}}.
+· Exports a method step(input) -> output that computes the next state.
+· Provides a contractivity certificate: a contraction rate \alpha_{\mathcal{L}} < 1 and a polynomial metric M_{\mathcal{L}}(s) (obtained via SOS programming) such that the layer satisfies the discrete contraction LMI over its entire operating domain.
+
+The global information state is the product s = (s_{\mathcal{P}}, s_{\mathcal{F}}, s_{\mathcal{C}}, s_{\mathcal{T}}, s_{\mathcal{M}}) with a block‑diagonal metric.
+
+3.2 The Compliance Regime
+
+To ensure global stability, the architecture enforces a Compliance Regime via a configuration set \Theta = \{\gamma, \alpha, \beta, \dots\} that must satisfy the nonlinear small‑gain condition derived from the ISS gains of each layer. Specifically, let the coupling from layer j to layer i be represented by a gain function \gamma_{ij}(\cdot). The condition is that the composition of these gain functions around any cycle is a contraction (i.e., \gamma_{i_1 i_2} \circ \gamma_{i_2 i_3} \circ \dots \circ \gamma_{i_m i_1}(s) < s for all s > 0). For the hierarchical architecture, this reduces to a simple product condition.
+
+Definition 3.1 (Compliant Configuration)
+A configuration is compliant if the coupling gains satisfy the discrete‑time nonlinear small‑gain condition of Theorem 2.2.
+
+3.3 Interface Specifications
+
+Every component that participates in OSSA must implement the following interface, which exposes the mathematical properties required for verification:
+
+```text
+interface IStableComponent {
+    // Returns the norm of the current state deviation from equilibrium
+    float get_state_norm();
+
+    // Returns the local contraction rate
+    float get_contraction_rate();
+
+    // Returns the polynomial metric matrix (or its Cholesky factor) for the local state space
+    // Representation: a list of coefficient matrices for a polynomial M(s) = Σ M_α s^α
+    PolynomialMatrix get_metric();
+
+    // Returns the ISS gain function γ(·) for the component (as a polynomial or piecewise linear function)
+    Function get_iss_gain();
+
+    // Executes one step, returning the new state
+    State step(Input input, Coupling coupling);
+}
+```
+
+This interface enables the middleware to compute global small‑gain conditions and monitor the system at runtime.
+
+3.4 Global Stability Theorem
+
+Theorem 3.1 (Architectural Stability)
+If every component satisfies the local contraction condition with rate \alpha_i and ISS gain \gamma_i, and the inter‑layer coupling satisfies the nonlinear small‑gain condition, then the global software update map \Phi_{\text{sys}} is ISS with respect to disturbances, and all trajectories converge exponentially to a bounded region.
+
+Proof. The hierarchical small‑gain theorem (Theorem 2.2) applied to the layered interconnection yields the result. The compliance regime ensures the gain condition is met. The detailed composition argument is given in Appendix A.5. ∎
+
+---
+
+Chapter 4: Stability‑Preserving Design Patterns
+
+This chapter defines four design patterns that are re‑engineered to enforce the mathematical constraints of contraction theory, ISS, and symplectic geometry.
+
+4.1 The Symplectic Hamiltonian Mediator
+
+Problem: Direct peer‑to‑peer communication between cognitive modules (nuclei) can lead to unbounded coupling strength and may introduce artificial entropy if the discrete update is not structure‑preserving.
+
+Solution: A centralized mediator that implements a symplectic integrator (variational integrator) for the Hamiltonian dynamics of the coupled system. It centralizes all inter‑module communication and computes coupling forces while preserving the symplectic structure.
+
+Formal Specification:
+Let \mathcal{N} be the set of modules with configuration q_k and momentum p_k. The total Hamiltonian is
+
+H(q,p) = \sum_{k} \left( \frac{1}{2}\|p_k\|^2 + U_k(q_k) \right) + \gamma \sum_{j<k} \Phi_{jk}(q_j, q_k).
+
+The mediator implements one step of the symplectic Euler method:
+
+p_{k+1} = p_k - \Delta t \frac{\partial H}{\partial q}(q_k, p_{k+1}), \qquad
+q_{k+1} = q_k + \Delta t \frac{\partial H}{\partial p}(q_k, p_{k+1}).
+
+The coupling strength \gamma is a configuration parameter that must satisfy the small‑gain condition.
+
+Running Example (Perception‑Planning Mediator):
+For the perception‑planning system, the Hamiltonian is
+
+H(q,p) = \frac12\|p_{\mathcal{P}}\|^2 + \frac12\|p_{\mathcal{T}}\|^2 + U_{\mathcal{P}}(q_{\mathcal{P}}) + U_{\mathcal{T}}(q_{\mathcal{T}}) + \gamma \Phi_{\mathcal{PT}}(q_{\mathcal{P}}, q_{\mathcal{T}}),
+
+where \Phi_{\mathcal{PT}}(q_{\mathcal{P}}, q_{\mathcal{T}}) = \|q_{\mathcal{P}} - A q_{\mathcal{T}}\|^2 with A a projection matrix mapping planning variables to perception space. The bounded gradient condition in Lemma 4.1 gives L_\Phi = 2\|A\|. This explicit form will be used in the SOS verification and in the design condition for \gamma and \Delta t.
+
+Theorem 4.1 (Structure‑Preserving Mediator)
+The symplectic Euler update is a symplectic map. Consequently, the mediator does not introduce artificial dissipation or expansion of the phase‑space volume, preserving the energy‑like properties of the Hamiltonian system.
+
+Proof. See Appendix A.3. ∎
+
+Reconciling Symplecticity and Contraction
+A symplectic map is volume‑preserving, while contraction implies volume contraction. This tension is resolved by noting that the mediator updates only the coupling variables and preserves the symplectic structure of the coupled system, while each module performs its own contraction step (e.g., via a LipSwish‑decorated neural network). The overall composition is not symplectic globally; instead, the mediator ensures that the coupling does not artificially inject energy that could destabilize the modules. The small‑gain condition then guarantees that the cascade of contracting modules and the symplectic coupling is ISS. This separation is formalized in the following lemma and corollary.
+
+Lemma 4.1 (Bounded Energy of the Mediator)
+Assume that the Hamiltonian H is bounded below and that the coupling potentials \Phi_{jk} have bounded gradients: \|\nabla_{q_i}\Phi_{ij}\| \le L_\Phi. Then for any initial state (q_0,p_0), there exists a constant C (depending on the domain and \Delta t) such that for all k,
+
+\|p_{k+1,i} - p_{k,i}\| \le \Delta t \bigl( L_U + \gamma (n-1) L_\Phi \bigr),
+
+where L_U = \max_i \|\nabla U_i\|. Consequently, the mediator update contributes a bounded disturbance to each module’s contraction dynamics.
+
+Proof. From the mediator update, p_{k+1,i} = p_{k,i} - \Delta t \frac{\partial H}{\partial q_i}. The gradient \frac{\partial H}{\partial q_i} = \nabla U_i(q_i) + \gamma \sum_{j\neq i} \nabla_{q_i}\Phi_{ij}(q_i,q_j). Taking norms yields the bound. ∎
+
+Corollary 4.1 (Stability of the Mediator)
+If each module’s local dynamics are contracting with rate \alpha_i and the coupling satisfies the small‑gain condition together with the additional bound \gamma_i \cdot \gamma (n-1) L_\Phi \cdot \Delta t < 1, then the system composed of the symplectic mediator and the module updates is globally ISS.
+
+Proof. The mediator step adds a bounded disturbance of size at most \Delta t (L_U + \gamma (n-1) L_\Phi) to each module. The agents’ contraction steps have ISS gain \gamma_i. The small‑gain condition \gamma_i \cdot (\gamma (n-1) L_\Phi \Delta t) < 1 ensures that the feedback interconnection satisfies the hypotheses of Theorem 2.2. Hence the composite system is ISS. ∎
+
+4.2 The Martingale Lyapunov Observer
+
+Problem: Software systems may diverge due to stochastic disturbances (sensor noise, network jitter) without detection. Deterministic observers may produce false alarms.
+
+Solution: An observer that uses the concept of martingale convergence to monitor the Lyapunov function V(k) = V(s_k). Under the ISS condition, the expected decrement condition \mathbb{E}[V(k+1) \mid \mathcal{F}_k] \le \alpha V(k) + \sigma(\bar{d}) holds. This defines a supermartingale.
+
+Formal Specification:
+The observer computes V(k) and maintains the conditional expectation. Using Doob’s decomposition, it can detect when the actual trajectory deviates from the expected decay with a confidence level derived from Azuma–Hoeffding inequalities.
+
+Theorem 4.2 (Martingale Observer Safety)
+Under the ISS condition and assuming the one‑step noise D_{k+1} = V(k+1) - \mathbb{E}[V(k+1) \mid \mathcal{F}_k] is bounded by \sigma_{\max} almost surely, the process M_k = V(k) - \sum_{i=0}^{k-1} (\alpha V(i) + \sigma(\bar{d})) is a supermartingale. The probability that V(k) exceeds a threshold T within N steps is bounded by
+
+\exp\left(-\frac{(T - \alpha^k V(0) - \frac{\sigma(\bar{d})}{1-\alpha})^2}{2N\sigma_{\max}^2}\right).
+
+Proof. The supermartingale property follows from the ISS inequality. The Azuma–Hoeffding inequality applied to the martingale N_k = \sum_{i=1}^k D_i yields the bound; see Appendix A.7 for the complete derivation. ∎
+
+4.3 The LipSwish Contractive Decorator
+
+Problem: Neural network modules often violate Lipschitz constraints during inference due to weight drift or activation saturation. Standard spectral normalization only controls the linear layers, not the non‑linearities.
+
+Solution: A decorator that wraps the neural network and enforces a global Lipschitz constant \le 1 by using a 1‑Lipschitz activation (e.g., GroupSort, or a Lipschitz‑constrained version of Swish) and spectral normalization on linear layers. The decorator also learns a contraction metric via SOS programming.
+
+Formal Specification:
+Let f(x) be the original neural network. The decorator \mathcal{D} replaces each activation with a 1‑Lipschitz activation (e.g., GroupSort: \text{GroupSort}(x) = \text{sort}(x) in groups, which is 1‑Lipschitz) and normalizes the weight matrices using spectral normalization to ensure each layer’s Lipschitz constant \le 1. The overall network then satisfies \text{Lip}(\mathcal{D}(f)) \le 1. Additionally, the decorator can be trained to be contractive by adding a penalty on the Jacobian.
+
+Theorem 4.3 (Contractivity of the LipSwish Decorator)
+If every layer of the network is 1‑Lipschitz (via spectral normalization and 1‑Lipschitz activations), then the whole network is 1‑Lipschitz. Moreover, if the network is trained with a contraction‑promoting regularizer, it can be made contracting with rate \alpha < 1 over the domain of interest. In particular, if each layer’s Lipschitz constant is bounded by c = \alpha^{1/L}, the L-layer network is contracting with rate \alpha.
+
+Proof. See Appendix A.8 for the composition argument and the scaling to achieve \alpha. ∎
+
+4.4 The Markov State Monitor
+
+Problem: Diagnostic systems must distinguish between transient noise and systemic degradation.
+
+Solution: A state machine whose transitions are governed by a stochastic matrix P with a known spectral gap, ensuring that false alarms decay exponentially. This monitor can be combined with the martingale observer to provide probabilistic guarantees.
+
+Theorem 4.4 (False‑Alarm Bound)
+Under normal operation, the probability that the monitor triggers a false alarm within T steps is bounded by \rho \lambda^{T-1}, where \lambda is the second largest eigenvalue of P and \rho is a constant depending on the initial distribution.
+
+Proof. Let P_{\text{alarm}} be the substochastic matrix obtained by restricting P to the alarm states. The probability of a run of T consecutive false alarms starting from initial distribution \pi_0 is \|\pi_0 P_{\text{alarm}}^{T-1}\|_1. Since the spectral radius of P_{\text{alarm}} equals \lambda, we have \|P_{\text{alarm}}^{T-1}\| \le c \lambda^{T-1} for some constant c. With \|\pi_0\|_1 = 1, the bound \rho \lambda^{T-1} follows. ∎
+
+---
+
+Chapter 5: Cognitive Architecture Specification
+
+5.1 Specialized Agent Orchestration Architecture (SAOA)
+
+The cognitive layer is implemented as four software agents (Vision, Diagnosis, Planning, Manipulation) coordinated by the Symplectic Hamiltonian Mediator. Each agent is a contracting module (e.g., a LipSwish‑decorated neural network) that updates its state based on local observations and the coupling forces received from the mediator.
+
+Algorithm 5.1: Stable Consensus Loop (Symplectic Version)
+
+```
+Procedure ConsensusStep(k):
+    1. For each Agent i in parallel:
+        a. Compute local Hamiltonian H_i(q_i, p_i) from local cost
+        b. Send q_i and p_i to SymplecticMediator
+    2. SymplecticMediator:
+        a. Verify coupling parameter γ satisfies small‑gain condition (offline)
+        b. Compute total Hamiltonian H_total = Σ_i H_i + γ Σ_{j<k} Φ_{ij}
+        c. Perform one symplectic Euler step for all agents jointly
+        d. Broadcast updated q_i and p_i to all agents
+    3. For each Agent i in parallel:
+        a. Apply local contraction update (e.g., neural network step) with the new p_i as momentum
+        b. Send new states to MartingaleLyapunovObserver
+    4. MartingaleLyapunovObserver updates the supermartingale and checks threshold.
+    5. If probability of divergence exceeds ε, trigger safety protocol.
+```
+
+Remark 5.1 (Implicit Solve in Symplectic Euler)
+The symplectic Euler method is semi‑implicit: the momentum update depends on p_{k+1} through the gradient of H with respect to q. For general nonlinear Hamiltonians, solving for p_{k+1} requires solving a fixed‑point equation. In practice, this can be approximated with a few Newton iterations, and the error can be bounded (Hairer et al., 2006). For simplicity, we assume the Hamiltonian is separable (kinetic + potential), in which case the symplectic Euler update becomes explicit and straightforward to compute. The dissertation can be extended to non‑separable cases with a bounded iteration count.
+
+Design Condition for Coupling Strength and Time Step.
+To ensure the small‑gain condition between the mediator and the agents, we require that the product of the gains around the feedback loop be strictly less than one. From Lemma 4.1, the mediator’s contribution to each agent is bounded by \gamma (n-1) L_\Phi \Delta t. Each agent’s contraction step has ISS gain \gamma_i (typically its Lipschitz constant). The small‑gain condition then becomes
+
+\gamma_i \cdot \gamma (n-1) L_\Phi \cdot \Delta t < 1.
+
+In practice, this can be satisfied by choosing \Delta t sufficiently small or by adjusting the coupling strength \gamma. For the perception‑planning example with L_\Phi = 2\|A\| and n=2, the condition reduces to \gamma \Delta t < 1 / (2 \gamma_i \|A\|).
+
+Theorem 5.1 (Convergence of Symplectic Consensus Loop)
+If each agent’s local dynamics are contracting with rate \alpha_i and the coupling satisfies the small‑gain condition with the additional bound \gamma_i \gamma (n-1) L_\Phi \Delta t < 1, then Algorithm 5.1 converges exponentially to a unique equilibrium in the sense of ISS, with the symplectic mediator preserving the Hamiltonian structure.
+
+Proof. The mediator step adds a bounded disturbance of magnitude at most \gamma (n-1) L_\Phi \Delta t to each agent (Lemma 4.1). The agents’ contraction steps have ISS gain \gamma_i. The small‑gain condition \gamma_i \cdot (\gamma (n-1) L_\Phi \Delta t) < 1 ensures that the feedback interconnection satisfies the hypotheses of Theorem 2.2. Hence the composite system is ISS, and Theorem 2.1 gives exponential convergence. The full proof is in Appendix A.9. ∎
+
+5.2 Data Structures for Uncertainty
+
+All state variables q_i are Uncertainty Encapsulations (e.g., Gaussian parameters or capsule poses). The operations on these encapsulations must be Lipschitz and contractive. The decorator pattern can be applied to the fusion operations to ensure the trace of the covariance decreases.
+
+Example: A Kalman filter can be shown to be contractive under certain observability conditions; the LipSwish decorator can be extended to matrix operations to guarantee Lipschitz bounds.
+
+---
+
+Chapter 6: Verification and Compliance
+
+6.1 Compile‑Time Verification via SOS Programming
+
+We replace the pointwise LMI approach with sum‑of‑squares programming to search for polynomial contraction metrics and to verify the small‑gain condition over entire operating regions.
+
+· For each component, we formulate an SOS feasibility problem to find a polynomial metric M(s) and a contraction rate \alpha such that the contraction LMI holds for all s in a bounded domain (e.g., defined by polynomial inequalities).
+· For the interconnection, we compute polynomial ISS gain functions \gamma_{ij} and verify the small‑gain condition using SOS techniques.
+
+Running Example (SOS for Perception Module):
+Suppose the perception module’s update is a linear map x_{k+1} = A x_k with a nonlinear Lipschitz activation; we can approximate it as a polynomial via Taylor expansion. The contraction condition becomes a linear matrix inequality in the coefficients. The SOS solver checks positivity of a polynomial matrix over the domain, which can be done for moderate dimensions.
+
+Theorem 6.1 (SOS‑Based Compliance)
+If the SOS feasibility problems are solvable, then the system is contracting over the entire operating region and satisfies the small‑gain condition.
+
+Proof. The SOS conditions are sufficient for the polynomial inequalities to hold for all s in the semi‑algebraic domain. For the contraction LMI, the SOS condition implies pointwise positive semidefiniteness, hence contraction. For the small‑gain condition, we require s - \beta_0(\beta_1(s)) - \epsilon s^2 to be a sum‑of‑squares (i.e., non‑negative) for some \epsilon > 0. This guarantees \beta_0(\beta_1(s)) < s for all s>0. See Appendix A.10 for details. ∎
+
+6.2 Runtime Compliance Checking
+
+The Compliance Config module loads the computed polynomial metrics and gains at startup. It performs a runtime check that the current state lies within the region for which the SOS certificates are valid. If the state leaves this region, the system can either adapt the metric online (via a simpler local LMI) or trigger a safe shutdown.
+
+Theorem 6.2 (Initialization Safety)
+If the system initializes successfully under the Compliance Config (i.e., the initial state lies within the verified region), and the disturbances are bounded by the value used in the SOS verification, then the system’s trajectories remain within a bounded set and converge exponentially to an equilibrium (up to disturbances).
+
+Proof. See Appendix A.11. ∎
+
+6.3 The Fractal Intelligence Quotient (FIQ) as a Health Invariant
+
+Let V_{\text{global}} be a global ISS Lyapunov function for the entire system (constructed from the component Lyapunov functions via the small‑gain theorem). Then define the FIQ as the normalized value of V_{\text{global}}:
+
+\text{FIQ}(k) = \frac{V_{\text{global}}(k)}{V_{\text{global}}(0)}.
+
+Under the SOS‑verified contraction and ISS, \text{FIQ}(k) \le \alpha_{\max}^k + \frac{\sigma(\bar{d})}{1-\alpha_{\max}} (where \alpha_{\max} is the global contraction rate). The system monitors FIQ and triggers a degradation protocol if it exceeds a threshold computed from the ISS gain.
+
+---
+
+Chapter 7: Self‑Diagnostics and Meta‑Recursion
+
+7.1 Recursive Self‑Modeling with Martingale Monitors
+
+The self‑model \mathcal{M}_{\text{self}} is itself a contracting system with a known ISS gain. The divergence \delta_k = \|s_k - \hat{s}_k\| forms a supermartingale under normal operation. The system can detect anomalies by checking whether \delta_k violates the Azuma–Hoeffding bounds.
+
+Theorem 7.1 (Self‑Model Anomaly Detection)
+If both the main system and the self‑model are ISS and the coupling between them is sufficiently weak such that the combined system satisfies the small‑gain condition with a known gain margin, then the divergence process satisfies the supermartingale property, and the probability of false anomaly detection can be made arbitrarily small by choosing appropriate thresholds.
+
+Proof. See Appendix A.12. ∎
+
+7.2 Structural Plasticity
+
+When a cognitive agent learns a new fault pattern, it modifies its internal representation. Any such modification must be validated against the SOS‑computed contraction metric. The software enforces that learning updates are performed only after a sufficient number of samples are collected, and the updated parameters are checked to ensure the Lipschitz constant remains below 1 and that the new metric is still positive definite over the region. This is done via incremental SOS verification or by using a bounded‑update rule (e.g., a projection onto the set of parameters that satisfy the contraction LMI).
+
+---
+
+Chapter 8: Conclusion
+
+8.1 Summary of Contributions
+
+This dissertation has presented the Operationally Stable Software Architecture (OSSA), a framework for constructing autonomous cognitive systems where software design patterns are isomorphic to mathematical stability proofs. We have:
+
+1. Formalized a semantic mapping from software states to a metric space, using a hybrid system model to handle discrete modes and Lipschitz continuous dynamics.
+2. Developed a discrete‑time nonlinear small‑gain theorem based on input‑to‑state stability (ISS) that directly informs the design of the Symplectic Hamiltonian Mediator.
+3. Introduced a symplectic mediator that preserves the Hamiltonian structure, and reconciled its symplectic nature with the contraction requirements of the overall system.
+4. Proposed a martingale‑based Lyapunov observer that provides probabilistic safety guarantees in the presence of stochastic noise.
+5. Designed a LipSwish contractive decorator that enforces global Lipschitz bounds on neural modules using 1‑Lipschitz activations and spectral normalization.
+6. Established a verification methodology using sum‑of‑squares programming to compute polynomial contraction metrics and ISS gains valid over entire operating regions, with a discussion of scalability via modular decomposition.
+
+8.2 Theoretical Implications
+
+This work establishes that software architecture can be treated as a control problem with rigorous mathematical foundations. By modeling information flow as a dynamical system and enforcing contraction, ISS, and symplecticity through architectural patterns, we eliminate the traditional gap between control theory and software engineering for autonomous systems. The use of SOS programming and martingale theory makes the approach amenable to automated verification and probabilistic guarantees.
+
+8.3 Limitations
+
+The proposed framework has several limitations that should be acknowledged:
+
+· Computational cost: SOS verification scales poorly with state dimension; it is practical only for low‑dimensional subsystems. The modular decomposition alleviates this, but high‑dimensional perception modules still require alternative verification methods.
+· Assumption of polynomial dynamics: The SOS approach requires that the component update maps be polynomial or rational functions. For neural networks, this is rarely the case; we instead rely on Lipschitz bounds and treat them as black‑box functions with a certified Lipschitz constant.
+· Synchronous updates: The architecture assumes a global synchronous clock, which may not hold in distributed real‑time systems. Asynchronous extensions are left for future work.
+· Disturbance bounds: The martingale observer requires a known bound \bar{d} on disturbances. In practice, these bounds may be estimated conservatively.
+· Empirical scope: This work is theoretical; implementation and empirical validation are left for future research.
+
+8.4 Future Directions
+
+Future work should focus on:
+
+· Asynchronous and event‑driven systems: Extending the contraction and ISS frameworks to handle asynchronous updates and non‑uniform sampling.
+· Formal verification in proof assistants: Encoding the SOS certificates and small‑gain conditions in Coq or Isabelle to obtain machine‑checked proofs.
+· Integration with existing middleware: Implementing the OSSA patterns as a library for ROS2, allowing developers to opt into stability guarantees without rewriting their entire codebase.
+· Learning with stability guarantees: Incorporating the contraction constraints directly into neural network training (e.g., via constrained optimization or projection methods) to obtain modules that are guaranteed contractive by construction.
+· Physical hardware experiments: Validating the approach on real robots with actual sensor noise and communication delays.
+
+8.5 Final Remarks
+
+We have shown that it is possible to design a cognitive software architecture that is provably stable by construction, even in the presence of non‑smooth dynamics, stochastic noise, and complex interconnections. By adhering to the mathematical foundations laid out in this dissertation, engineers can build autonomous systems that do not merely hope for stability but enforce it through the very fabric of their architecture. This is a crucial step toward certifiable, trustworthy artificial intelligence.
+
+Appendices
+
+Appendix A: Detailed Proofs of Theorems
+
+This appendix contains the full proofs of all theorems and lemmas stated in the main text. The proofs are self‑contained, relying only on the definitions and assumptions given in the respective chapters.
+
+---
+
+A.1 Proof of Theorem 2.1 (Incremental Exponential Convergence with ISS)
+
+Theorem 2.1. Let \Phi : \mathcal{S} \times \mathcal{D} \to \mathcal{S} be a discrete‑time map and assume there exists a Riemannian metric g with distance d such that for all s,s'\in\mathcal{S} and disturbances d,d'
+
+d\bigl(\Phi(s,d),\,\Phi(s',d')\bigr) \le \alpha \, d(s,s') + \gamma(\|d-d'\|),
+
+with \alpha\in(0,1) and \gamma\in\mathcal{K}. Then for any two trajectories s_k, s'_k with \|d_k-d'_k\|\le \bar{d} we have
+
+d(s_k,s'_k) \le \alpha^k d(s_0,s'_0) + \frac{\gamma(2\bar{d})}{1-\alpha}.
+
+Proof. We proceed by induction on k.
+
+Base case k=0: The inequality d(s_0,s'_0)\le d(s_0,s'_0) is trivially true.
+
+Inductive step: Assume the bound holds at step k. Then
+
+\begin{aligned}
+d(s_{k+1},s'_{k+1}) &\le \alpha \, d(s_k,s'_k) + \gamma(\|d_k-d'_k\|) \\
+&\le \alpha \Bigl(\alpha^k d(s_0,s'_0) + \frac{\gamma(2\bar{d})}{1-\alpha}\Bigr) + \gamma(2\bar{d}) \\
+&= \alpha^{k+1} d(s_0,s'_0) + \alpha\frac{\gamma(2\bar{d})}{1-\alpha} + \gamma(2\bar{d}) \\
+&= \alpha^{k+1} d(s_0,s'_0) + \gamma(2\bar{d})\Bigl(\frac{\alpha}{1-\alpha}+1\Bigr) \\
+&= \alpha^{k+1} d(s_0,s'_0) + \frac{\gamma(2\bar{d})}{1-\alpha}.
+\end{aligned}
+
+Thus the inequality holds for k+1. The bound for all k follows by induction. As k\to\infty, the first term vanishes, so all trajectories converge to a ball of radius \frac{\gamma(2\bar{d})}{1-\alpha}. ∎
+
+---
+
+A.2 Proof of Theorem 2.2 (Discrete‑Time Nonlinear Small‑Gain)
+
+Theorem 2.2. Consider the interconnected system
+
+\begin{aligned}
+z_{0,k+1} &= f_0(z_{0,k}, z_{1,k}, d_{0,k}), \\
+z_{1,k+1} &= f_1(z_{0,k}, z_{1,k}, d_{1,k}),
+\end{aligned}
+
+with ISS Lyapunov functions V_0, V_1 satisfying
+
+\begin{aligned}
+V_0(z_{0,k+1}) &\le \max\{\alpha_0 V_0(z_{0,k}),\;\beta_0(\|z_{1,k}\|),\;\sigma_0(\|d_{0,k}\|)\},\\
+V_1(z_{1,k+1}) &\le \max\{\alpha_1 V_1(z_{1,k}),\;\beta_1(\|z_{0,k}\|),\;\sigma_1(\|d_{1,k}\|)\},
+\end{aligned}
+
+with \alpha_0,\alpha_1\in(0,1) and \beta_0,\beta_1,\sigma_0,\sigma_1\in\mathcal{K}_\infty. If the gain functions satisfy
+
+\beta_0 \circ \beta_1(s) < s \quad \forall s>0,
+
+and there exists \eta>0 such that \beta_0(\beta_1(s)) \le (1-\eta)s for all s>0 (uniform small‑gain margin), then the interconnected system is ISS with respect to (d_0,d_1). Moreover, a composite ISS Lyapunov function can be constructed as
+
+V(z_0,z_1) = \max\{V_0(z_0),\; \rho(V_1(z_1))\}
+
+for a suitable \rho\in\mathcal{K}_\infty satisfying \rho(s) > \beta_0(s) and \rho^{-1}(s) > \beta_1(s) for all s>0.
+
+Proof. The proof follows the classical approach of Laila & Nešić (2003) and Jiang & Wang (2001), adapted to the discrete‑time max‑form ISS Lyapunov functions.
+
+Step 1 – Construction of \rho.
+Because \beta_0\circ\beta_1(s) < s and the margin is uniform, there exists \theta>0 such that \beta_0(\beta_1(s)) \le (1-\theta)s for all s>0. Define \tilde{\beta}_0(s) = \beta_0(s)/ (1-\theta/2). Then \tilde{\beta}_0(\beta_1(s)) < s. By a standard lemma (Lemma 1 in Laila & Nešić, 2003), there exists a \mathcal{K}_\infty function \rho satisfying
+
+\beta_0(s) < \rho(s) \quad \text{and} \quad \beta_1(s) < \rho^{-1}(s) \quad \forall s>0.
+
+Moreover, we can enforce \rho(s) \le (1-\theta/2)^{-1} \beta_0(s) for large s if needed.
+
+Step 2 – Composite Lyapunov function.
+Define V(z_0,z_1) = \max\{V_0(z_0), \rho(V_1(z_1))\}. We show that V satisfies an ISS inequality with a decay factor \alpha = \max\{\alpha_0,\alpha_1\} and a \mathcal{K}_\infty gain function \sigma to be constructed.
+
+Consider the next step and define V_0^+ = V_0(z_{0,k+1}), V_1^+ = V_1(z_{1,k+1}). From the assumptions:
+
+V_0^+ \le \max\{\alpha_0 V_0,\; \beta_0(\|z_1\|),\; \sigma_0(\|d_0\|)\},
+
+V_1^+ \le \max\{\alpha_1 V_1,\; \beta_1(\|z_0\|),\; \sigma_1(\|d_1\|)\}.
+
+Let V = \max\{V_0,\rho(V_1)\}. We examine two cases.
+
+Case 1: V = V_0 and V_0 \ge \rho(V_1).
+Then V_1 \le \rho^{-1}(V_0). Using the bound for V_0^+,
+
+V_0^+ \le \max\{\alpha_0 V_0,\; \beta_0(\|z_1\|),\; \sigma_0(\|d_0\|)\}.
+
+Now \beta_0(\|z_1\|) \le \beta_0(\rho^{-1}(V_0)) because V_1 \le \rho^{-1}(V_0) and \beta_0 is increasing. By construction, \beta_0(\rho^{-1}(V_0)) < \rho(\rho^{-1}(V_0)) = V_0. Because the small‑gain margin is uniform, there exists a constant c < 1 such that \beta_0(\rho^{-1}(V_0)) \le c V_0 for all V_0. Indeed, the uniform margin implies \sup_{s>0} \frac{\beta_0(\rho^{-1}(s))}{s} \le \frac{1-\theta}{1-\theta/2} < 1. Hence
+
+\max\{\alpha_0 V_0,\; \beta_0(\|z_1\|)\} \le \max\{\alpha_0, c\} V_0.
+
+Setting \alpha = \max\{\alpha_0,\alpha_1,c\}, we have \alpha < 1. Therefore
+
+V_0^+ \le \max\{\alpha V,\; \sigma_0(\|d_0\|)\}.
+
+Case 2: V = \rho(V_1) and \rho(V_1) \ge V_0.
+Then V_0 \le \rho(V_1). Using the bound for V_1^+,
+
+\rho(V_1^+) \le \rho\bigl(\max\{\alpha_1 V_1,\; \beta_1(\|z_0\|),\; \sigma_1(\|d_1\|)\}\bigr).
+
+Because \rho is increasing, \beta_1(\|z_0\|) \le \beta_1(V_0) (since \|z_0\| can be bounded by V_0 up to a \mathcal{K}_\infty function, and we absorb constants). With V_0 \le \rho(V_1), we have \beta_1(V_0) \le \beta_1(\rho(V_1)). By construction \beta_1(\rho(s)) < s for all s>0, and again the uniform margin gives \beta_1(\rho(s)) \le c' s for some c'<1. Hence
+
+\beta_1(\|z_0\|) \le c' \rho(V_1).
+
+Thus
+
+\max\{\alpha_1 V_1,\; \beta_1(\|z_0\|)\} \le \max\{\alpha_1,\; c'\} V_1.
+
+Because \rho is increasing, we obtain
+
+\rho(V_1^+) \le \max\{\alpha \rho(V_1),\; \rho(\sigma_1(\|d_1\|))\}
+
+with \alpha = \max\{\alpha_1, c'\}.
+
+Step 3 – Combining the cases.
+In both cases, we have shown that
+
+V(z_{0,k+1},z_{1,k+1}) \le \max\{\alpha V(z_{0,k},z_{1,k}),\; \sigma(\|d_k\|)\},
+
+with \alpha = \max\{\alpha_0,\alpha_1,c,c'\} and a suitable \mathcal{K}_\infty function \sigma that combines \sigma_0 and \rho\circ\sigma_1. This is the standard form of an ISS Lyapunov function for the interconnected system. Therefore the system is ISS. ∎
+
+---
+
+A.3 Proof of Proposition 2.2 (Symplecticity of Symplectic Euler)
+
+Proposition 2.2. The symplectic Euler update
+
+p_{k+1} = p_k - \Delta t \frac{\partial H}{\partial q}(q_k, p_{k+1}), \qquad
+q_{k+1} = q_k + \Delta t \frac{\partial H}{\partial p}(q_k, p_{k+1})
+
+is a symplectic map, i.e., it preserves the canonical symplectic form \omega = dq \wedge dp.
+
+Proof. Let z = (q,p). The map \Phi: z_k \mapsto z_{k+1} is defined implicitly by the equations above. We compute its Jacobian matrix.
+
+Let n be the dimension of q (and p). Define the matrices
+
+A = I + \Delta t \frac{\partial^2 H}{\partial p \partial q}(q_k, p_{k+1}), \quad
+B = \Delta t \frac{\partial^2 H}{\partial p^2}(q_k, p_{k+1}),
+
+C = -\Delta t \frac{\partial^2 H}{\partial q^2}(q_k, p_{k+1}), \quad
+D = I - \Delta t \frac{\partial^2 H}{\partial p \partial q}(q_k, p_{k+1}).
+
+The Jacobian D\Phi (with respect to z_k) is
+
+D\Phi = \begin{pmatrix} A & B \\ C & D \end{pmatrix}.
+
+Now the symplectic matrix is J = \begin{pmatrix} 0 & I \\ -I & 0 \end{pmatrix}. We verify that D\Phi^\top J D\Phi = J.
+
+Compute
+
+D\Phi^\top J D\Phi = \begin{pmatrix} A^\top & C^\top \\ B^\top & D^\top \end{pmatrix}
+\begin{pmatrix} 0 & I \\ -I & 0 \end{pmatrix}
+\begin{pmatrix} A & B \\ C & D \end{pmatrix}.
+
+First, \begin{pmatrix} 0 & I \\ -I & 0 \end{pmatrix} \begin{pmatrix} A & B \\ C & D \end{pmatrix} = \begin{pmatrix} C & D \\ -A & -B \end{pmatrix}. Then
+
+D\Phi^\top J D\Phi = \begin{pmatrix} A^\top & C^\top \\ B^\top & D^\top \end{pmatrix}
+\begin{pmatrix} C & D \\ -A & -B \end{pmatrix}
+= \begin{pmatrix} A^\top C - C^\top A & A^\top D - C^\top B \\ B^\top C - D^\top A & B^\top D - D^\top B \end{pmatrix}.
+
+Because A, B, C, D are derived from the Hessian of H, they satisfy A = I + \Delta t H_{pq}, B = \Delta t H_{pp}, C = -\Delta t H_{qq}, D = I - \Delta t H_{pq} (all evaluated at the same point). Using symmetry of the Hessian (H_{pq}^\top = H_{qp}, etc.), a direct calculation shows:
+
+· A^\top C - C^\top A = 0,
+· A^\top D - C^\top B = I,
+· B^\top C - D^\top A = -I,
+· B^\top D - D^\top B = 0.
+
+Hence D\Phi^\top J D\Phi = \begin{pmatrix} 0 & I \\ -I & 0 \end{pmatrix} = J. Thus \Phi is symplectic. ∎
+
+---
+
+A.4 Proof of Theorem 2.3 (SOS Contraction)
+
+Theorem 2.3. Suppose there exists a polynomial matrix M(s) \succ 0 and a constant \alpha \in (0,1) such that
+
+M(s) - \alpha^2 \left(\frac{\partial \Phi}{\partial s}\right)^\top M(\Phi(s)) \frac{\partial \Phi}{\partial s} \succeq 0 \quad \text{for all } s \in \mathcal{S},
+
+and the left‑hand side is a sum‑of‑squares polynomial matrix. Then \Phi is contracting over \mathcal{S} with rate \alpha.
+
+Proof. The condition M(s) \succ 0 defines a Riemannian metric g_s(v,w) = v^\top M(s) w. For any virtual displacement \delta s_k (a tangent vector at s_k), the contraction LMI guarantees
+
+\delta s_{k+1}^\top M(s_{k+1}) \delta s_{k+1} \le \alpha^2 \delta s_k^\top M(s_k) \delta s_k,
+
+where \delta s_{k+1} = \frac{\partial \Phi}{\partial s}(s_k) \delta s_k. This inequality implies that the length of the displacement is multiplied by at most \alpha in the metric M. Therefore the Riemannian distance satisfies
+
+d(s_{k+1}, s'_{k+1}) \le \alpha \, d(s_k, s'_k)
+
+for all s_k, s'_k in the region where the inequality holds. The sum‑of‑squares condition is a sufficient condition for the polynomial inequality to hold for all s in the semi‑algebraic set \mathcal{S} (defined by polynomial constraints). Hence the contraction inequality holds pointwise. ∎
+
+---
+
+A.5 Proof of Theorem 3.1 (Architectural Stability)
+
+Theorem 3.1. If every component satisfies the local contraction condition with rate \alpha_i and ISS gain \gamma_i, and the inter‑layer coupling satisfies the nonlinear small‑gain condition, then the global software update map \Phi_{\text{sys}} is ISS with respect to disturbances, and all trajectories converge exponentially to a bounded region.
+
+Proof. The layered architecture forms a hierarchical interconnection. For each layer \ell, let V_\ell be an ISS Lyapunov function satisfying
+
+V_\ell(s_{\ell,k+1}) \le \max\{\alpha_\ell V_\ell(s_{\ell,k}),\; \beta_\ell(\|s_{\text{in},\ell,k}\|),\; \sigma_\ell(\|d_{\ell,k}\|)\},
+
+where s_{\text{in},\ell} denotes the inputs from other layers. The gains \beta_\ell are derived from the contraction metrics and the coupling functions. By assumption, the coupling gains satisfy the small‑gain condition around every cycle. In particular, for the hierarchical cascade (perception → fusion → cognition → task → manipulation), the condition reduces to a product condition. Applying Theorem 2.2 recursively from the top layer downward, we construct a composite ISS Lyapunov function V = \max\{V_1, \rho_2(V_2), \dots\} that satisfies
+
+V(s_{k+1}) \le \max\{\alpha_{\max} V(s_k),\; \sigma(\|d_k\|)\},
+
+with \alpha_{\max} = \max_i \alpha_i and \sigma a \mathcal{K}_\infty function. Therefore \Phi_{\text{sys}} is ISS, and Theorem 2.1 yields exponential convergence to a ball. ∎
+
+---
+
+A.6 Proof of Lemma 4.1 and Corollary 4.1 (Bounded Energy and Stability of the Mediator)
+
+Lemma 4.1. Assume the Hamiltonian H(q,p) = \sum_i \bigl(\frac{1}{2}\|p_i\|^2 + U_i(q_i)\bigr) + \gamma \sum_{i<j} \Phi_{ij}(q_i,q_j) satisfies:
+
+· Each U_i has bounded gradient: \|\nabla U_i(q)\| \le L_U for all q in the domain.
+· Each coupling potential \Phi_{ij} has bounded gradient: \|\nabla_{q_i}\Phi_{ij}(q_i,q_j)\| \le L_\Phi for all q_i,q_j in the domain.
+
+Then for the symplectic Euler mediator step, the momentum increment satisfies
+
+\|p_{k+1,i} - p_{k,i}\| \le \Delta t \bigl( L_U + \gamma (n-1) L_\Phi \bigr) \quad \forall i,
+
+where n is the number of modules.
+
+Proof. From the mediator update:
+
+p_{k+1,i} = p_{k,i} - \Delta t \frac{\partial H}{\partial q_i}(q_k, p_{k+1}).
+
+The gradient of H with respect to q_i is
+
+\frac{\partial H}{\partial q_i} = \nabla U_i(q_i) + \gamma \sum_{j\neq i} \nabla_{q_i} \Phi_{ij}(q_i,q_j).
+
+Taking norms and using the bounded gradient assumptions:
+
+\|p_{k+1,i} - p_{k,i}\| \le \Delta t \left( \|\nabla U_i(q_i)\| + \gamma \sum_{j\neq i} \|\nabla_{q_i}\Phi_{ij}(q_i,q_j)\| \right)
+\le \Delta t \bigl( L_U + \gamma (n-1) L_\Phi \bigr).
+
+∎
+
+Corollary 4.1. If each module’s local dynamics are contracting with rate \alpha_i and ISS gain \gamma_i, and the coupling satisfies the small‑gain condition together with the additional bound \gamma_i \cdot \gamma (n-1) L_\Phi \cdot \Delta t < 1, then the system composed of the symplectic mediator and the module updates is globally ISS.
+
+Proof. Consider one full iteration: first the mediator step (which updates the momenta p_i), then each module performs its own contraction update (which may depend on the new momentum as an input). From Lemma 4.1, the mediator step changes each module’s state by at most C\Delta t with C = L_U + \gamma (n-1)L_\Phi. This change can be interpreted as a bounded disturbance w_k with \|w_k\| \le C\Delta t.
+
+Each module’s contraction dynamics satisfy an ISS inequality:
+
+d(s_{i,k+1}, s'_{i,k+1}) \le \alpha_i d(s_{i,k}, s'_{i,k}) + \gamma_i(\|w_k\|).
+
+Thus the overall system can be viewed as a feedback interconnection where the mediator contributes a bounded disturbance to each module. The small‑gain condition \gamma_i \cdot (\gamma (n-1) L_\Phi \Delta t) < 1 ensures that the disturbance magnitude times the gain is less than 1, which is a sufficient condition for Theorem 2.2 when the disturbance is additive. Therefore the composite system is ISS. ∎
+
+---
+
+A.7 Proof of Theorem 4.2 (Martingale Observer Safety)
+
+Theorem 4.2. Under the ISS condition and assuming the one‑step noise D_{k+1} = V(k+1) - \mathbb{E}[V(k+1) \mid \mathcal{F}_k] is bounded by \sigma_{\max} almost surely, the process
+
+M_k = V(k) - \sum_{i=0}^{k-1} (\alpha V(i) + \sigma(\bar{d}))
+
+is a supermartingale. The probability that V(k) exceeds a threshold T within N steps is bounded by
+
+\exp\left(-\frac{(T - \alpha^k V(0) - \frac{\sigma(\bar{d})}{1-\alpha})^2}{2N\sigma_{\max}^2}\right).
+
+Proof. From the ISS Lyapunov condition, we have
+
+\mathbb{E}[V(k+1) \mid \mathcal{F}_k] \le \alpha V(k) + \sigma(\bar{d}).
+
+Define the martingale difference D_{k+1} = V(k+1) - \mathbb{E}[V(k+1) \mid \mathcal{F}_k]. Then
+
+V(k+1) - (\alpha V(k) + \sigma(\bar{d})) = D_{k+1} + \bigl(\mathbb{E}[V(k+1) \mid \mathcal{F}_k] - (\alpha V(k) + \sigma(\bar{d}))\bigr).
+
+Because \mathbb{E}[V(k+1) \mid \mathcal{F}_k] - (\alpha V(k) + \sigma(\bar{d})) \le 0, the right‑hand side is \le D_{k+1}. Hence
+
+M_{k+1} - M_k = V(k+1) - (\alpha V(k) + \sigma(\bar{d})) \le D_{k+1}.
+
+Since D_{k+1} is a martingale difference with zero conditional expectation, M_k is a supermartingale.
+
+Now fix a threshold T. For any N,
+
+\mathbb{P}\left( \max_{1\le k\le N} V(k) \ge T \right)
+= \mathbb{P}\left( \max_{1\le k\le N} M_k \ge T - \alpha^k V(0) - \sum_{i=0}^{k-1} (\alpha V(i) + \sigma(\bar{d})) \right).
+
+A standard bound for supermartingales with bounded differences (Azuma–Hoeffding) applies to the innovation martingale N_k = \sum_{i=1}^k D_i. The differences D_i satisfy |D_i| \le \sigma_{\max} almost surely. Then for any \epsilon > 0,
+
+\mathbb{P}\left( \sum_{i=1}^k D_i \ge \epsilon \right) \le \exp\left(-\frac{\epsilon^2}{2k\sigma_{\max}^2}\right).
+
+Observe that V(k) \le \alpha^k V(0) + \frac{\sigma(\bar{d})}{1-\alpha} + \sum_{i=1}^k D_i. Therefore
+
+\mathbb{P}\left( V(k) \ge T \right) \le \mathbb{P}\left( \sum_{i=1}^k D_i \ge T - \alpha^k V(0) - \frac{\sigma(\bar{d})}{1-\alpha} \right).
+
+The bound follows by setting \epsilon = T - \alpha^k V(0) - \frac{\sigma(\bar{d})}{1-\alpha} and using the union bound over k. ∎
+
+---
+
+A.8 Proof of Theorem 4.3 (Contractivity of the LipSwish Decorator)
+
+Theorem 4.3. If every layer of the network is 1‑Lipschitz (via spectral normalization and 1‑Lipschitz activations), then the whole network is 1‑Lipschitz. Moreover, if the network is trained with a contraction‑promoting regularizer, it can be made contracting with rate \alpha < 1 over the domain of interest. In particular, if each layer’s Lipschitz constant is bounded by c = \alpha^{1/L}, the L-layer network is contracting with rate \alpha.
+
+Proof. Let f_L \circ f_{L-1} \circ \dots \circ f_1 be the decomposition into layers. For each linear layer with weight matrix W, spectral normalization ensures \|W\|_2 \le 1. For each activation \sigma, we enforce \text{Lip}(\sigma) \le 1 (e.g., GroupSort, or a Lipschitz‑constrained Swish). The Lipschitz constant of a composition satisfies
+
+\text{Lip}(f_L \circ \dots \circ f_1) \le \prod_{i=1}^L \text{Lip}(f_i) \le 1.
+
+Hence the whole network is 1‑Lipschitz.
+
+To obtain a contraction (\alpha < 1), we can either:
+
+1. Scale the final output by a constant c < 1 (this multiplies the Lipschitz constant by c), or
+2. During training, add a regularizer that penalizes the spectral radius of the Jacobian: \mathcal{L}_{\text{reg}} = \sum_x \|J(x)\|_F^2. For a 1‑Lipschitz network, the Jacobian’s singular values are \le 1. Minimizing the spectral radius encourages them to be strictly less than 1. After training, we can verify the contraction rate via SOS.
+
+If we enforce a uniform Lipschitz bound c per layer, then the overall Lipschitz constant is c^L. Setting c = \alpha^{1/L} gives overall contraction with rate \alpha. ∎
+
+---
+
+A.9 Proof of Theorem 5.1 (Convergence of Symplectic Consensus Loop)
+
+Theorem 5.1. If each agent’s local dynamics are contracting with rate \alpha_i and ISS gain \gamma_i, and the coupling satisfies the small‑gain condition with the additional bound \gamma_i \cdot \gamma (n-1) L_\Phi \cdot \Delta t < 1, then Algorithm 5.1 converges exponentially to a unique equilibrium in the sense of ISS, with the symplectic mediator preserving the Hamiltonian structure.
+
+Proof. Algorithm 5.1 alternates between two steps:
+
+1. Mediator step (symplectic Euler): Updates the coupled configuration and momenta according to the Hamiltonian dynamics. By Lemma 4.1, the momentum increment is bounded by C\Delta t with C = L_U + \gamma (n-1)L_\Phi. This step does not change the configuration’s distance in the metric induced by the contraction metrics, but it adds a bounded disturbance to each agent’s state.
+2. Local contraction step: Each agent updates its state using a contractive map that depends on the new momentum (treated as input). By the local contraction property, for each agent i,
+
+d(s_{i,k+1}, s'_{i,k+1}) \le \alpha_i d(s_{i,k}, s'_{i,k}) + \gamma_i(\|w_k\|),
+
+where w_k denotes the disturbance from the mediator step, bounded by C\Delta t.
+
+The overall system can be seen as a feedback interconnection: the mediator step provides a bounded disturbance to the agents, and the agents’ outputs (their states) influence the mediator’s next step through the coupling potential \Phi. The gain from agents to mediator is at most \gamma (n-1)L_\Phi \Delta t (from Lemma 4.1). The gain from mediator disturbance to agents is \gamma_i. The small‑gain condition \gamma_i \cdot \gamma (n-1) L_\Phi \Delta t < 1 is exactly the condition required by Theorem 2.2. Applying Theorem 2.2 to this two‑block interconnection shows that the composite system is ISS. Hence there exists a composite Lyapunov function satisfying an ISS inequality, and by Theorem 2.1 the trajectories converge exponentially to a bounded region. ∎
+
+---
+
+A.10 Proof of Theorem 6.1 (SOS‑Based Compliance)
+
+Theorem 6.1. If the SOS feasibility problems are solvable, then the system is contracting over the entire operating region and satisfies the small‑gain condition.
+
+Proof. The contraction LMI is a polynomial matrix inequality. If we find a polynomial M(s) \succ 0 and \alpha \in (0,1) such that the matrix
+
+\Delta(s) = M(s) - \alpha^2 \left(\frac{\partial \Phi}{\partial s}\right)^\top M(\Phi(s)) \frac{\partial \Phi}{\partial s}
+
+is a sum‑of‑squares polynomial matrix, then \Delta(s) \succeq 0 for all real s. Hence the contraction inequality holds pointwise, and the system is contracting with rate \alpha.
+
+For the small‑gain condition, we have polynomial gain functions \beta_0, \beta_1 (possibly rational). The condition \beta_0(\beta_1(s)) < s for all s>0 is equivalent to the existence of \epsilon > 0 such that s - \beta_0(\beta_1(s)) - \epsilon s^2 > 0 for all s>0. If the polynomial s - \beta_0(\beta_1(s)) - \epsilon s^2 (after clearing denominators if necessary) is a sum‑of‑squares (i.e., non‑negative), then it is positive for all s>0. This proves the strict inequality. The SOS feasibility problem for the small‑gain condition thus amounts to finding \epsilon > 0 and an SOS representation of s - \beta_0(\beta_1(s)) - \epsilon s^2. ∎
+
+---
+
+A.11 Proof of Theorem 6.2 (Initialization Safety)
+
+Theorem 6.2. If the system initializes successfully under the Compliance Config (i.e., the initial state lies within the verified region), and the disturbances are bounded by the value used in the SOS verification, then the system’s trajectories remain within a bounded set and converge exponentially to an equilibrium (up to disturbances).
+
+Proof. The SOS certificates guarantee that the system is contracting with rate \alpha on the region \mathcal{S}_0 (the set of states for which the LMI holds). Moreover, the system is ISS with a known gain \sigma. Let \bar{d} be the disturbance bound used in the SOS verification.
+
+Consider the Lyapunov function V(s) = \|s - s^*\|_{M(s)}. For any initial state s_0 \in \mathcal{S}_0, the ISS inequality gives
+
+V(s_k) \le \alpha^k V(s_0) + \frac{\sigma(\bar{d})}{1-\alpha}.
+
+Thus V(s_k) \le R for some R that depends on V(s_0) and \bar{d}. Since the region \mathcal{S}_0 is defined by polynomial inequalities, there exists a bounded set \mathcal{B} \subset \mathcal{S}_0 that contains all points with V(s) \le R (by continuity and compactness of sublevel sets). Therefore the trajectory never leaves \mathcal{S}_0 (provided \mathcal{B} is contained in \mathcal{S}_0 — this must be verified during certificate construction, e.g., by ensuring that the sublevel set of V is within the domain). The exponential convergence follows from the inequality. ∎
+
+---
+
+A.12 Proof of Theorem 7.1 (Self‑Model Anomaly Detection)
+
+Theorem 7.1. If both the main system and the self‑model are ISS and the coupling between them is sufficiently weak such that the combined system satisfies the small‑gain condition with a known gain margin, then the divergence process satisfies the supermartingale property, and the probability of false anomaly detection can be made arbitrarily small by choosing appropriate thresholds.
+
+Proof. Let s_k be the state of the main system and \hat{s}_k the state of the self‑model. Their dynamics are given by
+
+s_{k+1} = \Phi(s_k, \hat{s}_k, d_k), \quad \hat{s}_{k+1} = \hat{\Phi}(\hat{s}_k, s_k, \hat{d}_k).
+
+Both systems are ISS with respect to their own disturbances and the coupling inputs. Define the divergence \delta_k = \|s_k - \hat{s}_k\|. By the ISS property, there exist constants \alpha < 1, \beta, \gamma and a \mathcal{K}_\infty function \sigma such that
+
+\delta_{k+1} \le \alpha \delta_k + \beta(\|\hat{d}_k\|) + \beta(\|d_k\|) + \gamma(\|\text{coupling}\|).
+
+Under the small‑gain condition, the coupling effect is contractive: there exists \lambda < 1 such that the combined effect of the coupling between the systems can be bounded by \lambda \delta_k plus a disturbance term. Specifically, because the coupling from main to model and model to main satisfies the small‑gain condition, the overall inequality takes the form
+
+\mathbb{E}[\delta_{k+1} \mid \mathcal{F}_k] \le \alpha \delta_k + \sigma(\bar{d}),
+
+where \bar{d} bounds all disturbances and \alpha < 1. Hence \delta_k is a supermartingale up to a bounded drift. Applying the same Azuma–Hoeffding argument as in Theorem 4.2 yields exponential bounds on the probability that \delta_k exceeds a threshold. By choosing the threshold sufficiently high (e.g., larger than the steady‑state bound \frac{\sigma(\bar{d})}{1-\alpha}), the false alarm probability can be made arbitrarily small. ∎
+
+---
+
+Appendix B: Hybrid Systems Formulation
+
+This appendix provides a rigorous treatment of the information state as a hybrid system, which is the foundation for the mapping from software states to the metric space \mathcal{S} used throughout the dissertation.
+
+B.1 Hybrid Automaton Model
+
+We model a software component as a hybrid automaton (Liberzon, 2003). A hybrid automaton is a tuple
+
+\mathcal{H} = (Q, X, \text{Init}, f, \text{Guard}, \text{Reset}, \text{Inv}),
+
+where:
+
+· Q is a finite set of discrete modes (control flow states).
+· X \subseteq \mathbb{R}^n is the continuous state space.
+· \text{Init} \subseteq Q \times X is the set of initial states.
+· For each mode q \in Q, f_q: X \to \mathbb{R}^n is a Lipschitz continuous vector field describing the continuous evolution (discrete‑time: x_{k+1} = f_q(x_k)).
+· \text{Guard}: Q \times Q \to 2^{X} assigns a guard set for each transition from q to q'.
+· \text{Reset}: Q \times Q \times X \to X assigns a reset map for each transition.
+· \text{Inv}: Q \to 2^{X} is an invariant set that must hold while in mode q.
+
+In the discrete‑time setting, the system executes as follows: at each step, given current mode q and continuous state x, the system either:
+
+1. Stays in mode q and updates x to f_q(x), provided the new state satisfies \text{Inv}(q); or
+2. Transitions to a mode q' if x \in \text{Guard}(q,q'), and then updates x to \text{Reset}(q,q',x) (which may be the identity).
+
+B.2 Information State Mapping
+
+For a hybrid automaton \mathcal{H}, we define the information state as
+
+\mathcal{I}(q,x) = (v_q, x) \in \mathbb{R}^{m+n},
+
+where v_q is a fixed vector in \mathbb{R}^m assigned to mode q. We require the vectors v_q to be separated: there exists \delta > 0 such that \|v_q - v_{q'}\| \ge \delta for all distinct q,q'. The continuous part x is unchanged.
+
+The dynamics on the information state are induced by the hybrid automaton. When the system stays in a mode, the continuous update is x_{k+1} = f_q(x_k) and v_q remains constant. When a transition occurs, the mode changes to q' and the continuous state is reset (possibly). The mapping \mathcal{I} is Lipschitz on the product metric because the discrete part has a fixed separation and the continuous part is Lipschitz.
+
+B.3 Dwell‑Time Assumption
+
+To ensure stability across mode switches, we impose a dwell‑time condition:
+
+Assumption B.1 (Dwell‑Time). There exists \tau_d > 0 such that any mode of the system is active for at least \tau_d time steps before a transition occurs. In discrete time, this means the number of consecutive steps in any mode is at least \tau_d.
+
+This assumption prevents Zeno behavior and allows us to treat each mode as an independent system with a common Lyapunov function or to use multiple Lyapunov functions with a sufficiently slow switching rate.
+
+B.4 ISS for Hybrid Systems
+
+Under the dwell‑time assumption, a hybrid system is ISS if each mode’s continuous dynamics is ISS (with a common Lyapunov function or with matching gains) and the switches do not cause instability. A sufficient condition is the existence of a common ISS Lyapunov function V that satisfies
+
+V(f_q(x)) \le \lambda V(x) + \sigma(\|d\|)
+
+for all modes q, and such that V does not increase at resets. If such a function exists, the hybrid system is ISS.
+
+In the OSSA framework, we assume that each component is implemented in a way that guarantees a common ISS Lyapunov function (e.g., by using the same contraction metric across modes or by verifying that the resets are contractive). This is consistent with the LipSwish decorator and the SOS verification applied to each mode individually, and then combined via the small‑gain theorem. In the running example, mode transitions (e.g., from “detected” to “not detected”) correspond to changes in the one‑hot encoding; the reset map is the identity on the continuous state (the information variables are preserved across transitions), so V is unchanged at resets, satisfying the non‑increase condition trivially.
+
+---
+
+Appendix C: Interface Specifications and Code Examples
+
+C.1 Representation of Polynomial Matrices
+
+The PolynomialMatrix type is represented as a list of coefficient matrices for each monomial. For a polynomial matrix M(s) = \sum_{\alpha} M_\alpha s^\alpha, where \alpha is a multi‑index, the representation is:
+
+```
+PolynomialMatrix = List[Tuple[Tuple[int,...], Matrix]]
+```
+
+For example, a 2‑dimensional polynomial matrix M(s) = \begin{pmatrix} 1 & s_1 \\ s_1 & s_2^2 \end{pmatrix} would be stored as:
+
+```
+[
+    ((0,0), [[1,0],[0,0]]),
+    ((1,0), [[0,1],[1,0]]),
+    ((0,2), [[0,0],[0,1]])
+]
+```
+
+C.2 ROS2 Integration Sketch
+
+The following Python‑like pseudocode shows how a ROS2 node would implement the IStableComponent interface:
+
+```python
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Float32
+from geometry_msgs.msg import Pose
+
+class StableComponent(Node, IStableComponent):
+    def __init__(self, name, contraction_rate, metric_coeffs, iss_gain):
+        super().__init__(name)
+        self.contraction_rate = contraction_rate
+        self.metric = PolynomialMatrix(metric_coeffs)
+        self.iss_gain = iss_gain
+        self.state = None
+        self.publisher = self.create_publisher(Pose, 'state', 10)
+        self.subscription = self.create_subscription(
+            Coupling, 'coupling', self.coupling_callback, 10)
+
+    def get_state_norm(self):
+        return np.linalg.norm(self.state)
+
+    def get_contraction_rate(self):
+        return self.contraction_rate
+
+    def get_metric(self):
+        return self.metric
+
+    def get_iss_gain(self):
+        return self.iss_gain
+
+    def step(self, input_data, coupling):
+        # Perform the local contraction update
+        new_state = self.local_contraction_update(self.state, input_data, coupling)
+        self.state = new_state
+        self.publisher.publish(self.state)
+        return self.state
+
+    def coupling_callback(self, msg):
+        # Store coupling for next step
+        self.coupling = msg
+```
+
+C.3 Symplectic Mediator Implementation
+
+```python
+class SymplecticHamiltonianMediator:
+    def __init__(self, components, coupling_gamma, dt):
+        self.components = components
+        self.gamma = coupling_gamma
+        self.dt = dt
+        self.q = {comp.id: comp.state.q for comp in components}
+        self.p = {comp.id: comp.state.p for comp in components}
+
+    def step(self):
+        # Symplectic Euler: update p first using current q, then q using new p
+        for i in self.components:
+            dH_dq_i = self.compute_gradient_q(i, self.q, self.p)
+            self.p[i] = self.p[i] - self.dt * dH_dq_i
+
+        for i in self.components:
+            dH_dp_i = self.compute_gradient_p(i, self.p)
+            self.q[i] = self.q[i] + self.dt * dH_dp_i
+
+        # Broadcast updated q, p to components
+        for comp in self.components:
+            comp.receive_coupling(self.q[comp.id], self.p[comp.id])
+
+    def compute_gradient_q(self, i, q, p):
+        # ∂H/∂q_i = ∂U_i/∂q_i + γ Σ_{j≠i} ∂Φ_ij/∂q_i
+        grad = self.components[i].local_potential_gradient(q[i])
+        for j in self.components:
+            if j != i:
+                grad += self.gamma * self.coupling_potential_gradient(q[i], q[j], i)
+        return grad
+
+    def compute_gradient_p(self, i, p):
+        # ∂H/∂p_i = p_i (kinetic energy T(p) = (1/2)‖p‖²)
+        return p[i]
+```
+
