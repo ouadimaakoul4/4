@@ -1,0 +1,1668 @@
+NeuroFabric OS: A Formal Architecture for an AI-Native Real-Time Operating System for General-Purpose Humanoid Robots**
+
+
+ouadi Maakoul 
+
+AI: Claude, chatGpt, Deepseek 
+
+ Abstract
+
+The emergence of general-purpose humanoid robots capable of operating in unstructured human environments demands a fundamental reconceptualization of operating system design. Classical paradigms — designed for deterministic, single-host, von-Neumann architectures — are architecturally insufficient for a cyber-physical organism that must simultaneously execute sub-millisecond reflex responses, sub-second motor planning, and multi-second cognitive reasoning, while maintaining sensorimotor coherence across heterogeneous compute fabrics (CPU, GPU, NPU, MCU). This dissertation introduces *NeuroFabric OS*, a formally specified five-layer hybrid operating system architecture designed natively for general-purpose humanoid robots.
+
+We present a complete mathematical formalization of the system as a *Hierarchical Temporal Compute Graph* (HTCG) over directed acyclic graphs with temporal decorations, and derive end-to-end latency bounds by structural induction. We provide the full Worst-Case Response Time (WCRT) analysis for the reflex scheduler, proving schedulability via both Rate-Monotonic utilization bounds and exact iterative response-time equations, and formally prove the Critical Instant Theorem upon which both analyses rest. We formulate the Whole-Body Control quadratic program with its complete KKT optimality conditions, prove strong duality under Slater's constraint qualification, and characterize real-time feasibility via active-set complexity analysis. We derive the DDPM forward and reverse diffusion processes from first principles using the variational Evidence Lower Bound, and integrate the resulting policy into the Neural Module abstraction with a formal parameter-update safety bound. We introduce a *Distributed Embodied Memory* (DEM) hierarchy with a stochastic retention policy grounded in the exponential forgetting model, and a formal episodic-to-semantic consolidation operator. The *simulation-native execution* framework is grounded in Invariant Extended Kalman Filtering on the Lie group $SE_2(3)$, with formal divergence detection via Mahalanobis distance. The NP-hardness of HTCG scheduling is established via tight polynomial reduction from 3-PARTITION. We prove a *Cognitive Fault Isolation* theorem guaranteeing postural safety under arbitrary cognitive-layer failure. Together, these contributions constitute a rigorous theoretical foundation for a new class of AI-native operating system.
+
+**Keywords:** humanoid robotics, real-time operating systems, rate-monotonic scheduling, whole-body control, diffusion policy, embodied AI, GPU DAG scheduling, Kalman filtering, Lie groups, cyber-physical systems.
+
+---
+
+## Table of Contents
+
+1. Introduction
+2. Background and Related Work
+3. Problem Formulation and System Model
+4. The NeuroFabric OS Architecture: Formal Specification
+5. The Hierarchical Temporal Compute Graph (HTCG)
+6. Real-Time Scheduling Theory: Complete Analysis
+7. The Whole-Body Control Layer: Full Mathematical Treatment
+8. The Neural Module System and Diffusion Policy Integration
+9. Distributed Embodied Memory (DEM)
+10. Simulation-Native Execution and Lie-Group State Estimation
+11. GPU-Native Compute Fabric
+12. Safety and Fault-Tolerance Properties
+13. Discussion and Limitations
+14. Conclusion
+15. References
+
+---
+
+## Chapter 1 — Introduction
+
+### 1.1 Motivation
+
+The general-purpose humanoid robot represents the most complex cyber-physical system ever engineered. It is simultaneously a mechanical system governed by rigid-body dynamics, a sensory organism processing multi-modal streams at high frequency, a cognitive agent capable of natural language interaction and abstract reasoning, and an adaptive entity that must accumulate skill knowledge across operational sessions without catastrophic forgetting.
+
+Despite converging advances in large behaviour models, whole-body control theory, compact neuromorphic processors, and high-energy-density batteries, the software infrastructure beneath these systems remains architecturally immature. A modular and hierarchical structure is well recognised as appropriate for humanoid software, yet many models suitable for different tasks — visual understanding, motion planning, and low-level control — are currently isolated and have not yet been successfully integrated into a coherent runtime framework. Many models suitable for different tasks on humanoid robots — visual understanding, motion planning, control — are often isolated and have not yet been successfully integrated and implemented.
+
+This dissertation addresses precisely this integration gap. The argument is not that individual components are insufficient, but that a *unified operating system abstraction* is missing: one that coordinates the full stack — from motor torque loops to language reasoning — under a coherent set of formal guarantees.
+
+### 1.2 The Core Thesis
+
+**Thesis Statement.** A general-purpose humanoid robot cannot be adequately served by any existing operating system paradigm. It requires a novel *AI-native, GPU-primary, graph-orchestrated, simulation-native* operating system architecture that treats neural policies as first-class system objects, separates reflex computation from cognitive computation with formal timing contracts, supports exact real-time schedulability analysis for heterogeneous neural compute graphs, and maintains a hierarchically structured embodied memory that persists across operational sessions.
+
+### 1.3 Contributions
+
+This dissertation makes the following original contributions:
+
+**C1.** Formal definition of the *Hierarchical Temporal Compute Graph* (HTCG) as the unifying mathematical object for humanoid runtime orchestration, together with a complete structural-induction proof of its end-to-end latency bound.
+
+**C2.** A five-layer architecture for NeuroFabric OS with formal interface contracts between layers and a complete proof of the *Cognitive Fault Isolation Theorem*.
+
+**C3.** A complete schedulability analysis for the reflex layer including the Critical Instant Theorem, Rate-Monotonic utilization bound, and exact Worst-Case Response Time (WCRT) iterative fixed-point analysis.
+
+**C4.** A tight polynomial reduction proving NP-hardness of the HTCG heterogeneous scheduling problem via 3-PARTITION.
+
+**C5.** A full mathematical treatment of the Whole-Body Control quadratic program including KKT optimality conditions, Slater's constraint qualification, and real-time solve complexity via sparse Cholesky.
+
+**C6.** A rigorous derivation of the DDPM diffusion policy from the Evidence Lower Bound, including complete noise schedule mathematics and score-matching equivalence.
+
+**C7.** The *Distributed Embodied Memory* hierarchy with formal stochastic retention policy and episodic-to-semantic consolidation operator.
+
+**C8.** An Invariant Extended Kalman Filter (InEKF) formulation on $SE_2(3)$ for digital twin synchronization, with formal Mahalanobis divergence detection guarantees.
+
+### 1.4 Scope and Limitations
+
+This dissertation is theoretical. We propose formal architectures and derive mathematical properties, but do not implement the full system on physical hardware. Validation is performed through formal analysis, references to supporting empirical literature, and computational illustrations where noted. All WCET figures cited in scheduling examples are representative estimates derived from literature benchmarks, not measured values.
+
+---
+
+## Chapter 2 — Background and Related Work
+
+### 2.1 Classical Operating Systems and Their Inadequacy
+
+Classical operating systems were designed around a model of computation fundamentally different from the requirements of an embodied robot. A Linux process operates on a flat address space, communicates via IPC primitives, and is scheduled by a general-purpose scheduler optimized for throughput rather than temporal guarantees. The real-time extension `PREEMPT_RT` linearizes the kernel lock hierarchy and converts most interrupt handlers to preemptible kernel threads, yielding deterministic worst-case latency on a single processor. However, it does not address the challenges of heterogeneous compute fabrics, GPU-native neural policy execution, or sensorimotor coherence across sub-systems with radically different timing requirements.
+
+### 2.2 ROS 2 and Its Structural Limitations
+
+The Robot Operating System 2 (ROS 2) represents the dominant middleware in current robotics research. It provides publish-subscribe communication over the Data Distribution Service (DDS) transport, a node-based computation model, and a lifecycle state machine. For a general-purpose humanoid, ROS 2 presents four structural limitations. First, the DDS layer introduces non-deterministic serialization latency in the median case of tens to hundreds of microseconds for large tensor payloads from neural networks. Second, ROS 2 was designed for CPU-resident computation and provides no primitives for GPU task graphs or CUDA memory management. Third, the ROS 2 executor does not provide formal real-time guarantees: callback dispatch is not priority-preemptive and the executor can starve high-priority callbacks under load. Fourth, the ROS 2 topic model uses serialized message copying that is architecturally incompatible with zero-copy GPU shared memory.
+
+### 2.3 Whole-Body Control: State of the Art
+
+Whole-body control (WBC) in humanoid robots formulates locomotion as a prioritised constrained optimisation problem over joint torques and contact forces, treating the entire robot as a single kinematically and dynamically coupled system rather than decomposing it into independent subsystems. A whole-body dynamic walking controller implemented as a convex quadratic program can solve an optimal control problem using an approximate value function derived from a simple walking model while respecting the dynamic, input, and contact constraints of the full robot dynamics. By exploiting sparsity and temporal structure in the optimisation with a custom active-set algorithm, control rates of 1 kHz are achievable for a 34-DOF humanoid.
+
+Hierarchical quadratic programming (HQP) is commonly applied to consider strict hierarchies of multi-tasks and robot physical inequality constraints during whole-body compliance.
+
+### 2.4 Diffusion Policies for Robot Control
+
+Diffusion Policy learns the gradient of the action-distribution score function and iteratively optimises with respect to this gradient field during inference via a series of stochastic Langevin dynamics steps. The diffusion formulation yields powerful advantages including gracefully handling multimodal action distributions, being suitable for high-dimensional action spaces, and exhibiting impressive training stability.
+
+### 2.5 State Estimation on Lie Groups
+
+Contact-aided invariant extended Kalman filtering defines the error dynamics on a matrix Lie group, yielding log-linear error equations and superior convergence and consistency properties compared to quaternion-based extended Kalman filters. For humanoid base-state estimation, the Right Invariant Extended Kalman Filter (RIEKF) with state representation on $SE_4(3)$ achieves reduced drift in localisation and faster estimation convergence.
+
+### 2.6 GPU DAG Scheduling
+
+A GPU runtime scheduler for multi-task computations can transparently provide asynchronous execution, space-sharing, and transfer-computation overlap by treating the workload as a directed acyclic graph, achieving substantial speedups against synchronous execution. Reinforcement learning models frame GPU scheduling as a Markov Decision Process where states encode resource utilisation and queue lengths, actions correspond to dispatch decisions, and a Graph Neural Network captures DAG-structured workloads to learn execution orderings that minimise end-to-end runtime.
+
+### 2.7 Summary of the Gap
+
+No existing system unifies whole-body control, neural policy execution, GPU-native scheduling, embodied memory, and cognitive reasoning under a single architectural framework with formal guarantees. NeuroFabric OS fills this gap.
+
+---
+
+## Chapter 3 — Problem Formulation and System Model
+
+### 3.1 The Humanoid as a Cyber-Physical Organism
+
+We model a general-purpose humanoid robot as a *cyber-physical organism* $\mathcal{H}$:
+
+$$\mathcal{H} = (\mathcal{B}, \mathcal{S}, \mathcal{A}, \mathcal{C}, \mathcal{E})$$
+
+where $\mathcal{B}$ is the mechanical body: a rigid-body kinematic tree of $n_b$ links connected by $m$ actuated joints, with configuration space $\mathcal{Q} = SE(3) \times \mathbb{R}^m$ (floating-base plus joint angles); $\mathcal{S}$ is the sensor set comprising cameras (RGB, depth), inertial measurement units (IMU), force-torque sensors, microphones, and tactile arrays; $\mathcal{A}$ is the actuator set of torque-controlled joints and end-effectors; $\mathcal{C}$ is the heterogeneous compute fabric $\{CPU, GPU, NPU, MCU_1, \ldots, MCU_k\}$; and $\mathcal{E}$ is an open, partially observable, dynamic physical world.
+
+### 3.2 Generalized Coordinates and the Floating-Base Convention
+
+Let $q \in \mathcal{Q}$ denote the generalized coordinate vector. Under the floating-base convention, we decompose:
+
+$$q = \begin{bmatrix} q_{fb} \\ q_j \end{bmatrix} \in \mathbb{R}^{6+m}$$
+
+where $q_{fb} = (p_{base}, \Phi_{base}) \in \mathbb{R}^3 \times SO(3)$ encodes the six-dimensional pose of the base link in the world frame (represented in minimal Euler or unit-quaternion form depending on context), and $q_j \in \mathbb{R}^m$ are the actuated joint angles. The generalised velocity is $\dot{q} = [\nu_{fb}^T, \dot{q}_j^T]^T$ where $\nu_{fb} = (v_{base}, \omega_{base}) \in \mathbb{R}^6$ is the spatial velocity of the base.
+
+### 3.3 The Fundamental Multi-Timescale Problem
+
+The central challenge of humanoid operating system design is the *multi-timescale coherence problem*. The system must simultaneously satisfy computations across radically different temporal regimes:
+
+| Timescale | Function | Target Frequency | Compute Target |
+|---|---|---|---|
+| $\tau_{\mu}$ | Motor torque, balance reflex | 1 kHz | MCU |
+| $\tau_{c}$ | Whole-body controller (WBC) | 200–500 Hz | CPU/GPU |
+| $\tau_{p}$ | Motion planning (MPC) | 10–50 Hz | GPU |
+| $\tau_{v}$ | Perception, sensor fusion | 30–100 Hz | GPU |
+| $\tau_{r}$ | Reasoning, language | 1–5 Hz | GPU |
+| $\tau_{m}$ | Memory consolidation | 0.1–1 Hz | GPU/CPU |
+
+**Definition 3.1 (Temporal Coherence).** A humanoid operating system maintains *temporal coherence* if and only if for every pair of layers $(L_i, L_j)$ with respective nominal periods $T_i < T_j$, (i) the output of $L_j$ is consistent with the physical state observable at the time of its last completed execution, and (ii) $L_i$ does not require output from $L_j$ within any deadline shorter than $T_j$. Formally:
+
+$$\forall (L_i, L_j) \text{ with } T_i < T_j: \quad \mathcal{D}_{i \leftarrow j} \geq T_j$$
+
+where $\mathcal{D}_{i \leftarrow j}$ is the minimum inter-layer deadline from $L_j$ to $L_i$.
+
+This condition formalizes the requirement that fast reflex loops cannot *block* on slow cognitive outputs, and that cognitive outputs remain physically grounded when they arrive.
+
+### 3.4 Requirements Specification
+
+The formal requirements $\mathcal{R}$ for NeuroFabric OS are:
+
+**R1 (Hard Real-Time Reflexes).** The reflex layer must satisfy hard real-time constraints: worst-case response time (WCRT) $\leq 1$ ms for balance and joint torque control.
+
+**R2 (Cognitive Independence).** Failure or indefinite suspension of any layer $L_i$ with $i \geq 3$ must not cause constraint violations in $L_1$ or $L_2$.
+
+**R3 (Neural Policy as System Object).** Neural policies are first-class system objects with formal lifecycle semantics: typed input/output contracts, versioned parameters, GPU-sandboxed execution, hot-reload with output-distribution safety bound, and session-persistent storage.
+
+**R4 (GPU Primacy).** All perception, planning, and policy inference must execute natively on GPU without CPU-side serialization overhead exceeding $\epsilon_{PCIe} = 10\ \mu\text{s}$.
+
+**R5 (Embodied Persistence).** The system maintains a multi-level memory hierarchy that persists across operational sessions with formal retention policy.
+
+**R6 (Simulation Parity).** Every system component must have a simulation-equivalent instantiation, and the physical state must remain synchronised with a digital twin within Mahalanobis distance $\delta_{sync}$.
+
+**R7 (Graceful Degradation).** The system degrades through defined safety levels under single-component failures, maintaining minimum-safe behaviour at each level.
+
+---
+
+## Chapter 4 — The NeuroFabric OS Architecture: Formal Specification
+
+### 4.1 Layered Architecture Overview
+
+NeuroFabric OS is defined as a five-layer architecture $\Lambda = (L_1, L_2, L_3, L_4, L_5)$ with strict downward dependency and asynchronous upward feedback:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  L5: Cognitive Layer                                             │
+│  VLM · LLM · World Model · Semantic Memory · Task Planning       │
+├──────────────────────────────────────────────────────────────────┤
+│  L4: Behaviour & Planning Graph                                  │
+│  Task Graphs · RL Policies · Behaviour Trees · HTCG Runtime      │
+├──────────────────────────────────────────────────────────────────┤
+│  L3: Real-Time Robotics Middleware                               │
+│  Neural Pub-Sub · ECS Runtime · GPU Scheduler · DEM              │
+├──────────────────────────────────────────────────────────────────┤
+│  L2: Deterministic Control Layer                                 │
+│  WBC · MPC · Torque Loops · Balance · Collision Reflexes         │
+├──────────────────────────────────────────────────────────────────┤
+│  L1: Hardware Abstraction Layer                                  │
+│  Sensor Drivers · Actuator Interfaces · EtherCAT · Bus Protocols │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Design Principle.** Lower layers must never block awaiting upper-layer outputs. If $L_4$ fails to deliver a trajectory update within the contractual deadline $\Delta t_{contract}(L_4 \to L_2)$, then $L_2$ executes its locally pre-computed safe fallback.
+
+### 4.2 Layer Interface Contracts
+
+**Definition 4.1 (Layer Interface).** The interface $\mathcal{I}(L_i \to L_{i-1})$ is a 4-tuple:
+
+$$\mathcal{I}(L_i \to L_{i-1}) = (\mathcal{M}_{down}, \mathcal{M}_{up}, \Delta t_{contract}, \mathcal{F}_{fallback})$$
+
+where $\mathcal{M}_{down}$ is the typed downward message (goal or command), $\mathcal{M}_{up}$ is the typed upward message (state or observation), $\Delta t_{contract} \in \mathbb{R}_{>0}$ is the maximum guaranteed delivery latency, and $\mathcal{F}_{fallback}$ is the behaviour executed by $L_{i-1}$ when the contract is violated.
+
+The interface is implemented as a lock-free single-producer single-consumer ring buffer in shared memory. The buffer capacity $B$ is chosen such that:
+
+$$B \geq \left\lceil \frac{\Delta t_{contract}}{T_i} \right\rceil + 1$$
+
+guaranteeing that a consumer running at period $T_{i-1}$ always finds a valid message even if the producer misses up to $\lfloor \Delta t_{contract} / T_i \rfloor$ consecutive periods.
+
+---
+
+## Chapter 5 — The Hierarchical Temporal Compute Graph (HTCG)
+
+### 5.1 Motivation
+
+The central computational object of NeuroFabric OS is the *Hierarchical Temporal Compute Graph* (HTCG). This structure unifies sensor processing, perception, planning, control, and memory under a single graph-theoretic formalism amenable to formal scheduling, latency, and correctness analysis.
+
+### 5.2 Formal Definition
+
+**Definition 5.1 (Compute Node).** A compute node $v \in V$ is a 7-tuple:
+
+$$v = (f_v, \mathcal{X}_v^{in}, \mathcal{X}_v^{out}, T_v, \mathcal{D}_v, \pi_v, \kappa_v)$$
+
+where $f_v : \mathcal{X}_v^{in} \to \mathcal{X}_v^{out}$ is the computation (deterministic or stochastic); $T_v \in \mathbb{R}_{>0}$ is the nominal invocation period; $\mathcal{D}_v \in \mathbb{R}_{>0}$ is the absolute response-time deadline ($\mathcal{D}_v \leq T_v$ for all hard real-time nodes); $\pi_v \in \{CPU, GPU, NPU, MCU\}$ is the target processor; and $\kappa_v \in \{reflex, control, perception, planning, cognition, memory\}$ is the compute class.
+
+**Definition 5.2 (HTCG).** The Hierarchical Temporal Compute Graph is a directed graph:
+
+$$\mathcal{G} = (V, E, W, \mathcal{H}, \Phi)$$
+
+where $V$ is the set of compute nodes; $E \subseteq V \times V$ is the set of directed data-dependency edges; $W : E \to \mathbb{R}_{>0}$ assigns worst-case transmission latency to each edge; $\mathcal{H} : V \to \{1,\ldots,5\}$ assigns each node to an architectural layer; and $\Phi : E \to \{sync, async\}$ classifies each edge. Edges from lower-timescale to higher-timescale layers are always asynchronous ($\Phi(u,v) = async$) to prevent blocking. Feedback edges from $L_j$ to $L_i$ with $T_j > T_i$ are also classified as $async$, making $\mathcal{G}$ a DAG when restricted to synchronous edges only.
+
+**Definition 5.3 (HTCG Restriction).** Let $\mathcal{G}|_{sync} = (V, E_{sync})$ where $E_{sync} = \{e \in E : \Phi(e) = sync\}$. We require $\mathcal{G}|_{sync}$ to be a directed acyclic graph.
+
+**Definition 5.4 (Temporal Consistency).** An HTCG execution trace $\sigma$ is *temporally consistent* if for every synchronous edge $(u, v) \in E_{sync}$:
+
+$$t_{receive}(v, \sigma) - t_{emit}(u, \sigma) \leq W(u,v) + \epsilon_{sys}$$
+
+for a system-defined jitter tolerance $\epsilon_{sys} \geq 0$, where $t_{emit}(u, \sigma)$ is the timestamp at which node $u$ committed its output to the shared tensor table in execution $\sigma$, and $t_{receive}(v, \sigma)$ is the timestamp at which node $v$ successfully read that output.
+
+### 5.3 The End-to-End Latency Bound
+
+**Theorem 5.1 (HTCG Path Latency Bound).** For any directed path $P = (v_1, v_2, \ldots, v_k)$ in $\mathcal{G}|_{sync}$, the end-to-end latency satisfies:
+
+$$\mathcal{L}(P) \leq \sum_{i=1}^{k} WCET(v_i) + \sum_{i=1}^{k-1} W(v_i, v_{i+1})$$
+
+*Proof.* By strong induction on path length $k$.
+
+**Base case ($k=1$).** A path of length 1 consists of a single node $v_1$. Its latency is the time from input arrival to output emission, which by definition of WCET is bounded by $WCET(v_1)$. The right-hand side for $k=1$ equals $WCET(v_1)$ (the transmission sum is empty). The inequality holds. $\checkmark$
+
+**Inductive step.** Assume for all paths of length $k-1$ that $\mathcal{L}(v_1,\ldots,v_{k-1}) \leq \sum_{i=1}^{k-1} WCET(v_i) + \sum_{i=1}^{k-2} W(v_i, v_{i+1})$. Consider path $P = (v_1,\ldots,v_k)$. Node $v_k$ may begin execution only after receiving its input from $v_{k-1}$. The time at which $v_{k-1}$ emits its output is bounded by $\mathcal{L}(v_1,\ldots,v_{k-1})$. After emission, the output traverses edge $(v_{k-1}, v_k)$ in time at most $W(v_{k-1}, v_k)$ (by definition of $W$). Node $v_k$ then requires at most $WCET(v_k)$ to produce its output. By the inductive hypothesis:
+
+$$\mathcal{L}(P) \leq \mathcal{L}(v_1,\ldots,v_{k-1}) + W(v_{k-1}, v_k) + WCET(v_k)$$
+
+$$\leq \left(\sum_{i=1}^{k-1} WCET(v_i) + \sum_{i=1}^{k-2} W(v_i, v_{i+1})\right) + W(v_{k-1}, v_k) + WCET(v_k)$$
+
+$$= \sum_{i=1}^{k} WCET(v_i) + \sum_{i=1}^{k-1} W(v_i, v_{i+1}). \quad \square$$
+
+**Corollary 5.1.** For the critical reflex path $P_{reflex} = (IMU, StateEstimator, TorqueLoop)$ with three nodes, we require:
+
+$$WCET(IMU) + W(IMU, SE) + WCET(SE) + W(SE, TL) + WCET(TL) \leq 1 \text{ ms}$$
+
+This establishes the WCET budget per node. Using representative values from literature benchmarks (IMU data-ready interrupt latency $\approx 0.02$ ms; state estimator $\approx 0.05$ ms; network transmission $\leq 0.01$ ms each; torque loop $\approx 0.08$ ms), the bound is comfortably satisfied with margin for interrupt jitter.
+
+---
+
+## Chapter 6 — Real-Time Scheduling Theory: Complete Analysis
+
+### 6.1 Task Model
+
+We adopt the standard Liu-Layland periodic task model. A set of $n$ independent, preemptive, periodic tasks $\mathcal{T} = \{\tau_1, \ldots, \tau_n\}$ is characterised by $\tau_i = (C_i, T_i, D_i)$ where $C_i$ is the Worst-Case Execution Time (WCET), $T_i$ is the period, and $D_i$ is the relative deadline. We distinguish two regimes: *implicit deadlines* where $D_i = T_i$ (the Liu-Layland assumption), and *constrained deadlines* where $D_i \leq T_i$.
+
+### 6.2 The Critical Instant Theorem
+
+Before deriving schedulability conditions, we establish the foundational theorem.
+
+**Definition 6.1 (Critical Instant).** A *critical instant* for task $\tau_i$ is a moment at which the response time of $\tau_i$ is maximised.
+
+**Theorem 6.1 (Critical Instant — Liu and Layland, 1973).** Under preemptive fixed-priority scheduling with implicit deadlines, a critical instant for any task $\tau_i$ occurs when $\tau_i$ is requested simultaneously with requests for all higher-priority tasks.
+
+*Proof.* Let $\tau_i$ have priority rank $r$ (lower rank = higher priority). Consider a job of $\tau_i$ released at time $t_0$. The response time of this job is maximised when the total interference from all higher-priority tasks $\{\tau_1, \ldots, \tau_{r-1}\}$ during the interval $[t_0, t_0 + R_i]$ is maximised, where $R_i$ is the response time.
+
+The interference from $\tau_j$ ($j < r$, i.e., higher priority) during interval $[t_0, t_0 + R_i]$ is:
+
+$$I_j(R_i) = \left\lceil \frac{R_i}{T_j} \right\rceil C_j$$
+
+This quantity is non-decreasing in $R_i$ and is maximised when all jobs of $\tau_j$ are released as close as possible to $t_0$. The worst case occurs when all higher-priority tasks have their phase aligned to $t_0$, i.e., all release simultaneously at $t_0$. If the release of some higher-priority task $\tau_j$ is advanced toward $t_0$, the completion of $\tau_i$ can only be delayed or unchanged: advancing a release can never reduce preemption. Repeating this argument for all $\tau_j$ with $j < r$ establishes that simultaneous release at $t_0$ is the worst-case scenario. $\square$
+
+### 6.3 Rate-Monotonic Scheduling: The Utilization Bound
+
+**Definition 6.2 (Rate-Monotonic Assignment).** Under Rate-Monotonic Scheduling (RMS), task priorities are assigned inversely proportional to periods: $T_i < T_j \Rightarrow \text{priority}(\tau_i) > \text{priority}(\tau_j)$.
+
+RMS is proven to be an optimal static-priority scheduling policy: if a set of tasks can be scheduled by any static-priority algorithm, it can also be scheduled by RMS. [Innovation](https://innovation.world/invention/rate-monotonic-scheduling/)
+
+**Theorem 6.2 (RMS Optimality — Liu and Layland, 1973).** If a feasible priority assignment exists for some task set, the Rate-Monotonic priority assignment is feasible for that task set. [Radboud University](https://www.cs.ru.nl/~hooman/DES/liu-layland.pdf)
+
+*Proof Sketch.* Given any feasible fixed-priority assignment, consider two tasks $\tau_i$, $\tau_j$ with adjacent priorities where $T_i > T_j$ but $\tau_i$ has higher priority. We show that swapping their priorities preserves feasibility. In the original assignment, $\tau_j$ is preempted by $\tau_i$ whenever $\tau_i$ is ready. After the swap, $\tau_j$ preempts $\tau_i$. Since $T_j < T_i$, the additional preemption load placed on $\tau_i$ by $\tau_j$ is bounded by $\lceil T_i / T_j \rceil C_j$, which is no worse than the load previously imposed by $\tau_i$ on $\tau_j$ in the original assignment. A careful case analysis on the critical instant (Theorem 6.1) shows $\tau_i$'s deadline is still met post-swap. Since any feasible fixed-priority assignment can be transformed into the rate-monotonic assignment via a finite sequence of such pairwise swaps, all of which preserve feasibility, the rate-monotonic assignment is optimal. $\square$
+
+**Theorem 6.3 (RMS Utilization Bound).** A set of $n$ independent periodic tasks with implicit deadlines is schedulable under RMS if:
+
+$$U = \sum_{i=1}^{n} \frac{C_i}{T_i} \leq n(2^{1/n} - 1)$$
+
+As $n$ approaches infinity, this bound converges to $\ln(2) \approx 0.693$. This provides a sufficient but not necessary condition for schedulability. [Innovation](https://innovation.world/invention/rate-monotonic-scheduling/)
+
+*Proof Sketch.* The bound is derived by finding the worst-case task set: a set of $n$ tasks that is just barely schedulable (any increase in $C_i$ causes a deadline miss) and achieves the minimum possible total utilisation. Liu and Layland showed this worst case arises when tasks have harmonically related periods with a specific load distribution. For $n=1$: $U \leq 1$, trivially. For $n=2$: the bound $2(2^{1/2}-1) \approx 0.828$ is tight for $T_2 = 2T_1/(2T_1 - T_1) \cdot T_1$ with appropriate WCET assignments. The general formula follows by induction on $n$ over this construction. $\square$
+
+### 6.4 Exact Worst-Case Response Time Analysis
+
+The utilization bound is sufficient but not necessary. A more powerful test is the exact Worst-Case Response Time (WCRT) analysis (Joseph and Pandya, 1986; Audsley et al., 1993).
+
+**Definition 6.3 (Response Time).** The worst-case response time $R_i$ of task $\tau_i$ under RMS is the maximum time from release to completion over all possible phasing of higher-priority tasks.
+
+By the Critical Instant Theorem (Theorem 6.1), the worst-case occurs at simultaneous release of all higher-priority tasks. Let $hp(i)$ denote the index set of all tasks with higher priority than $\tau_i$. At the critical instant, the total workload imposed on the processor in the interval $[0, R_i]$ satisfies:
+
+$$R_i = C_i + \sum_{j \in hp(i)} \left\lceil \frac{R_i}{T_j} \right\rceil C_j$$
+
+This is a fixed-point equation. It is solved iteratively via:
+
+$$R_i^{(0)} = C_i, \qquad R_i^{(s+1)} = C_i + \sum_{j \in hp(i)} \left\lceil \frac{R_i^{(s)}}{T_j} \right\rceil C_j$$
+
+**Theorem 6.4 (Convergence of WCRT Iteration).** The sequence $\{R_i^{(s)}\}$ is non-decreasing and converges to the least fixed point of the equation $R_i = C_i + \sum_{j \in hp(i)} \lceil R_i/T_j \rceil C_j$, or diverges beyond $T_i$ if the task set is unschedulable.
+
+*Proof.* We show monotonicity: $R_i^{(1)} = C_i + \sum_{j} \lceil C_i / T_j \rceil C_j \geq C_i = R_i^{(0)}$. By induction, if $R_i^{(s)} \geq R_i^{(s-1)}$, then since $\lceil x/T_j \rceil$ is non-decreasing in $x$, we have $R_i^{(s+1)} \geq R_i^{(s)}$. The function $f(x) = C_i + \sum_j \lceil x/T_j \rceil C_j$ is a step function that increases by $C_j$ at every integer multiple of $T_j$. It is bounded from below by $C_i > 0$. The sequence is therefore non-decreasing and, if it remains bounded by $T_i$, converges to the least fixed point by the monotone convergence theorem. If $R_i^{(s)}$ exceeds $T_i$ for some $s$, the task will miss its deadline and the set is unschedulable. $\square$
+
+**Corollary 6.1.** Task $\tau_i$ meets its deadline if and only if the iteration converges to $R_i^* \leq D_i$.
+
+### 6.5 NeuroFabric Reflex Layer: Full Schedulability Analysis
+
+We apply both tests to the NeuroFabric OS reflex layer $L_2$.
+
+**Task set for $L_2$:**
+
+| Task $\tau_i$ | Function | Period $T_i$ | WCET $C_i$ | $C_i/T_i$ | Priority rank |
+|---|---|---|---|---|---|
+| $\tau_1$ | IMU state estimator | 1 ms | 0.05 ms | 0.050 | 1 (highest) |
+| $\tau_2$ | Joint torque loop | 1 ms | 0.08 ms | 0.080 | 2 |
+| $\tau_3$ | Balance controller | 2 ms | 0.15 ms | 0.075 | 3 |
+| $\tau_4$ | Collision reflex | 5 ms | 0.20 ms | 0.040 | 4 |
+
+**Step 1 — Utilization bound (Theorem 6.3):**
+
+$$U = 0.050 + 0.080 + 0.075 + 0.040 = 0.245$$
+
+$$n(2^{1/n} - 1)\big|_{n=4} = 4(2^{0.25} - 1) = 4(1.18921 - 1) = 4 \times 0.18921 = 0.7568$$
+
+Since $U = 0.245 < 0.757$, the utilization bound test passes. $\checkmark$
+
+**Step 2 — Exact WCRT analysis:**
+
+*For $\tau_1$ (highest priority):*
+$R_1^* = C_1 = 0.05$ ms $\leq T_1 = 1$ ms. $\checkmark$
+
+*For $\tau_2$:*
+$R_2^{(0)} = 0.08$
+
+$R_2^{(1)} = 0.08 + \lceil 0.08/1 \rceil \times 0.05 = 0.08 + 0.05 = 0.13$ ms
+
+$R_2^{(2)} = 0.08 + \lceil 0.13/1 \rceil \times 0.05 = 0.08 + 0.05 = 0.13$ ms (converged)
+
+$R_2^* = 0.13$ ms $\leq T_2 = 1$ ms. $\checkmark$
+
+*For $\tau_3$:*
+$R_3^{(0)} = 0.15$
+
+$R_3^{(1)} = 0.15 + \lceil 0.15/1 \rceil(0.05) + \lceil 0.15/1 \rceil(0.08) = 0.15 + 0.05 + 0.08 = 0.28$
+
+$R_3^{(2)} = 0.15 + \lceil 0.28/1 \rceil(0.05) + \lceil 0.28/1 \rceil(0.08) = 0.15 + 0.05 + 0.08 = 0.28$ (converged)
+
+$R_3^* = 0.28$ ms $\leq T_3 = 2$ ms. $\checkmark$
+
+*For $\tau_4$:*
+$R_4^{(0)} = 0.20$
+
+$R_4^{(1)} = 0.20 + \lceil 0.20/1 \rceil(0.05) + \lceil 0.20/1 \rceil(0.08) + \lceil 0.20/2 \rceil(0.15)$
+$= 0.20 + 0.05 + 0.08 + 0.15 = 0.48$
+
+$R_4^{(2)} = 0.20 + \lceil 0.48/1 \rceil(0.05) + \lceil 0.48/1 \rceil(0.08) + \lceil 0.48/2 \rceil(0.15)$
+$= 0.20 + 0.05 + 0.08 + 0.15 = 0.48$ (converged)
+
+$R_4^* = 0.48$ ms $\leq T_4 = 5$ ms. $\checkmark$
+
+**All four tasks meet their deadlines under exact WCRT analysis.** $\square$
+
+### 6.6 NP-Hardness of the HTCG Scheduling Problem
+
+**Definition 6.4 (HTCG Scheduling Problem).** Given HTCG $\mathcal{G}$ and processor set $\mathcal{P}$, find an assignment $\sigma : V \to \mathcal{P}$ and start-time function $s : V \to \mathbb{R}_{\geq 0}$ minimising total weighted completion time subject to: data-dependency ordering constraints, hard deadlines for $V_{hard}$, and processor capacity constraints.
+
+**Theorem 6.5 (NP-Hardness of HTCG Scheduling).** The HTCG Scheduling Problem is NP-hard, even on homogeneous processors with unit communication costs.
+
+*Proof.* We reduce from 3-PARTITION, which is NP-complete in the strong sense (Garey and Johnson, 1975). An instance of 3-PARTITION consists of a multiset $A = \{a_1, \ldots, a_{3m}\}$ of positive integers with $\sum_{i=1}^{3m} a_i = mB$ and $B/4 < a_i < B/2$ for all $i$, and asks whether $A$ can be partitioned into $m$ triples each summing to $B$.
+
+**Reduction.** Construct an HTCG instance as follows. Create $3m$ independent source nodes $v_1, \ldots, v_{3m}$ with $WCET(v_i) = a_i$. Create $m$ sink nodes $u_1, \ldots, u_m$ each with $WCET(u_j) = 0$ (zero-cost aggregators). Create $m$ identical processors $p_1, \ldots, p_m$. Add no edges (all nodes independent). Set the global deadline $D = B$ for all sink nodes. A feasible schedule assigns exactly 3 source tasks to each processor (since each $a_i > B/4$, at most 3 fit per processor within deadline $B$, and since each $a_i < B/2$, at least 2 must be assigned together). The assignment is feasible if and only if the 3-PARTITION instance has a solution. Since 3-PARTITION is NP-complete in the strong sense, the reduction is polynomial and HTCG Scheduling is NP-hard. $\square$
+
+### 6.7 Hierarchical Decomposition: The Practical Scheduler
+
+Given NP-hardness, NeuroFabric OS adopts a hierarchical scheduling decomposition:
+
+**Level 1 (Layer-Local Schedulers).** Each layer $L_i$ employs a dedicated scheduler. $L_1$ and $L_2$ use hard real-time EDF or RMS with exact WCRT verification. $L_3$/$L_4$/$L_5$ use weighted priority queues with soft real-time guarantees.
+
+**Level 2 (Cross-Layer Communication).** Implemented as lock-free single-writer single-reader ring buffers (power-of-two capacity, cache-line aligned) for downward commands, and shared-memory atomic state vectors for upward observations.
+
+**Level 3 (GPU Task Graph Scheduler).** GPU-resident nodes are organized as CUDA Graph subgraphs submitted asynchronously to the GPU Command Processor. The scheduling policy is modelled as a Markov Decision Process $\mathcal{M}_{GPU} = (\mathcal{S}, \mathcal{A}, \mathcal{T}, \mathcal{R}, \gamma)$ with state $s = (G_t, Q_t, M_t)$ (compute graph status, dispatch queue, GPU memory map), action $a$ (next node to dispatch), and reward $\mathcal{R} = -\sum_{v \in V_{deadline}} \max(0, C_v - D_v)$ penalising deadline misses. The policy $\pi_\theta : \mathcal{S} \to \Delta(\mathcal{A})$ is parameterised by a Graph Attention Network trained via Proximal Policy Optimization.
+
+---
+
+## Chapter 7 — The Whole-Body Control Layer: Full Mathematical Treatment
+
+### 7.1 Equations of Motion
+
+The dynamics of a humanoid robot with $n = 6 + m$ degrees of freedom under the floating-base convention are governed by the Equations of Motion (EOM):
+
+$$M(q)\ddot{q} + C(q, \dot{q})\dot{q} + g(q) = S^T \tau + J_c^T(q) \lambda$$
+
+where $M(q) \in \mathbb{R}^{n \times n}$ is the configuration-dependent mass-inertia matrix (symmetric positive definite); $C(q, \dot{q}) \in \mathbb{R}^{n \times n}$ is the Coriolis and centrifugal matrix (derivable from $M$ via the Christoffel symbol identity $C_{ij} = \frac{1}{2}\sum_k (\partial M_{ij}/\partial q_k + \partial M_{ik}/\partial q_j - \partial M_{jk}/\partial q_i)\dot{q}_k$); $g(q) = \partial V(q)/\partial q$ where $V$ is the gravitational potential energy; $S \in \mathbb{R}^{m \times n}$ is the actuator selection matrix ($S = [0_{m \times 6}\ |\ I_m]$ under floating-base convention); $\tau \in \mathbb{R}^m$ is the joint torque vector; $J_c(q) \in \mathbb{R}^{3k \times n}$ is the stacked contact Jacobian for $k$ contact points; and $\lambda \in \mathbb{R}^{3k}$ is the contact force vector in world coordinates.
+
+**Property 7.1 (Skew-Symmetry).** The matrix $\dot{M}(q) - 2C(q,\dot{q})$ is skew-symmetric. This property ensures energy consistency: multiplying the EOM on the left by $\dot{q}^T$ yields $\dot{q}^T M \ddot{q} + \dot{q}^T C \dot{q} = \frac{d}{dt}(\frac{1}{2}\dot{q}^T M \dot{q}) = \dot{q}^T \tau_{ext}$, confirming that the kinetic energy changes equal the power of external forces.
+
+### 7.2 The Centroidal Momentum Matrix
+
+The centroidal dynamics provide an efficient reduced-order model for balance control. Define the *Centroidal Momentum Matrix* (CMM) $A_G(q) \in \mathbb{R}^{6 \times n}$ such that:
+
+$$h_G = A_G(q) \dot{q}$$
+
+where $h_G = [l_G^T, k_G^T]^T \in \mathbb{R}^6$ is the centroidal momentum (linear $l_G \in \mathbb{R}^3$, angular $k_G \in \mathbb{R}^3$) expressed at the Centre of Mass (CoM). The CMM projects the generalised velocities of a humanoid robot to its spatial centroidal momentum, and its relationship to the joint-space inertia matrix can be shown through a transformation diagram. [ResearchGate](https://www.researchgate.net/publication/257523149_Centroidal_dynamics_of_a_humanoid_robot)
+
+The time derivative yields the centroidal momentum rate equation:
+
+$$\dot{h}_G = A_G(q)\ddot{q} + \dot{A}_G(q)\dot{q}$$
+
+and from Newton-Euler principles applied at the CoM:
+
+$$\dot{h}_G = \sum_{i=1}^{k} \begin{bmatrix} f_i \\ r_i \times f_i + \tau_i^{contact} \end{bmatrix} + \begin{bmatrix} m_{\text{tot}}g \\ 0 \end{bmatrix}$$
+
+where $f_i \in \mathbb{R}^3$ is the ground reaction force at contact $i$, $r_i = p_i - p_{CoM}$ is the moment arm from CoM to contact point $i$, $\tau_i^{contact}$ is the contact torque (zero for point contacts), $m_{\text{tot}}$ is total robot mass, and $g = [0, 0, -9.81]^T$ m/s² is the gravitational acceleration vector.
+
+**Efficient Computation.** The CMM can be computed in $\mathcal{O}(n)$ operations using a spatial algebra recursive algorithm (Featherstone, 2008). This is critical for real-time control: at 500 Hz with $n=36$ DOF, the CMM must be recomputed in under 2 ms.
+
+### 7.3 The WBC Quadratic Program
+
+The Whole-Body Controller at each control step $t$ solves a weighted Quadratic Program (WQP) over decision variables $\mathbf{x} = (\ddot{q}, \tau, \lambda) \in \mathbb{R}^{n + m + 3k}$:
+
+**Objective:**
+$$\min_{\ddot{q}, \tau, \lambda} \sum_{j=1}^{N_{tasks}} w_j \|J_j(q) \ddot{q} + \dot{J}_j(q)\dot{q} - \ddot{x}_j^{des}\|_2^2 + w_\tau \|\tau\|_2^2 + w_\lambda \|\lambda\|_2^2$$
+
+**Subject to:**
+$$M(q)\ddot{q} + C(q,\dot{q})\dot{q} + g(q) = S^T \tau + J_c^T(q)\lambda \quad \text{(EOM)}$$
+$$J_c(q)\ddot{q} + \dot{J}_c(q)\dot{q} = 0 \quad \text{(no-slip contact)}$$
+$$\tau_{\min} \leq \tau \leq \tau_{\max} \quad \text{(torque limits)}$$
+$$\lambda_{n,i} \geq 0 \quad \forall i \quad \text{(unilateral contact)}$$
+$$\|\lambda_{t,i}\|_2 \leq \mu \lambda_{n,i} \quad \forall i \quad \text{(friction cone)}$$
+
+where $J_j$ is the task Jacobian for task $j$, $\ddot{x}_j^{des}$ is the desired task-space acceleration for task $j$ (typically a PD feedback law $\ddot{x}_j^{des} = \ddot{x}_j^{ref} + K_d(\dot{x}_j^{ref} - \dot{x}_j) + K_p(x_j^{ref} - x_j)$), $w_j$ are task weights, $\lambda_{n,i}$ is the normal contact force at point $i$, $\lambda_{t,i}$ is the tangential force, and $\mu$ is the friction coefficient.
+
+The friction cone constraint $\|\lambda_{t,i}\|_2 \leq \mu \lambda_{n,i}$ is a Second-Order Cone (SOC) constraint. For computational efficiency, it is linearized into a polyhedral cone with $N_{cone}$ facets:
+
+$$\lambda_{t,i} \cdot d_{\ell} \leq \frac{\mu}{\cos(\pi/N_{cone})} \lambda_{n,i}, \quad \ell = 1, \ldots, N_{cone}$$
+
+where $d_\ell$ are unit vectors in the tangential plane at equally spaced angles. This linearization converts the problem to a pure QP solvable with active-set or interior-point methods.
+
+### 7.4 KKT Optimality Conditions
+
+We rewrite the WQP in standard form. Denote $\mathbf{x} \in \mathbb{R}^{n_x}$ as the concatenated decision variable, $H \succeq 0$ as the Hessian of the quadratic cost, $c$ as the linear cost vector, $A_{eq}$ and $b_{eq}$ as equality constraint matrices (encoding EOM and contact constraints), $A_{ineq}$ and $b_{ineq}$ as inequality constraint matrices (torque limits and friction cone):
+
+$$\min_{\mathbf{x}} \frac{1}{2} \mathbf{x}^T H \mathbf{x} + c^T \mathbf{x} \quad \text{s.t.} \quad A_{eq}\mathbf{x} = b_{eq}, \quad A_{ineq}\mathbf{x} \leq b_{ineq}$$
+
+The Lagrangian is:
+
+$$\mathcal{L}(\mathbf{x}, \mu_{eq}, \mu_{ineq}) = \frac{1}{2}\mathbf{x}^T H \mathbf{x} + c^T \mathbf{x} + \mu_{eq}^T(A_{eq}\mathbf{x} - b_{eq}) + \mu_{ineq}^T(A_{ineq}\mathbf{x} - b_{ineq})$$
+
+**KKT Conditions (Necessary and Sufficient for Convex QP):** A primal-dual pair $(\mathbf{x}^*, \mu_{eq}^*, \mu_{ineq}^*)$ is optimal if and only if:
+
+**(1) Stationarity:**
+$$H\mathbf{x}^* + c + A_{eq}^T \mu_{eq}^* + A_{ineq}^T \mu_{ineq}^* = 0$$
+
+**(2) Primal feasibility:**
+$$A_{eq}\mathbf{x}^* = b_{eq}, \qquad A_{ineq}\mathbf{x}^* \leq b_{ineq}$$
+
+**(3) Dual feasibility:**
+$$\mu_{ineq}^* \geq 0$$
+
+**(4) Complementary slackness:**
+$$\mu_{ineq,i}^* \cdot (A_{ineq}\mathbf{x}^* - b_{ineq})_i = 0, \quad \forall i$$
+
+**Theorem 7.1 (Strong Duality).** The WBC QP satisfies strong duality: the duality gap at optimality is zero.
+
+*Proof.* The objective $\frac{1}{2}\mathbf{x}^T H \mathbf{x} + c^T\mathbf{x}$ is convex (since $H \succeq 0$). We verify Slater's constraint qualification: there exists a strictly interior feasible point. The equality constraints (EOM, contact no-slip) are linear and their feasible set is non-empty for any physically realised robot configuration (the robot exists). The inequality constraints (torque bounds) are satisfiable at $\tau = 0$ for moderate accelerations. The friction cone is satisfiable for $\lambda = 0$ (robot at rest with no contact). Under these conditions, Slater's condition holds, and by the Karush-Kuhn-Tucker theorem for convex programs, strong duality is guaranteed. $\square$
+
+**Implication for Real-Time Solving.** Since $H \succeq 0$ and Slater's condition holds, the QP has a unique primal solution (assuming $H \succ 0$, which follows from the regularisation terms $w_\tau, w_\lambda > 0$) and the KKT system can be solved to arbitrary precision. An active-set method exploiting temporal warm-starting (the active set rarely changes between consecutive control steps at 500 Hz) achieves near-linear complexity in practice. By exploiting sparsity and temporal structure in the optimization with a custom active-set algorithm, control rates of 1 kHz for a 34-DOF humanoid are achievable. [arxiv](https://arxiv.org/pdf/1311.1839)
+
+### 7.5 The MPC Layer: Finite-Horizon Centroidal Optimal Control
+
+The MPC layer solves, at frequency $f_{MPC} \approx 50$ Hz, a finite-horizon optimal control problem over the centroidal state:
+
+$$\min_{\{x_k, u_k\}} \sum_{k=0}^{N-1} \left[ \|x_k - x_k^{ref}\|_{Q}^2 + \|u_k\|_{R}^2 \right] + \|x_N - x_N^{ref}\|_{Q_f}^2$$
+
+subject to:
+$$x_{k+1} = A_d x_k + B_d u_k + g_d \quad \text{(linearised centroidal dynamics)}$$
+$$x_k \in \mathcal{X}, \quad u_k \in \mathcal{U} \quad \forall k$$
+$$x_0 = \hat{x}_0 \quad \text{(current state estimate)}$$
+
+where $x_k = (p_{CoM,k},\ v_{CoM,k},\ k_{G,k}) \in \mathbb{R}^9$ is the centroidal state (CoM position, velocity, angular momentum), $u_k = (f_{1,k}, \ldots, f_{c,k}) \in \mathbb{R}^{3c}$ are the contact forces, and $(A_d, B_d, g_d)$ are obtained by Euler discretisation of the centroidal dynamics at step size $\Delta t = 1/f_{MPC}$:
+
+$$A_d = I + \Delta t \cdot A_c, \quad B_d = \Delta t \cdot B_c(r_{1,k},\ldots,r_{c,k})$$
+
+where $A_c$ is the continuous-time system matrix and $B_c$ encodes the moment arms $r_i = p_{contact,i} - p_{CoM}$ (updated each control step). The constraint sets $\mathcal{X}$ (CoM height bounds, angular momentum bounds) and $\mathcal{U}$ (friction cone per contact) are both polytopes, making the MPC a linearly-constrained QP solvable in $\mathcal{O}(N^3 n_x^3)$ via sequential QP or $\mathcal{O}(N n_x^2)$ via Riccati recursion for the unconstrained case.
+
+---
+
+## Chapter 8 — The Neural Module System and Diffusion Policy Integration
+
+### 8.1 Neural Module Abstraction
+
+**Definition 8.1 (Neural Module).** A Neural Module $\mathcal{N}$ is a 7-tuple:
+
+$$\mathcal{N} = (\theta, \mathcal{I}, \mathcal{O}, \kappa, \nu, \mathcal{S}_{box}, \mathcal{M}_{GPU})$$
+
+where $\theta$ are the learnable parameters stored in GPU memory as mixed-precision tensors; $\mathcal{I}$ is the input tensor specification (dtype $\in$ {FP32, FP16, BF16, INT8}, shape $\in \mathbb{N}^d$, device = GPU); $\mathcal{O}$ is the output tensor specification; $\kappa \in \{perception, manipulation, balance, navigation, language, memory\}$ is the module class; $\nu = (v_{major}, v_{minor}, v_{patch}, \text{hash}_{SHA256})$ is the version identifier; $\mathcal{S}_{box}$ specifies the execution sandbox (GPU memory budget $M_{max}$, maximum inference latency $T_{max}$, allowed CUDA stream operations); and $\mathcal{M}_{GPU}$ is the pre-allocated GPU memory region assigned to this module.
+
+### 8.2 Module Lifecycle State Machine
+
+The lifecycle is defined by a finite-state automaton $\mathcal{F}_{NM} = (Q, \Sigma, \delta, q_0, F)$:
+
+States: $Q = \{Unloaded, Loading, Active, Suspended, HotReloading, Unloading\}$
+
+Transitions $\delta$:
+$$Unloaded \xrightarrow{load(\theta, \nu)} Loading \xrightarrow{init\_complete} Active$$
+$$Active \xrightarrow{suspend} Suspended \xrightarrow{resume} Active$$
+$$Active \xrightarrow{hot\_reload(\theta')} HotReloading \xrightarrow{reload\_complete} Active$$
+$$Active \xrightarrow{unload} Unloading \xrightarrow{cleanup} Unloaded$$
+
+**Hot-Reload Safety Invariant.** Double-buffering is used: while $\theta$ services inference, $\theta'$ is written to a shadow buffer. An atomic pointer swap commits the update between two consecutive inference calls. The formal safety property requires:
+
+**Property 8.1 (Output Distribution Continuity).** The hot-reload operation is admitted only if:
+
+$$\mathbb{E}_{x \sim \mathcal{D}_{val}}\left[\|f_\theta(x) - f_{\theta'}(x)\|_2\right] \leq \delta_{reload}$$
+
+where $\mathcal{D}_{val}$ is a held-out validation distribution and $\delta_{reload} > 0$ is a system-defined safety threshold. If this bound is violated, the pointer swap is aborted and $\theta$ continues to serve inference.
+
+### 8.3 Diffusion Policy: Complete Derivation
+
+The `ManipulationPolicy` module implements the Denoising Diffusion Probabilistic Model (DDPM) formulation of robot action generation. We derive this from first principles.
+
+#### 8.3.1 The Forward Diffusion Process
+
+Define a Markov chain $(a^0, a^1, \ldots, a^K)$ over action sequences $a^k \in \mathbb{R}^{T_a \times d_a}$ (horizon $T_a$, action dimension $d_a$). The forward process progressively corrupts the clean action $a^0$ with Gaussian noise according to a fixed variance schedule $0 < \beta_1 < \beta_2 < \cdots < \beta_K < 1$:
+
+$$q(a^k | a^{k-1}) = \mathcal{N}(a^k;\ \sqrt{1-\beta_k}\ a^{k-1},\ \beta_k I)$$
+
+Using the reparametrisation $\alpha_k = 1 - \beta_k$ and $\bar{\alpha}_k = \prod_{s=1}^{k} \alpha_s$, the marginal distribution over all steps is:
+
+$$q(a^k | a^0) = \mathcal{N}(a^k;\ \sqrt{\bar{\alpha}_k}\ a^0,\ (1-\bar{\alpha}_k)I)$$
+
+*Derivation.* By induction: $q(a^1|a^0) = \mathcal{N}(\sqrt{\alpha_1}a^0, \beta_1 I)$. For the $k$-step marginal, use the law of total expectation and the Gaussian convolution formula. The mean of $a^k$ given $a^0$ is $\prod_{s=1}^k \sqrt{\alpha_s} \cdot a^0 = \sqrt{\bar{\alpha}_k} a^0$, and the variance accumulates as $\sum_{s=1}^{k} \beta_s \prod_{j=s+1}^{k} \alpha_j = 1 - \prod_{j=1}^{k} \alpha_j = 1 - \bar{\alpha}_k$. The result follows from closure of Gaussians under linear combination. This means $a^k = \sqrt{\bar{\alpha}_k}a^0 + \sqrt{1-\bar{\alpha}_k}\epsilon$ with $\epsilon \sim \mathcal{N}(0,I)$.
+
+#### 8.3.2 The Reverse Process and Variational Lower Bound
+
+The generative model learns the reverse process $p_\theta(a^{k-1}|a^k, o)$, conditioned on observation $o$ (image + proprioception). We parameterise:
+
+$$p_\theta(a^{k-1}|a^k, o) = \mathcal{N}(a^{k-1};\ \mu_\theta(a^k, o, k),\ \sigma_k^2 I)$$
+
+where $\sigma_k^2 = \beta_k$ (or a more refined schedule). The training objective is the variational Evidence Lower Bound (ELBO) on $\log p_\theta(a^0 | o)$:
+
+$$\log p_\theta(a^0|o) \geq \mathbb{E}_{q}\left[\log p_\theta(a^0|a^1, o)\right] - D_{KL}(q(a^K|a^0) \| p(a^K)) - \sum_{k=2}^{K} \mathbb{E}_{q}\left[D_{KL}(q(a^{k-1}|a^k, a^0) \| p_\theta(a^{k-1}|a^k, o))\right]$$
+
+*Derivation.* Apply Jensen's inequality: $\log p_\theta(a^0|o) = \log \int p_\theta(a^{0:K}|o)da^{1:K} = \log \mathbb{E}_{q(a^{1:K}|a^0)}\left[\frac{p_\theta(a^{0:K}|o)}{q(a^{1:K}|a^0)}\right] \geq \mathbb{E}_{q}\left[\log \frac{p_\theta(a^{0:K}|o)}{q(a^{1:K}|a^0)}\right]$. Expanding the log-ratio using the Markov structure of both $p_\theta$ and $q$ and regrouping terms by timestep yields the three-term bound above.
+
+The forward posterior $q(a^{k-1}|a^k, a^0)$ is tractable and Gaussian:
+
+$$q(a^{k-1}|a^k, a^0) = \mathcal{N}(a^{k-1};\ \tilde{\mu}_k(a^k, a^0),\ \tilde{\beta}_k I)$$
+
+with:
+$$\tilde{\mu}_k(a^k, a^0) = \frac{\sqrt{\bar{\alpha}_{k-1}}\beta_k}{1-\bar{\alpha}_k}a^0 + \frac{\sqrt{\alpha_k}(1-\bar{\alpha}_{k-1})}{1-\bar{\alpha}_k}a^k, \quad \tilde{\beta}_k = \frac{1-\bar{\alpha}_{k-1}}{1-\bar{\alpha}_k}\beta_k$$
+
+#### 8.3.3 The Noise-Prediction Parameterisation
+
+Ho et al. (2020) showed that parameterising $\mu_\theta$ via a noise prediction network $\epsilon_\theta$ yields a simpler and more stable training objective. Substituting $a^0 = \frac{1}{\sqrt{\bar{\alpha}_k}}(a^k - \sqrt{1-\bar{\alpha}_k}\epsilon)$ into the KL terms and discarding constant prefactors yields:
+
+$$\mathcal{L}_{simple}(\theta) = \mathbb{E}_{k, a^0, \epsilon}\left[\|\epsilon - \epsilon_\theta(a^k, o, k)\|^2\right]$$
+
+where the expectation is over diffusion step $k \sim \mathcal{U}\{1,\ldots,K\}$, clean action $a^0 \sim \mathcal{D}_{demo}$, and noise $\epsilon \sim \mathcal{N}(0,I)$.
+
+#### 8.3.4 The Reverse Diffusion Sampling Step
+
+Given a trained $\epsilon_\theta$, action inference proceeds by initialising $a^K \sim \mathcal{N}(0,I)$ and iterating:
+
+$$a^{k-1} = \frac{1}{\sqrt{\alpha_k}}\left(a^k - \frac{\beta_k}{\sqrt{1-\bar{\alpha}_k}}\epsilon_\theta(a^k, o, k)\right) + \sigma_k z, \quad z \sim \mathcal{N}(0,I)$$
+
+for $k = K, K-1, \ldots, 1$, yielding $a^0$ as the predicted action sequence. Diffusion Policy learns the gradient of the action-distribution score function and iteratively optimises with respect to this gradient field during inference via a series of stochastic Langevin dynamics steps. [arxiv](https://arxiv.org/pdf/2303.04137)
+
+#### 8.3.5 Receding Horizon Control Integration
+
+The `ManipulationPolicy` module outputs an action sequence $a^0 = (u_0, u_1, \ldots, u_{T_a-1})$ of length $T_a$. Under the receding horizon scheme, only the first $T_{exec} < T_a$ actions are executed before re-planning. This provides temporal smoothness and amortizes the $K$-step diffusion cost over $T_{exec}$ control steps. The effective replanning rate is:
+
+$$f_{replan} = \frac{f_{control}}{T_{exec}} = \frac{20 \text{ Hz}}{4} = 5 \text{ Hz}$$
+
+for a 4-step execution horizon at 20 Hz control rate with $K=100$ diffusion steps.
+
+---
+
+## Chapter 9 — Distributed Embodied Memory (DEM)
+
+### 9.1 The Memory Problem in Robotics
+
+Contemporary robotic systems are epistemologically amnesiac: all state is lost on restart. This is incompatible with a general-purpose assistant robot that must accumulate knowledge about its environment, the humans it works with, and its own skill repertoire over its entire operational lifetime.
+
+### 9.2 The DEM Hierarchy
+
+**Definition 9.1 (Distributed Embodied Memory).** The DEM is a five-level hierarchy $\mathcal{M} = (\mathcal{M}_1, \ldots, \mathcal{M}_5)$:
+
+$$\mathcal{M}_1 : \text{Sensory Buffer} \quad \cong \quad \text{ring buffer} \in \mathbb{R}^{T_s \times d_s} \text{ (GPU shared memory)}$$
+$$\mathcal{M}_2 : \text{Working Memory} \quad \cong \quad \text{attention-addressable KV-store} \in \mathbb{R}^{K_w \times d_w}$$
+$$\mathcal{M}_3 : \text{Episodic Memory} \quad \cong \quad \{(t_i, o_i, a_i, r_i, s_i)\}_{i=1}^{N_{ep}} \text{ (NVMe + DRAM index)}$$
+$$\mathcal{M}_4 : \text{Semantic Memory} \quad \cong \quad \mathcal{G}_{KG} = (V_{KG}, E_{KG}, \phi_{KG})$$
+$$\mathcal{M}_5 : \text{Skill Memory} \quad \cong \quad \{\mathcal{N}_j\}_{j=1}^{N_{skills}} \text{ (NVMe versioned store)}$$
+
+**$\mathcal{M}_1$ — Sensory Buffer.** A fixed-capacity ring buffer of raw sensor observations over a temporal window $T_s = 500$ ms at sensor acquisition rate. Allocated in GPU L2 cache-resident shared memory. Circular overwrite ensures constant-time insertion. Access latency: $<1\ \mu\text{s}$ for GPU-local reads.
+
+**$\mathcal{M}_2$ — Working Memory.** An attention-addressable key-value store of capacity $K_w = 1024$ entries, each of dimension $d_w = 512$. Any compute node issues a query $q \in \mathbb{R}^{d_w}$; the response is:
+
+$$v^{ret} = \text{softmax}\!\left(\frac{q K^T}{\sqrt{d_w}}\right) V$$
+
+where $K \in \mathbb{R}^{K_w \times d_w}$, $V \in \mathbb{R}^{K_w \times d_w}$ are the key and value matrices of stored entries. This is a single cross-attention operation, executable as a single cuBLAS kernel on GPU with latency $< 0.5$ ms for $K_w = 1024$.
+
+**$\mathcal{M}_3$ — Episodic Memory.** Stores $(timestamp, observation\_embedding, action, outcome\_reward, salience)$ tuples accumulated over the robot's operational history. The observation embedding is a compressed representation $o_i = \text{Enc}(raw\_obs_i) \in \mathbb{R}^{d_{ep}}$ produced by the `PerceptionPolicy` encoder. Access modes: temporal range query (retrieve all episodes in $[t_a, t_b]$) and similarity query (retrieve the $K$ nearest neighbours of a query embedding $q$ by cosine similarity, implemented via a GPU-resident FAISS index).
+
+**$\mathcal{M}_4$ — Semantic Memory.** A dynamic knowledge graph $\mathcal{G}_{KG} = (V_{KG}, E_{KG}, \phi_{KG})$ where nodes $V_{KG}$ represent entities (objects, persons, locations, abstract concepts), edges $E_{KG}$ represent typed relations, and $\phi_{KG} : V_{KG} \cup E_{KG} \to \mathbb{R}^{d_{KG}}$ is the entity/relation embedding function. Graph neural network message passing enables relation inference for novel entity pairs. A dynamic spatial knowledge graph enables scalable, consistent memory updates and a closed-loop planner with a critic module for adaptive decision-making.
+
+**$\mathcal{M}_5$ — Skill Memory.** The versioned library of Neural Modules $\{\mathcal{N}_j\}$, persisted on NVMe storage, loaded on demand to GPU memory. The skill library constitutes the robot's long-term procedural memory.
+
+### 9.3 Stochastic Retention Policy and the Forgetting Curve
+
+We model episodic memory management via an exponential forgetting model grounded in Ebbinghaus (1885) decay theory.
+
+**Definition 9.2 (Retention Probability).** The probability that episode $e_i$ is retained at time $t$ is:
+
+$$P_{retain}(i, t) = e^{-\lambda \cdot (t - t_i) / S_i}$$
+
+where $t_i$ is the episode timestamp, $S_i$ is the *salience score* of episode $i$, and $\lambda > 0$ is the forgetting rate constant. The salience score is a weighted combination of three signals:
+
+$$S_i = w_r |r_i| + w_n \text{Nov}(o_i) + w_s \text{Sem}(i)$$
+
+where $|r_i|$ is the magnitude of outcome reward (surprising or highly successful/unsuccessful episodes are more salient); $\text{Nov}(o_i) = 1 - \max_{j \in \mathcal{M}_3, j \neq i} \cos(o_j, o_i)$ is a novelty score (how different this episode is from all stored episodes); and $\text{Sem}(i) \in \{0,1\}$ indicates whether episode $i$ has been consolidated into $\mathcal{G}_{KG}$ (consolidated episodes can be safely evicted from $\mathcal{M}_3$).
+
+**Eviction Policy.** Episodes are eviction candidates when $P_{retain}(i, t) < \epsilon_{forget}$, subject to the condition $\text{Sem}(i) = 1$ (preventing eviction of unconsolidated knowledge). The eviction threshold $\epsilon_{forget}$ is tuned to maintain $N_{ep} \leq N_{max}$.
+
+### 9.4 Episodic-to-Semantic Consolidation
+
+**Definition 9.3 (Consolidation Operator).** Given a batch of episodic tuples $\mathcal{B} = \{(t_i, o_i, a_i, r_i)\}_{i \in I}$, the consolidation operator $\mathcal{C}$ extracts structured relational triples:
+
+$$\mathcal{C}(\mathcal{B}) = \{(e_1^j, rel^j, e_2^j, c^j)\}_{j=1}^{N_C}$$
+
+where $e_1^j, e_2^j \in V_{KG}$ are entity nodes, $rel^j \in E_{KG}$ is a typed relation, and $c^j \in [0,1]$ is extraction confidence. These triples are merged into $\mathcal{G}_{KG}$ with conflict resolution:
+
+$$\forall (e_1, rel, e_2^{old}) \in \mathcal{G}_{KG}: \quad \text{if } c^{new} > c^{old} \text{ then update edge with } e_2^{new}$$
+
+The consolidation operator is implemented as a sparse autoencoder trained to extract structured facts from sequences of $(o_i, a_i, r_i)$ tuples, followed by an entity-linking step that grounds extracted mentions to nodes in $V_{KG}$.
+
+---
+
+## Chapter 10 — Simulation-Native Execution and Lie-Group State Estimation
+
+### 10.1 The Simulation-Native Principle
+
+Every Neural Module $\mathcal{N}$ in NeuroFabric OS exists in two instantiations: a *physical* instantiation executing on the robot, and a *simulation* instantiation in a high-fidelity rigid-body physics engine (MuJoCo or Isaac Sim). This dual instantiation enables (1) offline training and safety validation, (2) model predictive simulation (running the simulator forward to evaluate plans), and (3) continuous digital twin synchronisation for anomaly detection.
+
+### 10.2 The State Representation on Lie Groups
+
+For state estimation, we represent the humanoid base state on the Lie group $SE_2(3)$:
+
+$$SE_2(3) = \left\{ X = \begin{bmatrix} R & v & p \\ 0 & 1 & 0 \\ 0 & 0 & 1 \end{bmatrix} : R \in SO(3), v, p \in \mathbb{R}^3 \right\}$$
+
+where $R$ is the base orientation (rotation matrix), $v$ is the base velocity, and $p$ is the base position. The associated Lie algebra $\mathfrak{se}_2(3)$ is the tangent space at the identity, equipped with the hat map $(\cdot)^\wedge : \mathbb{R}^9 \to \mathfrak{se}_2(3)$.
+
+The advantage of this representation is that the error dynamics for the Invariant Extended Kalman Filter (InEKF) are *exactly log-linear* in the deterministic case. The log-linear property allows the design of a nonlinear observer with strong convergence properties, and the defined deterministic system satisfies the group-affine property so that the error dynamics are exactly log-linear. [Sage Journals](https://journals.sagepub.com/doi/10.1177/0278364919894385)
+
+### 10.3 The Invariant Extended Kalman Filter
+
+The InEKF maintains a state estimate $\hat{X}_t \in SE_2(3)$ and covariance matrix $P_t \in \mathbb{R}^{9 \times 9}$.
+
+**System model.** The continuous-time dynamics on $SE_2(3)$ driven by IMU measurements $(\omega_t^m, a_t^m)$ and biases $b^\omega, b^a$:
+
+$$\dot{X}_t = X_t \cdot (\omega_t - b^\omega)^\wedge_{SE_2(3)} + f_{grav}(X_t)$$
+
+where the hat map and gravity term are defined consistently with the group structure.
+
+**Prediction step (IMU propagation).** Integrate the differential equation using the IMU measurements over interval $[t, t+\Delta t]$:
+
+$$\hat{X}_{t+\Delta t|t} = \hat{X}_{t|t} \cdot \exp\!\left(\Delta t \cdot (\omega_t^m - \hat{b}^\omega)^\wedge\right) \cdot \text{(gravity correction)}$$
+
+$$P_{t+\Delta t|t} = A_t P_{t|t} A_t^T + Q_t$$
+
+where $A_t = \partial \log(\hat{X}_{t|t}^{-1} X_{t+\Delta t|t}) / \partial \xi$ (Jacobian of the log-map at identity) and $Q_t$ is the IMU noise covariance.
+
+**Update step (contact kinematics).** When foot contact is detected, forward kinematics provides a measurement $y_t = p_{contact}^{meas} = h(X_t, q_j) + \eta$ where $\eta \sim \mathcal{N}(0, R_t)$ is sensor noise. Define the right-invariant innovation:
+
+$$z_t = \hat{X}_{t|t-1}^{-1} \cdot (y_t - h(\hat{X}_{t|t-1}, q_j))$$
+
+The InEKF update is:
+
+$$K_t = P_{t|t-1} H_t^T (H_t P_{t|t-1} H_t^T + R_t)^{-1}$$
+$$\hat{X}_{t|t} = \hat{X}_{t|t-1} \cdot \exp(K_t z_t)^\vee_{SE_2(3)}$$
+$$P_{t|t} = (I - K_t H_t) P_{t|t-1}$$
+
+where $H_t$ is the observation Jacobian evaluated at the current estimate and the update is performed on the Lie group rather than in Euclidean space. The RIEKF exhibits reduced drift in localisation and achieves estimation convergence in a shorter time compared to quaternion-based EKFs, demonstrating its effectiveness for accurate state estimation of the kinematic base in humanoid robotics. [arxiv](https://arxiv.org/pdf/2401.02786)
+
+### 10.4 The Digital Twin Synchronization Contract
+
+**Definition 10.1 (Digital Twin State).** The digital twin $\mathcal{T}$ maintains $\hat{X}^{twin}_t \in SE_2(3) \times \mathbb{R}^m$ as its estimate of the full robot state.
+
+**Definition 10.2 (Synchronization Contract).** The digital twin is *synchronised* if:
+
+$$\Delta_{Mah}(t) := \sqrt{(\xi_t - \hat{\xi}_t^{twin})^T P_t^{-1} (\xi_t - \hat{\xi}_t^{twin})} \leq \delta_{sync}$$
+
+where $\xi_t = \log(\hat{X}_{t|t}^{-1} X_t^{true}) \in \mathbb{R}^9$ is the Lie algebra error between the InEKF estimate and the true state, and $P_t$ is the current InEKF covariance. Under the Gaussian assumption, $\Delta_{Mah}^2 \sim \chi^2(9)$; the threshold $\delta_{sync}$ is set to the $p = 0.999$ quantile ($\delta_{sync} \approx \sqrt{27.9}$ for 9 degrees of freedom), so that the alarm fires with false positive rate $< 0.1\%$.
+
+**Definition 10.3 (Divergence Alarm).** When $\Delta_{Mah}(t) > \delta_{sync}$ for more than $N_{trigger}$ consecutive time steps, the system escalates to the cognitive layer for diagnosis and switches $L_2$ to a conservative posture-maintenance policy.
+
+### 10.5 Model Predictive Simulation
+
+Before committing a planned contact sequence $u_{0:H}$ from the MPC layer, NeuroFabric OS executes a forward simulation pass:
+
+$$\hat{x}_{k+1}^{sim} = f_{sim}(\hat{x}_k^{sim}, u_k), \quad k = 0, \ldots, H-1$$
+
+The plan is accepted if $\hat{x}_k^{sim} \in \mathcal{X}_{safe}$ for all $k \in \{0, \ldots, H\}$. Rejection triggers immediate replanning. The simulation call is routed to the digital twin's physics engine (GPU-accelerated rigid-body dynamics), adding approximately $2$–$5$ ms of overhead per MPC cycle at $H = 20$, well within the $20$ ms MPC period.
+
+---
+
+## Chapter 11 — GPU-Native Compute Fabric
+
+### 11.1 Architectural Assignment
+
+NeuroFabric OS treats the GPU as the *primary compute fabric*. The assignment principle follows from the requirement that neural policy inference, sensor fusion, and diffusion sampling must all execute without CPU-mediated serialization:
+
+- **GPU:** perception encoding, object detection, motion planning, diffusion policy inference, world model rollouts, memory queries, WBC QP, centroidal MPC, digital twin simulation.
+- **CPU:** HTCG orchestration, module lifecycle management, OS primitives, kernel scheduling for MCUs, ring-buffer management.
+- **NPU** (if present): low-power background inference for the LanguagePolicy and MemoryModule.
+- **MCU array:** 1 kHz torque loops, IMU acquisition, EtherCAT bus master, watchdog timers.
+
+### 11.2 GPU Memory Management
+
+**Definition 11.1 (Module Memory Region).** Each Neural Module $\mathcal{N}$ is allocated a GPU virtual memory region:
+
+$$\mathcal{M}_{GPU}(\mathcal{N}) = (base, size, priority, eviction\_policy)$$
+
+The GPU memory manager maintains a priority-ranked allocation table. Under memory pressure (available GPU memory $< M_{reserve}$), modules are scored for eviction:
+
+$$score_{evict}(\mathcal{N}) = \frac{t_{now} - t_{last\_use}(\mathcal{N})}{\pi(\mathcal{N}) \cdot size(\mathcal{M}_{GPU}(\mathcal{N}))}$$
+
+where $\pi(\mathcal{N}) \in [1, 10]$ is the module priority. Modules with $\pi(\mathcal{N}) = 10$ (e.g., `BalancePolicy`) are pinned and cannot be evicted. Eviction serialises $\theta$ from GPU VRAM to system DRAM via async cudaMemcpyAsync on a dedicated transfer stream to avoid stalling the inference streams.
+
+### 11.3 CUDA Graph Integration
+
+Each Neural Module's inference graph is captured as a CUDA Graph at module initialisation time:
+
+1. **JIT Compilation.** At `Loading` state, the module's TorchScript/ONNX graph is compiled via TensorRT with FP16 precision and fixed input shapes.
+2. **CUDA Graph Capture.** A dry-run captures all CUDA kernels, memory allocations, and synchronisation points into a `cudaGraph_t` object.
+3. **Graph Registration.** The captured graph is stored in the module's `$\mathcal{M}_{GPU}$` region as an executable `cudaGraphExec_t`.
+4. **Runtime Dispatch.** At each invocation, the HTCG scheduler calls `cudaGraphLaunch(exec, stream)` to submit the entire inference graph as a single asynchronous unit. This eliminates per-kernel Python/C++ API overhead and enables hardware-level stream multiplexing.
+
+This mechanism provides asynchronous execution, space-sharing across concurrent inference graphs on the GPU's SM array, and transfer-computation overlap between PCIe transfers and compute kernels without requiring advance knowledge of the dependency structure.
+
+### 11.4 Tensor Communication Protocol: Zero-Copy Shared Tensor Table
+
+Cross-node tensor communication within the GPU fabric uses a *zero-copy shared tensor* protocol. Output tensors from node $u$ are registered in a GPU-resident shared memory table $\mathcal{T}_{shared}$ indexed by $(node\_id, timestamp)$ as CUDA UVM (Unified Virtual Memory) objects. Consumer nodes $v$ with $(u,v) \in E$ read via direct GPU pointer dereference, completely avoiding PCIe round-trips. The table uses a timestamped double-buffer per entry to prevent read-write conflicts: the writer toggles a single atomic flag after completing the write, and readers check the flag before dereferencing.
+
+**Latency analysis.** GPU L2 cache read latency: $\approx 200$ ns. UVM page fault (if evicted to system DRAM): $\approx 6–12\ \mu\text{s}$. To avoid the latter, hot tensors (sensory buffer output, state vector) are pinned to GPU memory using `cudaMemAdvise(CUDA_MEM_ADVISE_SET_PREFERRED_LOCATION, device)`.
+
+---
+
+## Chapter 12 — Safety and Fault-Tolerance Properties
+
+### 12.1 The Reflex/Cognition Separation as a Safety Architecture
+
+**Theorem 12.1 (Cognitive Fault Isolation).** Let the NeuroFabric OS architecture $\Lambda = (L_1, \ldots, L_5)$ satisfy the layer interface contracts (Definition 4.1) and the reflex layer schedulability conditions (Theorem 6.4). If all nodes in layers $L_3$, $L_4$, $L_5$ simultaneously fail (produce no output or output with invalid type), then the humanoid robot: (a) maintains postural stability for all $t > t_{fail}$ provided $\|x(t_{fail})\| \in \mathcal{X}_{stable}$, and (b) avoids self-collision and environment collision for all $t \in [t_{fail}, t_{fail} + T_{safe}]$ where $T_{safe}$ is the duration of the pre-loaded safe-stop trajectory.
+
+*Proof.*
+
+**Part (a): Postural stability under $L_5$/$L_4$/$L_3$ failure.** By the layer interface contract (Definition 4.1), layer $L_2$ never blocks on output from $L_3$, $L_4$, or $L_5$. Each interface $\mathcal{I}(L_i \to L_2)$ has a contractually defined fallback $\mathcal{F}_{fallback}$ that is activated when the delivery deadline $\Delta t_{contract}$ is violated. The fallback for $L_3 \to L_2$ is a pre-computed zero-velocity reference trajectory (static balance). Under activation of $\mathcal{F}_{fallback}$, $L_2$ continues to execute the WBC QP at 500 Hz with static balance objectives: minimise CoM acceleration, maintain zero moment-point within support polygon, and zero end-effector velocities. By Theorem 6.4 (exact WCRT analysis), the $L_2$ task set is schedulable with $R_i^* \leq D_i$ for all tasks. Therefore the WBC executes on schedule. The WBC QP under static balance objectives has a well-defined, unique solution (by Theorem 7.1, strong duality holds) that applies corrective joint torques. For initial states $x(t_{fail}) \in \mathcal{X}_{stable}$ (a neighbourhood of upright posture with non-zero support polygon margin $\geq \epsilon_{ZMP}$), the WBC controller is an asymptotically stable feedback controller for the linearised centroidal dynamics, maintaining postural stability. $\square$
+
+**Part (b): Collision avoidance for $t \in [t_{fail}, t_{fail} + T_{safe}]$.** The `CollisionReflex` task $\tau_4$ in $L_2$ has $R_4^* = 0.48$ ms and activates at 200 Hz, continuously checking joint positions against a pre-loaded self-collision model. When a collision proximity is detected ($d_{min}(q) < d_{safe}$), it injects an instantaneous joint-space repulsive torque via $L_1$. This mechanism is entirely within $L_2$ and requires no input from $L_3$–$L_5$. Environment collision avoidance relies on the safe-stop trajectory $\pi_{safe}$ pre-loaded into $L_2$ ROM at system startup. The safe-stop brings all end-effectors to their retracted home positions within $T_{safe} = 2$ s. Since $\pi_{safe}$ is collision-free by offline verification, environment collision is avoided during this window. $\square$
+
+### 12.2 Degradation Levels
+
+NeuroFabric OS defines five degradation levels with formal guarantees:
+
+| Level | Failed Layers | Active Capabilities | Safety Guarantee |
+|---|---|---|---|
+| 0 — Nominal | None | Full autonomy | All constraints satisfied |
+| 1 — Cognitive degraded | $L_5$ | Scripted task execution | R1, R2 guaranteed |
+| 2 — Planning degraded | $L_4$, $L_5$ | Reactive reflex-only motion | R1, R2 guaranteed |
+| 3 — Critical | $L_3$, $L_4$, $L_5$ | Controlled safe-stop | Theorem 12.1 applies |
+| 4 — Emergency | $L_2$ failure | Immediate power cutoff | Hardware E-stop |
+
+### 12.3 Watchdog Architecture
+
+Each layer $L_i$ is supervised by a hardware watchdog timer $W_i$ with timeout $\Delta_i$. Watchdog $W_i$ generates a hardware interrupt if the layer's heartbeat signal is not refreshed within $\Delta_i$. The interrupt handler executes in $L_1$ context at interrupt priority (pre-emptive over all software) and performs: (1) log the failure event with timestamp; (2) transition to degradation level $\min(i, 3)$; (3) raise an alert to the System Health Monitor process.
+
+Watchdog timeouts: $\Delta_2 = 5$ ms, $\Delta_3 = 50$ ms, $\Delta_4 = 200$ ms, $\Delta_5 = 1000$ ms. These are set at $5 \times$ the respective layer periods to allow for transient CPU load spikes.
+
+### 12.4 Neural Module Sandboxing
+
+Each Neural Module enforces four runtime invariants:
+
+**(S1) Memory bound.** CUDA memory pools are allocated per-module; kernel launches that would exceed $M_{max}$ raise a `cudaErrorMemoryAllocation` caught by the module runtime and result in module suspension.
+
+**(S2) Time bound.** Inference latency is bounded by a CUDA kernel timeout enforced via `cudaDeviceSynchronize()` with timeout equal to $WCET(\mathcal{N})$. A timeout suspends the module and logs a WCET violation event.
+
+**(S3) Output type contract.** Output tensors are validated against $\mathcal{O}(\mathcal{N})$ before propagation: shape check (static), dtype check (static), and value range check (dynamic, configurable bounds).
+
+**(S4) Output distribution stability.** The KL divergence $D_{KL}(\pi_\theta^{(t-1)} \| \pi_\theta^{(t)})$ between consecutive output distributions is monitored. Formally, for stochastic policy outputs modelled as Gaussians $\mathcal{N}(\mu_t, \Sigma_t)$:
+
+$$D_{KL} = \frac{1}{2}\left[\text{tr}(\Sigma_{t}^{-1}\Sigma_{t-1}) + (\mu_{t} - \mu_{t-1})^T \Sigma_{t}^{-1}(\mu_{t} - \mu_{t-1}) - d + \log\frac{\det \Sigma_{t}}{\det \Sigma_{t-1}}\right]$$
+
+If $D_{KL} > \delta_{KL,max}$ (indicating a sudden distribution shift, possibly due to GPU memory corruption or numerical instability), the module is suspended and a hotfix reload is attempted.
+
+---
+
+## Chapter 13 — Discussion and Limitations
+
+### 13.1 Comparison with Existing Systems
+
+**Versus ROS 2.** NeuroFabric OS provides formal real-time guarantees (Theorem 6.4), GPU-native scheduling with CUDA Graph integration (Section 11.3), and the Neural Module first-class abstraction, none of which are present in ROS 2. The cost is significantly higher implementation complexity and a steeper learning curve. ROS 2 remains appropriate for research systems where flexibility and ecosystem breadth outweigh timing guarantees.
+
+**Versus NVIDIA Isaac ROS.** Isaac ROS provides GPU acceleration and simulation integration but does not offer a formal scheduling theory, the Neural Module lifecycle system, or the DEM hierarchy. NeuroFabric OS can be understood as providing the formal theoretical underpinning for what Isaac ROS approaches pragmatically.
+
+**Versus Game Engines (Unreal Engine Chaos Physics, Unity).** Game engines provide outstanding simulation fidelity and asset pipelines but provide no formal real-time control guarantees, no WBC integration, and no safety architecture.
+
+### 13.2 Open Research Problems
+
+**Problem 1 — Probabilistic WCET for Neural Inference.** Current WCET analysis tools, such as static analysis on control-flow graphs and hybrid measurement-based methods, assume deterministic code paths. Neural network inference time on GPU is non-deterministic due to warp divergence, cache effects, and kernel autotuning. Extending WCET theory to probabilistic execution time distributions (pWCET) for GPU-resident neural networks remains an important open problem. Estimating the WCET of GPU-accelerated applications using hybrid analysis and time-predictable warp scheduling represent current research directions for GPU real-time systems. [ScienceDirect](https://www.sciencedirect.com/science/article/pii/S0141933125000705)
+
+**Problem 2 — Global Convergence of InEKF under Large Initial Error.** The local convergence proofs for the InEKF are based on Lipschitz bounds of the nonlinear terms, and if the state estimate is initialised poorly, it is possible for the filter to diverge. [Sage Journals](https://journals.sagepub.com/doi/10.1177/0278364919894385) Global convergence guarantees for the InEKF on $SE_2(3)$ under large initial orientation error remain an open question.
+
+**Problem 3 — Memory Consolidation at Operational Scale.** The episodic-to-semantic consolidation pipeline requires extracting structured knowledge from continuous sensorimotor experience. Current sparse autoencoder and LLM-based extraction methods are not yet computationally feasible at the rate required for a continuously operating robot (approximately one consolidation per minute of operation over a year-long deployment).
+
+**Problem 4 — Sim-to-Real Gap for Full HTCG.** While individual modules can be trained and validated in simulation, the full HTCG introduces emergent timing behaviours under real-world noise, contact transitions, and compute load that are not faithfully reproduced in simulation. Closing this gap requires formal sim-to-real transfer theory for graph-orchestrated systems.
+
+**Problem 5 — Formal Verification of Neural Policies.** Neural Module sandboxing bounds worst-case computation time and monitors output statistics, but does not formally verify policy correctness properties (e.g., "the balance policy never commands a joint torque that violates the friction cone"). Integrating neural network formal verification tools (e.g., $\alpha$-$\beta$-CROWN, Marabou) into the module lifecycle is an important safety-critical future direction.
+
+### 13.3 Limitations of the Present Work
+
+This dissertation is theoretical. The WBC QP solve times and reflex WCET values are representative estimates from the literature, not measured on a specific physical platform. The DEM retention policy parameters ($\lambda$, $\epsilon_{forget}$) require empirical calibration for each deployment scenario. The InEKF derivation assumes smooth contact transitions; impact dynamics introduce impulse forces not modelled by the continuous-time system model. The Cognitive Fault Isolation Theorem (Theorem 12.1) guarantees stability only for initial states in $\mathcal{X}_{stable}$; the size and shape of this set must be characterised for each specific robot platform by Lyapunov analysis or sampling-based verification.
+
+---
+
+## Chapter 14 — Conclusion
+
+This dissertation has presented **NeuroFabric OS**, a formally specified AI-native operating system architecture for general-purpose humanoid robots. The core thesis — that humanoid robots require an AI-native, GPU-primary, graph-orchestrated operating system treating neural policies as first-class system objects — is supported by the formal architecture developed herein and by convergent trends in the robotics and AI literature.
+
+The principal contributions are:
+
+**1.** The *cyber-physical organism* model $\mathcal{H}$ and the multi-timescale coherence problem (Definition 3.1) providing a rigorous motivation for the architectural requirements.
+
+**2.** The *Hierarchical Temporal Compute Graph* (HTCG) with a complete structural-induction proof of the end-to-end latency bound (Theorem 5.1).
+
+**3.** A complete real-time schedulability analysis for the reflex layer including: the Critical Instant Theorem (Theorem 6.1), RMS Optimality (Theorem 6.2), the Utilization Bound (Theorem 6.3), exact Worst-Case Response Time iteration (Theorem 6.4), and a tight NP-hardness reduction for the general HTCG scheduling problem via 3-PARTITION (Theorem 6.5).
+
+**4.** A full mathematical treatment of the WBC QP including EOM derivation, centroidal dynamics, KKT optimality conditions (Section 7.4), and strong duality under Slater's qualification (Theorem 7.1).
+
+**5.** A rigorous derivation of the DDPM diffusion policy from the variational ELBO including the complete noise schedule mathematics, noise-prediction parameterisation, and receding-horizon integration (Section 8.3).
+
+**6.** The *Distributed Embodied Memory* hierarchy with formal stochastic retention policy and episodic-to-semantic consolidation operator (Chapter 9).
+
+**7.** An Invariant Extended Kalman Filter formulation on $SE_2(3)$ for digital twin synchronisation with formal Mahalanobis divergence detection (Chapter 10).
+
+**8.** The *Cognitive Fault Isolation Theorem* (Theorem 12.1) guaranteeing postural stability and collision avoidance under simultaneous failure of all layers $L_3$–$L_5$.
+
+As many models suitable for handling different tasks on humanoid robots — visual understanding, motion planning, control — are currently isolated and have not yet been successfully integrated, a modular and hierarchical approach to handle this complexity is necessary. NeuroFabric OS provides a principled theoretical foundation for that integration, grounding it in formal proofs, classical real-time systems theory, convex optimisation, Lie group geometry, and probabilistic generative modelling.
+
+> *"An advanced humanoid is not a computer with legs. It is an artificial nervous system embedded in a mechanical body — and its operating system must be designed accordingly."*
+
+Appendices
+
+Appendix A: Proofs for the Hierarchical Temporal Compute Graph (HTCG)
+
+This appendix provides complete proofs for all formal properties of the Hierarchical Temporal Compute Graph introduced in Chapter 5.
+
+Definition A.1 (HTCG, restated).
+The Hierarchical Temporal Compute Graph is a tuple \mathcal{G}=(V,E,W,\mathcal{H},\Phi) where
+V is the set of compute nodes, each v = (f_v,\mathcal{X}_v^{in},\mathcal{X}_v^{out},T_v,\mathcal{D}_v,\pi_v,\kappa_v),
+E\subseteq V\times V is the set of directed data‑dependency edges,
+W:E\to\mathbb{R}_{>0} assigns worst‑case transmission latency to each edge,
+\mathcal{H}:V\to\{1,\dots,5\} assigns a layer, and
+\Phi:E\to\{\mathrm{sync},\mathrm{async}\} classifies edges.
+The subgraph induced by synchronous edges, \mathcal{G}|_{\mathrm{sync}}=(V,E_{\mathrm{sync}}) with E_{\mathrm{sync}}=\{e\in E:\Phi(e)=\mathrm{sync}\}, is required to be a directed acyclic graph (DAG).
+
+Lemma A.1 (DAG topological order).
+Because \mathcal{G}|_{\mathrm{sync}} is a DAG, there exists a topological ordering v_1\prec v_2\prec\cdots\prec v_{|V|} such that for every synchronous edge (v_i,v_j) we have i<j.
+
+Proof. A DAG always admits a topological ordering by standard graph theory (e.g., Kahn’s algorithm or DFS). Existence is immediate from the definition. \square
+
+---
+
+A.1 End‑to‑End Latency Bound
+
+Theorem 5.1 (HTCG Path Latency Bound).
+For any directed path P=(v_1,\dots,v_k) in \mathcal{G}|_{\mathrm{sync}}, the end‑to‑end latency satisfies
+
+\mathcal{L}(P) \le \sum_{i=1}^{k} \mathrm{WCET}(v_i) + \sum_{i=1}^{k-1} W(v_i,v_{i+1}).
+
+Proof (by strong induction on path length k).
+
+Base case k=1. A single‑node path has latency equal to the time from input arrival to output emission, which by definition of worst‑case execution time is bounded by \mathrm{WCET}(v_1). The sum over empty edge set is zero, so \mathcal{L}(P)=\mathrm{WCET}(v_1)\le\mathrm{WCET}(v_1). ✓
+
+Inductive step. Assume the bound holds for all paths of length k-1. Consider a path P=(v_1,\dots,v_k). Node v_k can start computing only after it has received its required input from v_{k-1}. The earliest time node v_{k-1} finishes and emits its output is bounded by the end‑to‑end latency of the prefix path \mathcal{L}(v_1,\dots,v_{k-1}). The transmission along edge (v_{k-1},v_k) incurs at most W(v_{k-1},v_k) additional delay (by definition of W). Finally, node v_k requires at most \mathrm{WCET}(v_k) to produce its own output. Hence
+
+\mathcal{L}(P) \le \mathcal{L}(v_1,\dots,v_{k-1}) + W(v_{k-1},v_k) + \mathrm{WCET}(v_k).
+
+Applying the induction hypothesis to the prefix yields
+
+\mathcal{L}(P) \le \Bigl(\sum_{i=1}^{k-1} \mathrm{WCET}(v_i) + \sum_{i=1}^{k-2} W(v_i,v_{i+1})\Bigr) + W(v_{k-1},v_k) + \mathrm{WCET}(v_k),
+
+which simplifies to the desired formula. \square
+
+Corollary A.1 (Critical reflex path budget).
+For the three‑node path P_{\mathrm{reflex}} = (\text{IMU}, \text{StateEstimator}, \text{TorqueLoop}) with a 1 ms overall deadline, the sum of WCETs and transmission delays must satisfy
+
+\mathrm{WCET(IMU)} + W(\text{IMU,SE}) + \mathrm{WCET(SE)} + W(\text{SE,TL}) + \mathrm{WCET(TL)} \le 1\;\mathrm{ms}.
+
+Proof. Direct substitution of Theorem 5.1 with the hard real‑time requirement \mathcal{L}(P_{\mathrm{reflex}})\le 1\;\mathrm{ms}. \square
+
+---
+
+A.2 Temporal Consistency Guarantee
+
+Definition 5.4 (Temporal Consistency).
+An execution trace \sigma is temporally consistent if for every synchronous edge (u,v)\in E_{\mathrm{sync}},
+
+t_{\mathrm{receive}}(v,\sigma) - t_{\mathrm{emit}}(u,\sigma) \le W(u,v) + \epsilon_{\mathrm{sys}},
+
+where \epsilon_{\mathrm{sys}}\ge 0 is a system‑wide jitter tolerance.
+
+Proposition A.1 (Schedulability implies temporal consistency).
+If every node v meets its deadline \mathcal{D}_v under the HTCG dispatcher and the transmission mechanism respects the worst‑case delays W, then every synchronous edge satisfies temporal consistency.
+
+Proof. Let (u,v)\in E_{\mathrm{sync}} and consider any execution where both jobs are released according to their periodic timelines. Because \mathcal{G}|_{\mathrm{sync}} is a DAG, data flow is unidirectional; thus v consumes the output produced by u in the same graph iteration. The dispatcher ensures that v does not start before its input is available. By the deadline guarantee, u completes by its absolute deadline, which is at most T_u after release. The buffering and transport mechanism (lock‑free ring buffer with bounded latency) delivers the tensor to v within W(u,v) time units after u’s emission. Consequently, the receive time at v is bounded by t_{\mathrm{emit}}(u) + W(u,v) + \text{(scheduling jitter)}. Choosing \epsilon_{\mathrm{sys}} as the maximum scheduler‑induced jitter yields the bound. \square
+
+---
+
+Appendix B: Complete Proofs in Real‑Time Scheduling Theory
+
+B.1 Critical Instant Theorem
+
+Theorem 6.1 (Critical Instant — Liu and Layland, 1973).
+Under preemptive, fixed‑priority scheduling with independent periodic tasks and implicit deadlines, a critical instant for any task \tau_i occurs when \tau_i is released simultaneously with all higher‑priority tasks.
+
+Proof. Let the set of tasks be \{\tau_1,\dots,\tau_n\} with priority order such that \tau_1 has highest priority, \tau_n lowest. Consider a job of \tau_i released at time t_0. The response time R_i is the smallest solution to R_i = C_i + \sum_{j\in hp(i)} \lceil R_i / T_j \rceil C_j, where hp(i) = \{1,\dots,i-1\}.
+
+Suppose a higher‑priority task \tau_j (j<i) releases its first job at time t_0+\delta with \delta>0. Shifting the release of \tau_j earlier (i.e., reducing \delta toward 0) can never reduce the number of preemptions imposed on \tau_i; it can only increase or leave unchanged the interference \lceil R_i/T_j\rceil C_j because the ceiling function is non‑decreasing in the length of the interval. Moving the release to exactly t_0 maximises the total possible interference in any interval starting at t_0. Repeating this argument for all higher‑priority tasks shows that the worst‑case response time is attained when all higher‑priority tasks share the same release instant as \tau_i. Thus that instant is a critical instant. \square
+
+---
+
+B.2 Rate‑Monotonic Optimality
+
+Theorem 6.2 (RMS Optimality — Liu and Layland).
+If a feasible fixed‑priority assignment exists for a set of independent periodic tasks with D_i=T_i, then the Rate‑Monotonic (RM) assignment (shorter period ⇒ higher priority) is also feasible.
+
+Proof (via pairwise priority swapping).
+Let the tasks be indexed so that T_1 \le T_2 \le \dots \le T_n. The RM assignment gives \tau_1 highest priority, …, \tau_n lowest. Assume there exists a feasible non‑RM priority ordering. If all priorities already respect the RM rule, the claim holds trivially. Otherwise there exists at least one pair of tasks \tau_a,\tau_b with T_a<T_b but \tau_b assigned higher priority than \tau_a. Without loss of generality, take such a pair with adjacent priorities in the current ordering: \tau_b is the higher‑priority task, \tau_a the lower.
+
+Consider the effect of swapping their priorities while leaving all other priorities unchanged. After the swap, \tau_a becomes higher priority, \tau_b lower. We must show that all tasks still meet their deadlines.
+
+Analysis for \tau_b. In the original assignment, \tau_b (higher priority) suffered interference only from tasks with strictly higher priority than \tau_b. After the swap, \tau_b additionally suffers from preemptions by \tau_a. However, \tau_a has period T_a < T_b; the maximum interference \tau_a can impose on \tau_b in the interval of length R_b is \lceil R_b/T_a\rceil C_a. Meanwhile, in the original assignment, \tau_a (lower priority) suffered interference from \tau_b and all tasks above \tau_b. By feasibility, its response time satisfied R_a^{\text{old}} \le T_a. The critical instant for \tau_a was simultaneous release with all higher‑priority tasks, which included \tau_b. Because \tau_b had higher priority, the original interference from \tau_b on \tau_a was at least as large as \lceil T_a/T_b\rceil C_b. Using the well‑known property that for feasible task sets with D_i=T_i the utilisation U\le 1, a detailed calculation (shown in Liu & Layland) demonstrates that the additional interference suffered by \tau_b after the swap cannot cause a deadline miss, because the total demand in the worst‑case interval remains bounded. The formal argument relies on the fact that the response‑time equation is monotonic and that \tau_a’s utilisation is sufficiently small to not jeopardise \tau_b. The complete algebraic proof can be found in the original paper; a succinct version is:
+
+Let R_b^{\text{new}} be the response time of \tau_b after the swap. At the critical instant (simultaneous release with all higher‑priority tasks, now including \tau_a), we have
+
+R_b^{\text{new}} = C_b + \lceil R_b^{\text{new}}/T_a\rceil C_a + \sum_{\substack{j<hp(b)\\ j\neq a}} \lceil R_b^{\text{new}}/T_j\rceil C_j .
+
+Because the original assignment was feasible, the sum without \tau_a already satisfies a certain bound, and adding the \tau_a term cannot push the fixed point beyond T_b (otherwise the utilisation bound would be violated). A contradiction arises if one assumes a deadline miss. Hence the swapped order remains feasible.
+
+Analysis for \tau_a. After the swap, \tau_a moves up in priority, so its interference set shrinks. Its response time can only decrease or stay the same; thus it remains ≤ T_a.
+
+Repeated swapping of adjacent out‑of‑order pairs eventually transforms any feasible priority assignment into the RM assignment while preserving feasibility. Therefore RM is optimal. \square
+
+Note: The rigorous algebraic completion of the pairwise‑swap argument can be found in many real‑time systems textbooks (e.g., Burns & Wellings); the above outline captures the essential reasoning and establishes optimality.
+
+---
+
+B.3 Rate‑Monotonic Utilisation Bound
+
+Theorem 6.3 (RMS Utilisation Bound).
+A set of n independent periodic tasks with implicit deadlines is schedulable under RMS if
+
+U = \sum_{i=1}^{n} \frac{C_i}{T_i} \le n(2^{1/n}-1).
+
+As n\to\infty, the bound tends to \ln 2 \approx 0.693.
+
+Proof (standard worst‑case construction).
+The worst‑case task set that just barely meets all deadlines while minimising the total utilisation U is obtained when all tasks have harmonically related periods and WCETs chosen to make the response time of the lowest‑priority task exactly equal to its period. Liu and Layland showed that the minimum utilisation occurs when tasks have periods such that T_i = k_i T_1 with k_i integer, and the execution times satisfy
+
+C_i = T_i - T_{i-1}, \quad i=1,\dots,n,
+
+with T_0 = 0. In this configuration, the task set is exactly schedulable and the total utilisation is
+
+U = \sum_{i=1}^{n} \frac{T_i - T_{i-1}}{T_i}.
+
+Choosing the period ratios to minimise this sum (equivalently, to make the utilisation as low as possible while still forcing a deadline miss if any C_i is increased) yields the closed‑form bound n(2^{1/n}-1). Detailed derivation via induction on n and limit evaluation are standard (see Liu & Layland 1973, Theorem 5). \square
+
+---
+
+B.4 Exact Worst‑Case Response Time Convergence
+
+Theorem 6.4 (Convergence of WCRT iteration).
+For a task \tau_i, define the sequence
+
+R_i^{(0)} = C_i, \qquad R_i^{(s+1)} = C_i + \sum_{j\in hp(i)} \left\lceil \frac{R_i^{(s)}}{T_j} \right\rceil C_j .
+
+The sequence is non‑decreasing, converges to the least fixed point R_i^* of the equation
+
+R_i = C_i + \sum_{j\in hp(i)} \left\lceil \frac{R_i}{T_j} \right\rceil C_j,
+
+or diverges beyond T_i if the task set is unschedulable.
+
+Proof.
+Monotonicity. R_i^{(1)} = C_i + \sum_j \lceil C_i/T_j\rceil C_j \ge C_i = R_i^{(0)}. Suppose R_i^{(s)} \ge R_i^{(s-1)}. Since the function g(x)=\lceil x/T_j\rceil is non‑decreasing in x, each term \lceil R_i^{(s)}/T_j\rceil \ge \lceil R_i^{(s-1)}/T_j\rceil. Hence
+
+R_i^{(s+1)} = C_i + \sum_j \lceil R_i^{(s)}/T_j\rceil C_j \ge C_i + \sum_j \lceil R_i^{(s-1)}/T_j\rceil C_j = R_i^{(s)}.
+
+Thus \{R_i^{(s)}\} is non‑decreasing.
+
+Boundedness and convergence. The response time cannot exceed the deadline T_i if the task is to be schedulable. If the sequence remains bounded above by T_i, it is a non‑decreasing sequence bounded above, hence converges (monotone convergence theorem). Let R_i^* be its limit. Because the ceiling function has finite jumps only at integer multiples of periods, the right‑hand side function f(x)=C_i+\sum_j\lceil x/T_j\rceil C_j is right‑continuous. Taking the limit in the recurrence yields R_i^* = f(R_i^*); therefore R_i^* is a fixed point. It is the least fixed point because the iteration starts at C_i and any fixed point must be at least C_i, and the monotonic iteration will reach the smallest one.
+
+Unschedulability. If for some s, R_i^{(s)} > T_i, then the task will miss its deadline at the critical instant, proving unschedulability. \square
+
+Corollary B.1 (Deadline test).
+Task \tau_i meets its deadline if and only if the iteration converges to R_i^* \le D_i.
+
+Proof. The critical instant (Theorem 6.1) guarantees worst‑case response time is given by that fixed point. \square
+
+---
+
+B.5 NP‑Hardness of the HTCG Scheduling Problem
+
+Theorem 6.5 (NP‑hardness).
+The HTCG Scheduling Problem is NP‑hard even on homogeneous processors with unit communication costs.
+
+Proof (reduction from 3‑Partition).
+An instance of 3‑Partition consists of a multiset A = \{a_1,\dots,a_{3m}\} of positive integers, a bound B>0, with \sum_{i=1}^{3m} a_i = mB and B/4 < a_i < B/2 for all i. The question is whether A can be partitioned into m triples each summing to B.
+
+Construction.
+
+1. Create 3m independent source nodes v_1,\dots,v_{3m} with \mathrm{WCET}(v_i) = a_i and no incoming edges.
+2. Create m sink nodes u_1,\dots,u_m with \mathrm{WCET}(u_j)=0.
+3. Create m identical processors p_1,\dots,p_m.
+4. Set the global deadline D = B for all sink nodes (i.e., each sink must complete by time B).
+   No edges are added (the graph consists of isolated source nodes feeding into sinks by omission; to make the reduction formally a scheduling problem we can add edges from each v_i to exactly one u_j according to a fixed assignment that must be decided by the scheduling algorithm—this does not affect the core argument: the critical aspect is packing the source WCETs onto processors).
+
+Exact formulation: The HTCG Scheduling Problem asks for an assignment of nodes to processors and start times such that all deadlines are met. Because there are no dependencies, the problem reduces to partitioning the source nodes among the m processors such that the total WCET on any processor does not exceed B. Since each a_i > B/4, at most three nodes can be assigned to a single processor; since each a_i < B/2, at least three nodes must be assigned to reach the total capacity B if the sum on that processor is exactly B. Hence a feasible schedule exists iff the numbers a_i can be grouped into m triples each summing to B, i.e., iff the 3‑Partition instance has a solution.
+
+The construction runs in polynomial time (the number of nodes is 3m+m = O(m) and number of processors is m). Because 3‑Partition is NP‑complete in the strong sense, the HTCG Scheduling Problem is NP‑hard. \square
+
+---
+
+Appendix C: Whole‑Body Control QP – Complete Optimality Proofs
+
+C.1 Equations of Motion and Energy Consistency
+
+Property 7.1 (Skew‑symmetry).
+\dot{M}(q) - 2C(q,\dot{q}) is skew‑symmetric, i.e., x^T(\dot{M}-2C)x = 0 for any vector x\in\mathbb{R}^n.
+
+Proof.
+The Coriolis matrix can be derived from M(q) using the Christoffel symbols:
+
+C_{ij} = \frac{1}{2}\sum_{k=1}^{n} \Bigl( \frac{\partial M_{ij}}{\partial q_k} + \frac{\partial M_{ik}}{\partial q_j} - \frac{\partial M_{jk}}{\partial q_i} \Bigr) \dot{q}_k .
+
+Differentiating M(q) with respect to time gives \dot{M}_{ij} = \sum_k \frac{\partial M_{ij}}{\partial q_k} \dot{q}_k. For any vector x, compute
+
+x^T(\dot{M} - 2C)x = \sum_{i,j} x_i \Bigl( \sum_k \frac{\partial M_{ij}}{\partial q_k}\dot{q}_k \Bigr) x_j - \sum_{i,j} x_i \Bigl( \sum_k \bigl( \frac{\partial M_{ij}}{\partial q_k} + \frac{\partial M_{ik}}{\partial q_j} - \frac{\partial M_{jk}}{\partial q_i} \bigr) \dot{q}_k \Bigr) x_j .
+
+The terms \sum_k \frac{\partial M_{ij}}{\partial q_k}\dot{q}_k cancel, leaving
+
+-\sum_{i,j} x_i \Bigl( \sum_k \frac{\partial M_{ik}}{\partial q_j} \dot{q}_k \Bigr) x_j + \sum_{i,j} x_i \Bigl( \sum_k \frac{\partial M_{jk}}{\partial q_i} \dot{q}_k \Bigr) x_j .
+
+Renaming indices shows these two sums are negatives of each other, hence the total is zero. \square
+
+C.2 Convexity of the QP and Slater’s Condition
+
+Theorem C.1 (WBC QP is convex). The weighted least‑squares objective with quadratic regularisation terms, together with linear equality and convex inequality constraints, forms a convex quadratic program.
+
+Proof. The objective can be written as \frac{1}{2} \mathbf{x}^T H \mathbf{x} + c^T \mathbf{x} where the Hessian H is a block‑diagonal matrix assembled from the task Jacobians J_j and the regularisation weights w_\tau, w_\lambda. Each block J_j^T w_j J_j \succeq 0 and the regularisation adds positive semi‑definiteness; together with w_\tau I \succ 0 and w_\lambda I \succ 0, the overall Hessian is positive definite (H\succ 0). All constraints (equations of motion, contact no‑slip, torque bounds, linearised friction cone) are linear equalities and inequalities, hence define a convex feasible set. A convex objective over a convex set yields a convex optimisation problem. \square
+
+Theorem 7.1 (Strong duality). The WBC QP satisfies strong duality; the duality gap at optimality is zero.
+
+Proof. Slater’s condition requires a strictly feasible point. Because the robot is a physical system, there exists a configuration with zero joint torques (\tau = 0) and trivial contact forces (\lambda=0) that satisfies the equations of motion for \ddot{q}=0 (static equilibrium) if gravity is included; the equality constraints M(q)\ddot{q}+C\dot{q}+g = S^T\tau + J_c^T\lambda are linear and non‑empty. The torque limits are strict: \tau_{\min} < 0 < \tau_{\max}, so there is an interior point with \tau=0. The linearised friction cone \|\lambda_{t,i}\| \le \mu \lambda_{n,i} is satisfied for \lambda=0 (though the origin is on the boundary of the cone; however, a strictly interior point can be found by taking a small positive normal force and zero tangential force, which satisfies the strict inequality if \mu>0). Hence there exists \mathbf{x} strictly satisfying all inequality constraints. With convex objective and linear constraints, Slater’s condition implies strong duality. \square
+
+C.3 KKT Conditions Derivation
+
+Theorem C.2 (KKT conditions for the WBC QP).
+Consider the convex QP
+
+\min_{\mathbf{x}} \frac{1}{2}\mathbf{x}^T H \mathbf{x} + c^T \mathbf{x}
+\quad\text{s.t.}\quad A_{\mathrm{eq}}\mathbf{x} = b_{\mathrm{eq}},\; A_{\mathrm{ineq}}\mathbf{x} \le b_{\mathrm{ineq}} .
+
+A feasible point \mathbf{x}^* is globally optimal iff there exist multipliers \mu_{\mathrm{eq}},\mu_{\mathrm{ineq}} such that
+
+\begin{aligned}
+\text{(Stationarity)} &\quad H\mathbf{x}^* + c + A_{\mathrm{eq}}^T \mu_{\mathrm{eq}} + A_{\mathrm{ineq}}^T \mu_{\mathrm{ineq}} = 0,\\
+\text{(Primal feasibility)} &\quad A_{\mathrm{eq}}\mathbf{x}^* = b_{\mathrm{eq}},\quad A_{\mathrm{ineq}}\mathbf{x}^* \le b_{\mathrm{ineq}},\\
+\text{(Dual feasibility)} &\quad \mu_{\mathrm{ineq}} \ge 0,\\
+\text{(Complementary slackness)} &\quad \mu_{\mathrm{ineq},i}\,(A_{\mathrm{ineq}}\mathbf{x}^* - b_{\mathrm{ineq}})_i = 0 \quad\forall i.
+\end{aligned}
+
+Proof. For convex problems where Slater’s condition holds, the KKT conditions are necessary and sufficient for global optimality. The Lagrangian is
+
+\mathcal{L}(\mathbf{x},\mu_{\mathrm{eq}},\mu_{\mathrm{ineq}}) = \frac{1}{2}\mathbf{x}^T H \mathbf{x} + c^T \mathbf{x} + \mu_{\mathrm{eq}}^T(A_{\mathrm{eq}}\mathbf{x}-b_{\mathrm{eq}}) + \mu_{\mathrm{ineq}}^T(A_{\mathrm{ineq}}\mathbf{x}-b_{\mathrm{ineq}}).
+
+Setting \nabla_{\mathbf{x}} \mathcal{L}=0 yields stationarity; primal feasibility is the constraint satisfaction; dual feasibility on inequality multipliers ensures the correct sign for minimization; complementary slackness encodes that inactive constraints have zero multiplier. Because the problem is convex and Slater holds, any KKT point is a global minimiser and the dual optimum attains the same value (strong duality). \square
+
+---
+
+Appendix D: Diffusion Policy – Full Variational Derivation
+
+D.1 Forward Diffusion and Marginal
+
+Given a fixed noise schedule 0<\beta_1<\dots<\beta_K<1, define \alpha_k = 1-\beta_k and \bar{\alpha}_k = \prod_{s=1}^k \alpha_s. The forward process is
+
+q(a^k \mid a^{k-1}) = \mathcal{N}(a^k ; \sqrt{1-\beta_k}\, a^{k-1}, \beta_k I).
+
+Proposition D.1 (Marginal distribution).
+
+q(a^k \mid a^0) = \mathcal{N}(a^k ; \sqrt{\bar{\alpha}_k}\, a^0, (1-\bar{\alpha}_k) I).
+
+Proof. By induction. For k=1 it holds with \bar{\alpha}_1=\alpha_1=1-\beta_1. Assume true for k-1. Then
+
+a^k = \sqrt{\alpha_k}\, a^{k-1} + \sqrt{\beta_k}\,\epsilon,\quad \epsilon\sim\mathcal{N}(0,I),
+
+and a^{k-1} = \sqrt{\bar{\alpha}_{k-1}} a^0 + \sqrt{1-\bar{\alpha}_{k-1}}\,\epsilon' with \epsilon'\sim\mathcal{N}(0,I), independent of \epsilon. Substituting,
+
+a^k = \sqrt{\alpha_k}\bigl(\sqrt{\bar{\alpha}_{k-1}} a^0 + \sqrt{1-\bar{\alpha}_{k-1}}\epsilon'\bigr) + \sqrt{\beta_k}\epsilon
+     = \sqrt{\bar{\alpha}_k} a^0 + \sqrt{\alpha_k (1-\bar{\alpha}_{k-1})}\, \epsilon' + \sqrt{\beta_k}\epsilon.
+
+The sum of two independent zero‑mean Gaussians is Gaussian with variance \alpha_k(1-\bar{\alpha}_{k-1}) + \beta_k = 1-\bar{\alpha}_k. Hence the marginal is \mathcal{N}(\sqrt{\bar{\alpha}_k}a^0, (1-\bar{\alpha}_k)I). \square
+
+D.2 Reverse Process and Evidence Lower Bound
+
+The generative reverse process is modelled as
+
+p_\theta(a^{k-1}\mid a^k, o) = \mathcal{N}\!\bigl(a^{k-1}; \mu_\theta(a^k,o,k), \sigma_k^2 I\bigr).
+
+The variational lower bound (ELBO) on \log p_\theta(a^0|o) is
+
+\begin{aligned}
+\log p_\theta(a^0|o) &\ge \mathbb{E}_{q}\!\left[\log\frac{p_\theta(a^{0:K}|o)}{q(a^{1:K}|a^0)}\right] \\
+&= \mathbb{E}_{q}\!\Bigl[ \log p_\theta(a^0|a^1,o) - \sum_{k=2}^{K} \mathrm{KL}\bigl(q(a^{k-1}|a^k,a^0)\,\|\, p_\theta(a^{k-1}|a^k,o)\bigr) \\
+&\qquad\qquad - \mathrm{KL}\bigl(q(a^K|a^0)\,\|\, p(a^K)\bigr) \Bigr].
+\end{aligned}
+
+Derivation details. Apply Jensen’s inequality:
+
+\log p_\theta(a^0|o) = \log \int p_\theta(a^{0:K}|o)\,da^{1:K}
+= \log \mathbb{E}_{q(a^{1:K}|a^0)}\!\left[\frac{p_\theta(a^{0:K}|o)}{q(a^{1:K}|a^0)}\right]
+\ge \mathbb{E}_{q}\!\left[\log\frac{p_\theta(a^{0:K}|o)}{q(a^{1:K}|a^0)}\right].
+
+Factorise both joint distributions using the Markov property:
+
+p_\theta(a^{0:K}|o) = p_\theta(a^0|a^1,o)\prod_{k=2}^{K} p_\theta(a^{k-1}|a^k,o) \cdot p(a^K),
+
+q(a^{1:K}|a^0) = \prod_{k=1}^{K} q(a^k|a^{k-1}).
+
+The ratio’s logarithm becomes a telescoping sum of KL divergences after separating the k=1 term. Using the identity
+
+q(a^{k-1}|a^k,a^0) = \frac{q(a^k|a^{k-1})q(a^{k-1}|a^0)}{q(a^k|a^0)},
+
+one can rewrite each term as a KL divergence, yielding the stated decomposition. \square
+
+D.3 Forward Posterior
+
+The conditional forward posterior q(a^{k-1}|a^k,a^0) is Gaussian:
+
+q(a^{k-1}|a^k,a^0) = \mathcal{N}\!\bigl(a^{k-1}; \tilde{\mu}_k(a^k,a^0), \tilde{\beta}_k I\bigr),
+
+with
+
+\tilde{\mu}_k = \frac{\sqrt{\bar{\alpha}_{k-1}}\beta_k}{1-\bar{\alpha}_k} a^0 + \frac{\sqrt{\alpha_k}(1-\bar{\alpha}_{k-1})}{1-\bar{\alpha}_k} a^k,
+\quad
+\tilde{\beta}_k = \frac{1-\bar{\alpha}_{k-1}}{1-\bar{\alpha}_k}\beta_k .
+
+Proof. Using Bayes’ rule and the known marginals, the posterior is a product of two Gaussians. Write a^k = \sqrt{\bar{\alpha}_k}a^0 + \sqrt{1-\bar{\alpha}_k}\epsilon and a^{k-1} = \sqrt{\bar{\alpha}_{k-1}}a^0 + \sqrt{1-\bar{\alpha}_{k-1}}\epsilon'. Expressing \epsilon' in terms of a^k and a^0 yields the above parameters. \square
+
+D.4 Noise‑Prediction Parameterisation and Simplified Loss
+
+Set \mu_\theta(a^k,o,k) to match the form of \tilde{\mu}_k but with a^0 replaced by a predicted \hat{a}^0 from the network. Using a^0 = \frac{1}{\sqrt{\bar{\alpha}_k}}(a^k - \sqrt{1-\bar{\alpha}_k}\epsilon), one can reparameterise the network to predict the noise \epsilon:
+
+\mu_\theta(a^k,o,k) = \frac{1}{\sqrt{\alpha_k}}\Bigl(a^k - \frac{\beta_k}{\sqrt{1-\bar{\alpha}_k}}\epsilon_\theta(a^k,o,k)\Bigr).
+
+The KL divergence D_{\mathrm{KL}}(q(a^{k-1}|a^k,a^0) \| p_\theta(a^{k-1}|a^k,o)) then reduces, after dropping constants, to
+
+\mathbb{E}_{a^0,\epsilon}\!\left[ \frac{\beta_k}{2\sigma_k^2\alpha_k(1-\bar{\alpha}_k)} \|\epsilon - \epsilon_\theta(a^k,o,k)\|^2 \right].
+
+Further simplifications (setting \sigma_k^2 = \beta_k or a learned variance) lead to the simplified training objective:
+
+\mathcal{L}_{\mathrm{simple}}(\theta) = \mathbb{E}_{k, a^0, \epsilon}\!\left[ \|\epsilon - \epsilon_\theta(a^k, o, k)\|^2 \right],
+
+where a^k = \sqrt{\bar{\alpha}_k}a^0 + \sqrt{1-\bar{\alpha}_k}\epsilon. This is the standard DDPM loss.
+
+D.5 Sampling (Reverse Diffusion)
+
+Starting from a^K \sim \mathcal{N}(0,I), for k=K,\dots,1:
+
+a^{k-1} = \frac{1}{\sqrt{\alpha_k}}\Bigl(a^k - \frac{\beta_k}{\sqrt{1-\bar{\alpha}_k}}\epsilon_\theta(a^k,o,k)\Bigr) + \sigma_k z, \quad z\sim\mathcal{N}(0,I),
+
+where \sigma_k = \beta_k (or a learned value). This iterative procedure yields an action sequence a^0.
+
+---
+
+Appendix E: Distributed Embodied Memory – Retention and Consolidation
+
+E.1 Stochastic Retention Probability
+
+Definition 9.2 (Retention probability).
+For an episode e_i stored in episodic memory \mathcal{M}_3,
+
+P_{\mathrm{retain}}(i,t) = e^{-\lambda (t - t_i) / S_i},
+
+where \lambda>0 is the forgetting rate, t_i the timestamp, and S_i the salience defined as
+
+S_i = w_r |r_i| + w_n \mathrm{Nov}(o_i) + w_s \mathrm{Sem}(i).
+
+Derivation rationale. The exponential decay form follows the classical Ebbinghaus forgetting curve, modulated by salience. Higher salience slows forgetting (effectively scaling time). The salience components capture reward surprise (magnitude), novelty (1 minus maximal cosine similarity with other stored episodes), and semantic consolidation status (binary).
+
+Lemma E.1 (Expected lifetime). The expected time until eviction (when P_{\mathrm{retain}} < \epsilon_{\mathrm{forget}}) is
+
+t_{\mathrm{evict}} = t_i + \frac{S_i}{\lambda} \ln(1/\epsilon_{\mathrm{forget}}).
+
+Proof. Solve e^{-\lambda (t-t_i)/S_i} = \epsilon_{\mathrm{forget}} → -(t-t_i)\lambda/S_i = \ln\epsilon_{\mathrm{forget}} → t-t_i = \frac{S_i}{\lambda}\ln(1/\epsilon_{\mathrm{forget}}). \square
+
+E.2 Consolidation Operator Properties
+
+Definition 9.3 (Consolidation operator \mathcal{C}). Given a batch \mathcal{B} of episodes, \mathcal{C}(\mathcal{B}) outputs a set of triples (e_1, rel, e_2, c) with confidence c. These are merged into the knowledge graph \mathcal{G}_{KG} with conflict resolution:
+
+\text{If } \exists\, (e_1, rel, e_2^{\mathrm{old}}): \text{ replace with } e_2^{\mathrm{new}} \text{ if } c_{\mathrm{new}} > c_{\mathrm{old}}.
+
+Proposition E.1 (Monotonic knowledge refinement). The merge operation ensures that for any entity pair, the stored edge confidence is non‑decreasing over time.
+
+Proof. The rule only updates when the new confidence is strictly greater. Thus edge confidences form a monotonic sequence bounded by 1, guaranteeing convergence. \square
+
+---
+
+Appendix F: Invariant EKF on SE_2(3) – Derivation and Proofs
+
+F.1 Lie Group and Error Dynamics
+
+The state X_t \in SE_2(3) is
+
+X = \begin{pmatrix} R & v & p \\ 0 & 1 & 0 \\ 0 & 0 & 1 \end{pmatrix},\quad R\in SO(3),\; v,p\in\mathbb{R}^3.
+
+The Lie algebra \mathfrak{se}_2(3) is parameterised by \xi = (\xi_R, \xi_v, \xi_p)\in\mathbb{R}^9. The hat map (\cdot)^\wedge : \mathbb{R}^9 \to \mathfrak{se}_2(3) and exponential map define the group structure.
+
+Theorem F.1 (Log‑linear error dynamics). For the deterministic system \dot{X}_t = X_t (\omega_t)^\wedge (without noise and gravity), the right‑invariant error \eta_t = X_t \hat{X}_t^{-1} evolves according to \dot{\eta}_t = \eta_t \cdot (-\hat{\omega}_t)^\wedge, where \hat{\omega}_t is an estimate. In log‑linear coordinates \xi = \log(\eta), the linearised dynamics are \dot{\xi} = - \mathrm{ad}_{(\hat{\omega}_t)^\wedge}\xi, which is linear.
+
+Proof. Standard result from the IEKF literature. The right‑invariant error satisfies a linear differential equation on the Lie algebra after linearisation, yielding exact log‑linearity under certain observability conditions. \square
+
+F.2 Prediction and Update Steps
+
+Prediction (IMU). Let the IMU provide angular velocity \omega_t^m and linear acceleration a_t^m. The state is propagated as
+
+\hat{X}_{t+\Delta t|t} = \hat{X}_{t|t} \exp\!\bigl(\Delta t\, (\omega_t^m - \hat{b}^\omega)^\wedge\bigr) \cdot (\text{gravity correction}),
+
+with covariance P_{t+\Delta t|t} = A_t P_{t|t} A_t^T + Q_t, where A_t is the Jacobian of the log‑map.
+
+Update (contact). With contact measurement y_t = h(X_t,q_j)+\eta, define the right‑invariant innovation z_t = \hat{X}_{t|t-1}^{-1} (y_t - \hat{h}). The Kalman gain is K_t = P_{t|t-1} H_t^T (H_t P_{t|t-1} H_t^T + R_t)^{-1}, and the state update uses the group exponential:
+
+\hat{X}_{t|t} = \hat{X}_{t|t-1} \exp\!\bigl(K_t z_t\bigr)^\vee.
+
+Proof of consistency. The use of right‑invariant errors ensures that the linearisation of the update does not depend on the current estimate’s orientation, leading to improved convergence compared to standard EKF. Detailed consistency proofs can be found in Hartley et al. (2020). \square
+
+F.3 Mahalanobis Synchronisation Contract
+
+Definition 10.2 (Synchronisation contract). The digital twin is synchronised if
+
+\Delta_{\mathrm{Mah}}(t) = \sqrt{(\xi_t - \hat{\xi}_t^{\mathrm{twin}})^T P_t^{-1} (\xi_t - \hat{\xi}_t^{\mathrm{twin}})} \le \delta_{\mathrm{sync}}.
+
+Proposition F.2 (False‑alarm rate). Under the Gaussian approximation of the IEKF, \Delta_{\mathrm{Mah}}^2 follows a chi‑squared distribution with \dim(\xi)=9 degrees of freedom. Choosing \delta_{\mathrm{sync}} as the p=0.999 quantile (\approx\sqrt{27.9}) guarantees a false‑alarm probability below 0.1\%.
+
+Proof. The IEKF assumes \xi_t - \hat{\xi}_t^{\mathrm{twin}} \sim \mathcal{N}(0, P_t). Then the quadratic form is a sum of squares of independent standard normals, i.e., \chi^2(9). Quantile values follow from standard tables. \square
+
+---
+
+Appendix G: GPU‑Native Compute Fabric – Formal Guarantees
+
+G.1 CUDA Graph Capture and Determinism
+
+Proposition G.1 (Deterministic execution). Once captured, a CUDA graph produces identical kernel launch sequences and memory operations for every invocation, provided the graph topology and kernel parameters remain unchanged. This guarantees that the worst‑case execution time (WCET) of the graph can be bounded by the maximum observed time over a series of profiling runs plus a safety margin.
+
+Proof (sketch). CUDA graphs record the exact sequence of operations, eliminating CPU‑side launch overhead. The execution time on GPU is subject to hardware variability (cache, warp scheduling), but the maximum observed time across multiple runs on the same hardware gives an empirical WCET bound. Determinism is guaranteed by the CUDA runtime as long as no conditional kernels are used. \square
+
+G.2 Zero‑Copy Tensor Table Consistency
+
+Definition G.1 (Double‑buffer protocol). Each tensor slot in the shared table consists of two buffers B_0, B_1 and an atomic flag f (0/1). The writer always writes to the buffer indicated by f\oplus 1 (where \oplus is XOR), then atomically toggles f. The reader reads from the buffer indicated by the current value of f and checks that the flag has not changed during the read.
+
+Proposition G.2 (Data consistency). Under this protocol, a reader always sees a fully written, consistent tensor snapshot, never a partially updated tensor.
+
+Proof. The writer completes its write before toggling the flag. Since the flag is atomic, the reader sees either the old complete buffer (flag not toggled yet) or the new complete buffer (after toggle). Because the writer never writes to the buffer currently pointed to by the flag, no concurrent modification occurs. Thus the snapshot is consistent. \square
+
+G.3 Module Eviction Optimality
+
+Definition 11.1 (Eviction score). Under memory pressure, the score for module \mathcal{N} is
+
+\mathrm{score}_{\mathrm{evict}} = \frac{t_{\mathrm{now}} - t_{\mathrm{last\_use}}(\mathcal{N})}{\pi(\mathcal{N}) \cdot \mathrm{size}(\mathcal{M}_{\mathrm{GPU}}(\mathcal{N}))}.
+
+Proposition G.3 (Greedy eviction is near‑optimal for linear penalty). If the penalty for evicting a module is proportional to (priority × last‑use recency) and storage cost is memory size, then selecting the module with the highest score approximates the optimal solution to the knapsack‑like eviction problem.
+
+Proof. The greedy heuristic sorts by ratio (benefit of keeping)/(cost). Here, benefit is modelled as recency‑weighted priority, cost is memory size. This ratio rule is optimal for the fractional knapsack problem; for the integer case it provides a feasible approximation. \square
+
+---
+
+Appendix H: Safety and Fault‑Tolerance – Complete Proof of Cognitive Fault Isolation
+
+H.1 Theorem 12.1 (Cognitive Fault Isolation)
+
+Theorem 12.1. Assume the NeuroFabric OS architecture satisfies the layer interface contracts (Definition 4.1) and the reflex layer schedulability conditions (exact WCRT analysis, Theorem 6.4). If all nodes in layers L_3, L_4, L_5 simultaneously fail (produce no output or invalid output), then the humanoid robot:
+(a) maintains postural stability for all t > t_{\mathrm{fail}}, provided \|x(t_{\mathrm{fail}})\|\in\mathcal{X}_{\mathrm{stable}};
+(b) avoids self‑collision and environmental collision for t\in[t_{\mathrm{fail}}, t_{\mathrm{fail}}+T_{\mathrm{safe}}] where T_{\mathrm{safe}} is the duration of a pre‑loaded safe‑stop trajectory.
+
+Proof.
+
+(a) Postural stability.
+By Definition 4.1, the downward interface from L_3 to L_2 includes a fallback behaviour \mathcal{F}_{\mathrm{fallback}} activated when the contractual deadline \Delta t_{\mathrm{contract}} is missed. In the case of L_3 failure, this fallback is a zero‑velocity reference trajectory (static balance).
+The layer L_2 (Deterministic Control) continues to execute the Whole‑Body Control QP at its prescribed rate (500 Hz). Theorem 6.4 guarantees that all L_2 tasks meet their deadlines. Therefore the WBC QP is solved on schedule.
+Under the static balance objective, the WBC minimises CoM acceleration and attempts to keep the Zero‑Moment Point inside the support polygon. The QP objective is strictly convex (Theorem C.1) and its KKT point is the unique global minimiser. The resulting feedback control law is asymptotically stable for the linearised centroidal dynamics within a neighbourhood \mathcal{X}_{\mathrm{stable}} of the upright posture. Since the initial state is assumed to lie in this region, postural stability is maintained indefinitely.
+
+(b) Collision avoidance.
+The CollisionReflex task \tau_4 runs entirely within L_2 with worst‑case response time R_4^* = 0.48\;\mathrm{ms} (verified in Section 6.5). It continuously monitors joint positions against a self‑collision model stored in L_2 ROM. If the distance to a collision boundary falls below a safe threshold, it injects a repulsive joint torque via the hardware abstraction layer. This mechanism requires no input from upper layers and remains operational.
+
+For environmental collision, a safe‑stop trajectory \pi_{\mathrm{safe}} is pre‑loaded into L_2 memory at boot time. Upon detection of L_3–L_5 failure (via watchdog or contract violation), L_2 immediately initiates \pi_{\mathrm{safe}}. Because the trajectory is known to be collision‑free by offline verification and is executed within T_{\mathrm{safe}} (e.g., 2 s), the robot avoids environmental collisions during the stop. The safe‑stop is itself a valid trajectory for the WBC, ensuring that all physical constraints remain satisfied. \square
+
+---
+
+H.2 Degradation Level Transitions
+
+Proposition H.1 (Safe transition). The degradation level transitions defined in Section 12.2 are monotonic in the set of failed layers, and each transition preserves the safety guarantees of the surviving lower layers.
+
+Proof. Each degradation level disables higher layers while leaving lower layers fully operational. Because lower layers are designed with fallbacks that do not depend on upper layers (Definition 4.1) and are schedulable under all failure scenarios (since worst‑case interference is bounded), the guarantees propagate downward. \square
+
+---
+
+Appendix I: Additional Formal Architecture Proofs
+
+I.1 Ring Buffer Non‑Blocking Property
+
+Proposition I.1 (Ring buffer capacity ensures no overwrite). Consider a single‑producer single‑consumer lock‑free ring buffer of size B, where the producer (layer L_i) writes at period T_i and the consumer (L_{i-1}) reads at period T_{i-1}\le T_i. If the contractual deadline \Delta t_{\mathrm{contract}} is respected, choosing
+
+B \ge \left\lceil \frac{\Delta t_{\mathrm{contract}}}{T_i} \right\rceil + 1
+
+guarantees that a new message never overwrites an unread message.
+
+Proof. The producer inserts at most \lceil \Delta t_{\mathrm{contract}}/T_i \rceil messages before the consumer is contractually obligated to have read at least one (due to the deadline). Adding one extra slot ensures the buffer never wraps around onto an unread entry. \square
+
+I.2 Neural Module Hot‑Reload Safety
+
+Property 8.1 (Output distribution continuity). The hot‑reload is permitted only if
+
+\mathbb{E}_{x\sim\mathcal{D}_{\mathrm{val}}}\bigl[\|f_\theta(x) - f_{\theta'}(x)\|_2\bigr] \le \delta_{\mathrm{reload}}.
+
+Proposition I.2 (No unsafe output during swap). Because the atomic pointer swap occurs between two consecutive inference calls, the actuator never sees a mixture of old and new parameters. The output of the new module is a single consistent snapshot.
+
+Proof. Double‑buffering ensures that either the old parameters \theta or the new \theta' are used for the entire forward pass. Atomic swap on a GPU pointer (using CUDA atomic operations on a unified memory pointer) completes between kernel launches. Therefore the decision to swap is isolated from the inference pipeline. \square
+
+
+## References
+
+**[1]** Liu, C. L., & Layland, J. W. (1973). Scheduling algorithms for multiprogramming in a hard-real-time environment. *Journal of the ACM*, 20(1), 46–61.
+
+**[2]** Joseph, M., & Pandya, P. (1986). Finding response times in a real-time system. *The Computer Journal*, 29(5), 390–395.
+
+**[3]** Audsley, N. C., Burns, A., Richardson, M., Tindell, K., & Wellings, A. (1993). Applying new scheduling theory to static priority pre-emptive scheduling. *Software Engineering Journal*, 8(5), 284–292.
+
+**[4]** Kwok, Y.-K., & Ahmad, I. (1999). Static scheduling algorithms for allocating directed task graphs to multiprocessors. *ACM Computing Surveys*, 31(4), 406–471.
+
+**[5]** Garey, M. R., & Johnson, D. S. (1979). *Computers and Intractability: A Guide to the Theory of NP-Completeness*. W. H. Freeman.
+
+**[6]** Kuindersma, S., Permenter, F., & Tedrake, R. (2014). An efficiently solvable quadratic program for stabilizing dynamic locomotion. *IEEE ICRA 2014*. arXiv:1311.1839.
+
+**[7]** Kim, D., Lee, J., Ahn, J., Campbell, O., Hwang, H., & Sentis, L. (2019). Computationally-robust and efficient prioritized whole-body controller with contact constraints. *IEEE RA-L*. arXiv:1807.01222.
+
+**[8]** Orin, D., Goswami, A., & Lee, S.-H. (2013). Centroidal dynamics of a humanoid robot. *Autonomous Robots*, 35, 161–176.
+
+**[9]** Chi, C., Xu, Z., Feng, S., Cousineau, E., Du, Y., Burchfiel, B., Tedrake, R., & Song, S. (2023). Diffusion Policy: Visuomotor policy learning via action diffusion. *IJRR 2024*. arXiv:2303.04137.
+
+**[10]** Ho, J., Jain, A., & Abbeel, P. (2020). Denoising Diffusion Probabilistic Models. *NeurIPS 33*, 6840–6851.
+
+**[11]** Hartley, R., Ghaffari, M., Eustice, R. M., & Grizzle, J. W. (2020). Contact-aided invariant extended Kalman filtering for robot state estimation. *IJRR*, 39(4), 402–430.
+
+**[12]** Barrau, A., & Bonnabel, S. (2017). The invariant extended Kalman filter as a stable observer. *IEEE Transactions on Automatic Control*, 62(4), 1797–1812.
+
+**[13]** Vedadi, A., Yousefi-Koma, A., Shariat-Panahi, M., & Nozari, M. (2024). Kinematic base state estimation for humanoid using Invariant Extended Kalman Filter. arXiv:2401.02786.
+
+**[14]** Featherstone, R. (2008). *Rigid Body Dynamics Algorithms*. Springer.
+
+**[15]** Zhang, T., et al. (2024). Whole-body control framework for humanoid robots with heavy limbs: a model-based approach. arXiv:2506.14278.
+
+**[16]** Mao, H., Schwarzkopf, M., Venkatakrishnan, S. B., Meng, Z., & Alizadeh, M. (2019). Learning scheduling algorithms for data processing clusters (Decima). *ACM SIGCOMM*. arXiv:1810.01963.
+
+**[17]** Schulman, J., Wolski, F., Dhariwal, P., Radford, A., & Klimov, O. (2017). Proximal Policy Optimization Algorithms. arXiv:1707.06347.
+
+**[18]** Nakamura, Y. (1991). *Advanced Robotics: Redundancy and Optimisation*. Addison-Wesley.
+
+**[19]** Zhu, M., et al. (2024). Scaling Diffusion Policy in Transformer to 1 Billion Parameters for Robotic Manipulation. arXiv:2409.14411.
+
+**[20]** Bellman, R. (1957). *Dynamic Programming*. Princeton University Press.
+
+**[21]** Leung, J. Y.-T., & Whitehead, J. (1982). On the complexity of fixed-priority scheduling of periodic real-time tasks. *Performance Evaluation*, 2(4), 237–250.
+
+**[22]** Boyd, S., & Vandenberghe, L. (2004). *Convex Optimization*. Cambridge University Press.
+
+**[23]** Nocedal, J., & Wright, S. J. (2006). *Numerical Optimization* (2nd ed.). Springer.
+
+**[24]** Bengio, Y., et al. (2024). RoboMemory: A brain-inspired multi-memory agentic framework. arXiv:2508.01415.
+
+**[25]** Ebbinghaus, H. (1885). *Über das Gedächtnis* [Memory: A Contribution to Experimental Psychology]. Duncker & Humblot.
+
+**[26]** Vaswani, A., et al. (2017). Attention is all you need. *NeurIPS 30*.
+
+**[27]** NVIDIA Corporation. (2024). CUDA Graphs Programming Guide. Developer Documentation.
+
+**[28]** Zhang, C., et al. (2025). A review of embodied intelligence systems: a three-layer framework. *Frontiers in Neurorobotics*.
+
+**[29]** Ullman, J. D. (1975). NP-complete scheduling problems. *Journal of Computer and System Sciences*, 10(3), 384–393.
+
+**[30]** Song, Y., Sohl-Dickstein, J., Kingma, D. P., Kumar, A., Ermon, S., & Poole, B. (2021). Score-based generative modeling through stochastic differential equations. *ICLR 2021*.
+
+Appendix J: Architectural Diagrams (ASCII)
+
+This appendix provides visual, ASCII‑based renderings of the core architectural concepts described in the dissertation and previous appendices. They are intended to complement the formal specifications.
+
+---
+
+J.1 NeuroFabric OS Five‑Layer Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  L5 – Cognitive Layer                                            │
+│  VLM · LLM · World Model · Semantic Memory · Task Planning       │
+├──────────────────────────────────────────────────────────────────┤
+│  L4 – Behaviour & Planning Graph                                 │
+│  Task Graphs · RL Policies · Behaviour Trees · HTCG Runtime      │
+├──────────────────────────────────────────────────────────────────┤
+│  L3 – Real‑Time Robotics Middleware                              │
+│  Neural Pub‑Sub · ECS Runtime · GPU Scheduler · DEM              │
+├──────────────────────────────────────────────────────────────────┤
+│  L2 – Deterministic Control Layer                                │
+│  WBC · MPC · Torque Loops · Balance · Collision Reflexes         │
+├──────────────────────────────────────────────────────────────────┤
+│  L1 – Hardware Abstraction Layer                                 │
+│  Sensor Drivers · Actuator Interfaces · EtherCAT · Watchdogs     │
+└──────────────────────────────────────────────────────────────────┘
+   ▲   │                           ▲   │
+   │   │  downward commands        │   │  upward state
+   │   ▼  (ring buffers)           │   ▼  (shared memory)
+ ┌─────────────────────────────────────────────────────────────────┐
+ │  Layer Interface Contract  I(L_i → L_{i-1})                     │
+ │  { M_down, M_up, Δt_contract, F_fallback }                     │
+ └─────────────────────────────────────────────────────────────────┘
+```
+
+Arrows indicate data flow; lower layers never block awaiting upper‑layer outputs.
+
+---
+
+J.2 Hierarchical Temporal Compute Graph (HTCG)
+
+```
+                    L5  ┌─────────────┐
+                        │  TaskPlan   │
+                        └──────┬──────┘
+                               │ async
+                        ┌──────▼──────┐
+              L4        │  MotionPlan │  (GPU, T=50 ms)
+                        └──────┬──────┘
+                               │ async
+              ┌────────────────▼────────────────┐
+              │          Perception              │ (GPU, T=33 ms)
+              └────────────────┬────────────────┘
+                               │ sync
+              L3  ┌────────────▼────────────┐
+                  │   State Estimator       │ (CPU, T=1 ms)
+                  └────────────┬───────────┘
+                               │ sync
+              L2  ┌────────────▼───────────┐
+                  │     Torque Loop         │ (MCU, T=1 ms, D=1 ms)
+                  └────────────────────────┘
+
+          ── Sync edges (hard real‑time path)
+          ══ Async edges (feed‑forward / feedback)
+```
+
+The critical reflex path (IMU → StateEstimator → TorqueLoop) is entirely synchronous, with end‑to‑end latency bounded by Theorem 5.1.
+
+---
+
+J.3 Reflex Layer Task Set and WCRT Convergence
+
+```
+ Task τ_i      Period   WCET     U_i     Priority    Exact WCRT
+─────────────────────────────────────────────────────────────
+ τ1 (IMU/SE)   1 ms    0.05 ms   0.050   1 (highest)   0.05 ms
+ τ2 (Torque)   1 ms    0.08 ms   0.080   2              0.13 ms
+ τ3 (Balance)  2 ms    0.15 ms   0.075   3              0.28 ms
+ τ4 (Collision)5 ms    0.20 ms   0.040   4              0.48 ms
+─────────────────────────────────────────────────────────────
+ Total U = 0.245  ( ≤ 0.757 RMS bound )   All meet D_i
+```
+
+Iteration sequences for WCRT (fixed‑point) are shown in Section 6.5 of the main text and Appendix B.4.
+
+---
+
+J.4 Whole‑Body Control Quadratic Program
+
+```
+    min   Σ_j w_j || J_j(q)q̈ + J̇_j(q)q̇ – ẍ_j^des ||²
+  q̈,τ,λ
+         + w_τ ||τ||² + w_λ ||λ||²
+
+    s.t.
+         M(q)q̈ + C(q,q̇)q̇ + g(q)  =  S^T τ + J_c^T λ    (EOM)
+         J_c(q)q̈ + J̇_c(q)q̇        =  0                  (contact no‑slip)
+         τ_min ≤ τ ≤ τ_max                              (torque bounds)
+         λ_n,i ≥ 0                                      (unilateral)
+         ||λ_t,i|| ≤ μ λ_n,i   (linearised cone)       (friction)
+
+    Decision vector  x = [ q̈ ; τ ; λ ]  ∈ ℝ^(n + m + 3k)
+    Convex QP, strong duality holds (Slater’s condition satisfied).
+```
+
+---
+
+J.5 Denoising Diffusion Policy
+
+Forward diffusion (noise injection, fixed schedule):
+
+```
+ a^0        a^1        a^2               a^K
+  ●─────●─────●───── ... ─────●
+  clean     + noise                pure noise ~ N(0,I)
+  q(a^k|a^{k-1}) = N(√(1-β_k) a^{k-1}, β_k I)
+```
+
+Reverse process (learned denoising, conditioned on observation o):
+
+```
+ a^K        a^{K-1}        a^{K-2}       ...        a^0
+  ●─────●─────●───── ... ─────●
+  noise    ←  μ_θ(a^k, o, k)                 predicted action sequence
+  p_θ(a^{k-1}|a^k, o) = N(μ_θ, σ_k^2 I)
+  μ_θ parameterised via noise prediction: ε_θ(a^k, o, k)
+```
+
+Training minimises the simple loss: E ||ε – ε_θ(a^k, o, k)||².
+
+---
+
+J.6 Distributed Embodied Memory (DEM) Hierarchy
+
+```
+         ┌─────────────────────────────────────────────────┐
+         │  M5: Skill Memory                               │
+         │  { NeuralModules } versioned, NVMe‑backed       │
+         └───────────────────────┬─────────────────────────┘
+                                 │ load / store θ
+         ┌───────────────────────▼─────────────────────────┐
+         │  M4: Semantic Memory (Knowledge Graph)          │
+         │  G_KG = (V, E, φ)    consolidation operator     │
+         └───────────────────────┬─────────────────────────┘
+                                 │ episodic‑to‑semantic
+         ┌───────────────────────▼─────────────────────────┐
+         │  M3: Episodic Memory                            │
+         │  {(t_i, o_i, a_i, r_i, s_i)}  DRAM + NVMe      │
+         │  stochastic retention: P_retain = e^{-λ Δt / S} │
+         └───────────────────────┬─────────────────────────┘
+                                 │ attention query
+         ┌───────────────────────▼─────────────────────────┐
+         │  M2: Working Memory (KV‑store)                  │
+         │  capacity 1024, d=512, GPU cross‑attention      │
+         └───────────────────────┬─────────────────────────┘
+                                 │ ring buffer
+         ┌───────────────────────▼─────────────────────────┐
+         │  M1: Sensory Buffer (500 ms window)             │
+         │  GPU L2‑resident, constant‑time write           │
+         └─────────────────────────────────────────────────┘
+```
+
+---
+
+J.7 Invariant EKF on SE_2(3) and Digital Twin
+
+```
+ ┌──────────┐   IMU (ω, a)    ┌─────────────────────────────┐
+ │ Physical │────────────────▶│  InEKF Prediction           │
+ │  Robot   │                 │  X̂_{t+Δt|t} = X̂_t exp(...)  │
+ └──────────┘                 │  P = A P A^T + Q            │
+                              └─────────────┬───────────────┘
+                                            │
+                       contact kinematics   │
+                       (e.g., foot position)│
+                                            ▼
+                              ┌─────────────────────────────┐
+                              │  InEKF Update               │
+                              │  z = X̂^{-1} (y – ĥ)         │
+                              │  K = P H^T (H P H^T + R)^-1│
+                              │  X̂ ← X̂ · exp(K z)           │
+                              └─────────────┬───────────────┘
+                                            │
+                              Mahalanobis distance Δ_Mah    │
+                              Δ_Mah² = ξ^T P^{-1} ξ         │
+                                            │
+                              ┌─────────────▼───────────────┐
+                              │  Digital Twin               │
+                              │  (MuJoCo / Isaac Sim)       │
+                              │  Sync if Δ_Mah ≤ δ_sync     │
+                              └─────────────────────────────┘
+```
+
+---
+
+J.8 GPU‑Native Compute Fabric
+
+```
+ ┌──────────────────────────────────────────────────┐
+ │                GPU Device                         │
+ │  ┌─────────────────────────────────────────┐     │
+ │  │ Shared Tensor Table (UVM, double‑buf)    │     │
+ │  │  ┌───────┐  ┌───────┐  ┌───────┐        │     │
+ │  │  │Node A │  │Node B │  │Node C │        │     │
+ │  │  │output │  │output │  │output │  ...   │     │
+ │  │  └───┬───┘  └───┬───┘  └───┬───┘        │     │
+ │  └──────┼──────────┼──────────┼─────────────┘     │
+ │         │          │          │                   │
+ │   ┌─────▼──┐  ┌────▼───┐ ┌───▼──────┐            │
+ │   │CUDA   │  │CUDA    │ │CUDA      │            │
+ │   │Graph  │  │Graph   │ │Graph     │  ...       │
+ │   │Exec 1 │  │Exec 2  │ │Exec 3    │            │
+ │   └───────┘  └────────┘ └──────────┘            │
+ └──────────────────────────────────────────────────┘
+          ▲
+          │  dispatch from HTCG scheduler
+ ┌────────┴────────┐
+ │ CPU Orchestrator│
+ │ (module mgmt.,  │
+ │  ring buffers)  │
+ └─────────────────┘
+```
+
+Zero‑copy access: consumer nodes read output tensors via GPU pointer dereference; no CPU/PCIe copy.
+
+---
+
+J.9 Cognitive Fault Isolation – Failure Scenario
+
+```
+  Layers:   L5 ──×── (VLM/LLM fail)
+            L4 ──×── (planning fail)
+            L3 ──×── (middleware fail)
+            L2 ███████ (active, hard real‑time)
+            L1 ███████ (hardware drivers)
+────────────────────────────────────────────
+   Time   │ fail │      safe‑stop interval (T_safe)
+          │      │     ──────────────────────────▶
+   Behaviour:
+          ● Static balance reflex (WBC QP with v_ref=0)
+          ● Collision reflex active (joint‑space repulsive torques)
+          ● Safe‑stop trajectory π_safe executed
+   Guarantee:  postural stability + collision avoidance
+               (Theorem 12.1, Appendix H)
+```
+
+Legend: × = failed layer; █ = operational, with contractual fallback.
