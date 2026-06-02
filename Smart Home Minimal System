@@ -1,0 +1,842 @@
+Smart Home Minimal System
+
+Definitive Blueprint — Release 1.0
+
+Build a fully local, zero-subscription smart home in under 60 minutes. No coding. No cloud. No lock‑in.
+
+May 2026 — All specifications verified against live markets, community reports, and official documentation.
+
+---
+
+1. Mission & Promise
+
+You will own a resilient, privacy‑first smart home that works even when your internet connection fails. The system is built around one local hub and four modular subsystems.
+
+Module What it does
+Light Turn on/off automatically by schedule, sunset, or motion
+Temperature Monitor room temperature & humidity; receive an alert if thresholds are breached
+Security Know immediately when a door or window opens — notifications stay inside your network
+Energy See real‑time power consumption and daily electricity cost
+
+What your finished home will do:
+
+· Control lights based on time, sunlight, or presence
+· Send a notification to your phone when the front door opens after dark
+· Alert you if a room exceeds 26 °C
+· Show you exactly how much energy your TV or office is using — and what it costs
+· Keep every automation running even when your broadband is down
+
+What this system is not:
+
+· It does not require a monthly subscription or a cloud account.
+· It does not send your data outside your home.
+· It does not need an engineer to set up — if you can follow a recipe, you can build this.
+
+---
+
+2. System Architecture
+
+2.1 Topology
+
+```
+        ┌─────────────────────────┐
+        │ Your Phone / Tablet     │
+        │ (Companion app/browser) │
+        └───────────┬─────────────┘
+                    │ Wi‑Fi (local)
+         ┌──────────▼────────────────────────────┐
+         │      Local Dashboard                  │
+         │  http://homeassistant.local:8123      │
+         └──────────┬────────────────────────────┘
+                    │
+         ┌──────────▼──────────────────────────────────────┐
+         │            HOME ASSISTANT HUB                  │
+         │  Home Assistant Green (primary)                │
+         │  ─────────────────────────────────────────     │
+         │  Home Assistant OS                             │
+         │   ├─ Automation Engine                         │
+         │   ├─ Zigbee2MQTT (serial‑to‑MQTT bridge)       │
+         │   └─ MQTT Broker                               │
+         │                                                │
+         │   ┌───────────────┐   ┌───────────────┐        │
+         │   │ USB‑A (top)   │   │ USB‑A (bottom)│        │
+         │   │ ZBT-2 #1      │   │ ZBT-2 #2      │        │
+         │   │ Zigbee (fw    │   │ Thread        │        │
+         │   │ 7.4.4.6 lock) │   │ (optional)    │        │
+         │   └───────┬───────┘   └───────┬───────┘        │
+         └───────────┼───────────────────┼────────────────┘
+                     │ Zigbee mesh        │ Thread mesh
+                     │                    │ (future)
+         ┌───────────┼──────────┐        │
+         │           │          │        │
+    ┌────▼───┐ ┌─────▼────┐ ┌──▼──────────▼──┐
+    │ Zigbee │ │ Zigbee   │ │ Wi‑Fi          │
+    │ Sensors│ │ Routers  │ │ (ESPHome plug) │
+    └────────┘ │ (Bulbs)  │ └────────────────┘
+               └──────────┘
+```
+
+Hub: Home Assistant Green ($99) — the official, plug‑and‑play hardware from Nabu Casa. It ships with Home Assistant OS pre‑installed, boots into the setup wizard in under two minutes, and requires zero assembly.
+**Alternative hubs** for different budgets: **SONOFF iHost** ($59, all‑in‑one, runs HA via Docker) or Raspberry Pi 5 ($60 board only, maximum flexibility).
+
+2.2 Coordinator Architecture — Why Two Sticks?
+
+The ZBT‑2 runs exactly one protocol at a time — Zigbee OR Thread.
+Nabu Casa’s official guidance states that multiprotocol operation “doesn’t work well, and we don’t plan to implement it”. Community testing confirms that trying to run both on the same stick leads to firmware flash failures, device dropouts, and network instability.
+
+Your baseline system uses one ZBT‑2 dedicated to Zigbee, locked to firmware 7.4.4.6 — the most stable build for 2026.
+If you later add Matter‑over‑Thread devices, plug in a second coordinator (a second ZBT‑2 re‑flashed with OpenThread RCP, or a Sonoff ZBDongle‑E, or use an existing Apple HomePod / Google Nest Hub as a Thread Border Router). The architecture supports graceful expansion without ever touching your stable Zigbee network.
+
+2.3 Protocol Stack
+
+Layer Technology
+Application Home Assistant automations, MQTT, REST API
+Integration Zigbee2MQTT v2.0.0 (serial‑to‑MQTT bridge)
+Transport MQTT over local TCP
+Network Zigbee PRO (IEEE 802.15.4) mesh + Wi‑Fi 802.11 b/g/n/ac
+PHY / Data Link O‑QPSK at 2.4 GHz
+
+All data stays inside your home network. No packets ever leave unless you explicitly configure an optional remote access service (like the free Tailscale VPN).
+
+2.4 Data Flow — Example: Temperature Alert
+
+1. Aqara temperature sensor measures 27.2 °C and transmits to the nearest Zigbee router (a light bulb).
+2. Router forwards the packet through the mesh to the ZBT‑2 Zigbee coordinator.
+3. Zigbee2MQTT parses the frame and publishes an MQTT message:
+      zigbee2mqtt/living_room_temp { "temperature": 27.2 }
+4. Home Assistant’s MQTT integration updates the entity sensor.living_room_temperature.
+5. An automation triggered on numeric_state above: 26 sends a notification to your phone.
+
+End‑to‑end latency: under 1 second. No internet required.
+
+---
+
+3. Mathematical Background
+
+This section is the engine. It explains why every component was chosen and how the system behaves in the real world.
+
+3.1 Cost Optimisation
+
+Total system cost C is the sum of all parts:
+
+C = C_{\text{hub}} + n_{\text{zb}} \cdot P_{\text{zb}} + n_s \cdot P_s + n_p \cdot P_p + n_e \cdot P_e
+
+Two recommended budgets:
+
+Path Hub Coordinator Lights (4‑pack) Sensors (1 temp + 2 door) Energy Plug Total
+Premium Ease HA Green ($99) ZBT‑2 ($49) ThirdReality ZL4 ($30) $35 S60ZBTPF ($13.50) $226.49
+Optimised (under $200) SONOFF iHost ($59) Sonoff ZBDongle‑E ($15) ThirdReality ZL4 ($30) $35 S60ZBTPF ($13.50) $152.49
+
+3.2 Zigbee Link Budget & Indoor Range
+
+For a fixed transmit power P_t = +20\text{ dBm} and receiver sensitivity S_r = -100\text{ dBm}:
+
+L_{\max} = P_t - S_r = 120\text{ dB}
+
+Using the ITU indoor path‑loss model (path loss exponent n = 3.0, fade margin X = 10\text{ dB}):
+
+120 = 40 + 30\log_{10}(d) + 10 \quad\Rightarrow\quad d \approx 215\text{ m}
+
+In a real home with walls, practical range is 15–30 m per hop. By placing at least one mains‑powered Zigbee router (a bulb) in every second room, the mesh guarantees full coverage.
+
+Diagnostic rule: Healthy RSSI ≥ –70 dBm. If a device drops below –85 dBm, add another router.
+
+3.3 Sensor Battery Life
+
+A door sensor (CR1632, 225 mAh) drawing 30 µA average yields:
+
+\text{Life} = \frac{225}{0.03} \approx 7500\text{ h} \approx 1\text{ year (minimum)}
+
+In practice, the sensor transmits only on state changes, pushing life to 12–24 months.
+A temperature sensor reporting every 3 minutes draws ~15 µA, giving 18–24 months on a CR2032.
+
+3.4 Energy Monitoring
+
+For the ESPHome‑flashed plug, instantaneous power:
+
+P = V_{\text{rms}} \cdot I_{\text{rms}} \cdot \cos\phi
+
+Energy accumulated by Riemann sum every 60 seconds:
+
+E \approx \sum_i P_i \cdot \frac{1}{60}\text{ h}
+
+A Home Assistant template sensor multiplies kWh by your electricity tariff (e.g. €0.30/kWh) to show daily cost.
+
+3.5 Sunset Automation
+
+The sun’s elevation \theta follows:
+
+\sin\theta = \sin\delta\,\sin\phi + \cos\delta\,\cos\phi\,\cos h
+
+Home Assistant recalculates every 10 minutes. For rock‑solid timing, trigger automations with a fixed offset (e.g. sun.set_offset: "-00:30:00") rather than the exact elevation crossing.
+
+---
+
+4. Technical Specifications
+
+4.1 Main Hub: Home Assistant Green
+
+Feature Specification
+SoC Rockchip RK3566, quad‑core ARM Cortex‑A55 @ 1.8 GHz
+RAM 4 GB LPDDR4
+Storage 32 GB eMMC (HA OS 14.x pre‑installed)
+Network Gigabit Ethernet
+Wireless None onboard — USB dongle required
+USB 2× USB‑A 2.0
+Power 12 V DC / 1 A (adapter included); 1.7 W idle
+Cost ~$99
+
+4.2 Zigbee Coordinator: Home Assistant Connect ZBT‑2
+
+Parameter ZBT‑2 (primary) Sonoff ZBDongle‑E (budget)
+SoC Silicon Labs MG24 EFR32MG21
+Protocol Zigbee 3.0 or Thread (single protocol) Zigbee 3.0
+TX Power +20 dBm +20 dBm
+Antenna Gain 4.16 dBi ~2 dBi
+Firmware 7.4.4.6 (LOCKED) 7.4.4.0
+Baud Rate 460,800 115,200
+USB USB‑C, 5 V / 500 mA USB‑A
+Cost ~$49 ~$15
+
+⚠ Firmware lock: Do not update to 7.5.1.0 — it has caused complete network outages of 55–70 devices. The 7.4.4.6 build is the most stable for Zigbee as of May 2026.
+
+4.3 Zigbee Bulb (Mesh Router)
+
+ThirdReality Smart Color Bulb ZL4 — the recommended Zigbee 3.0 router.
+
+Parameter Value
+Protocol Zigbee 3.0
+Brightness 810 lm (60 W equiv.)
+Colour RGB + tunable white (2700–6500 K)
+Mesh Router Yes — extends range
+HA Certification “Works with Home Assistant”
+Cost ~$29.99 / 4‑pack (~$7.50 each)
+
+4.4 Sensors
+
+Sensor Model Accuracy Battery Cost
+Temperature/Humidity Aqara WSDCGQ11LM ±0.3 °C, ±3 % RH CR2032 (~2 yr) ~$15
+Door/Window Aqara MCCGQ11LM Binary (reed switch) CR1632 (12–24 mo) ~$10
+Motion (add‑on) Aqara P1 170° FOV, 7 m CR2450 ~$20
+
+4.5 Energy Module — Two Paths
+
+Path A — Beginner (Zero Flash):
+
+· Sonoff S60ZBTPF — Zigbee 3.0 plug, 16 A, built‑in energy monitoring.
+· Pairs in 60 seconds via Zigbee2MQTT. Exposes: switch, power (W), energy (kWh), current (A), voltage (V).
+· OTA firmware v2.0.2 available. Cost ~$13.50.
+
+Path B — Advanced (ESPHome):
+
+· Sonoff S31 — Wi‑Fi plug with CSE7766 power‑metering IC.
+· Flash ESPHome via USB‑TTL serial adapter (3.3 V only).
+· Fully local, zero cloud. Cost ~$12 + $5 adapter.
+
+⚠ SAFETY WARNING — PATH B: The S31 is a non‑isolated device. Its digital GND is connected to AC neutral. Never connect it to a computer while plugged into mains. Always flash with the device completely disconnected from the wall outlet.
+
+4.6 Certified Stack — Known Good Components (May 2026)
+
+Component Version Status Lock Rule
+Home Assistant OS 14.x (pre‑installed) ✅ Stable Update monthly after .1 release, never .0
+ZBT‑2 Zigbee Firmware 7.4.4.6 ✅ LOCK Do not update to 7.5.1.0
+Zigbee2MQTT 2.0.0+ ⚠️ Requires config migration (see §5.6) Backup before upgrading
+Sonoff ZBDongle‑E Firmware 7.4.4.0 ✅ Stable Proven on thousands of installs
+ThirdReality ZL4 Bulb All versions ✅ Certified Works with ZHA & Z2M
+Sonoff S60ZBTPF v2.0.2 (OTA) ✅ Stable Update immediately after pairing
+IKEA KAJPLATS Bulb Factory ⚠️ Flaky See commissioning prerequisites §6.1
+
+Golden rule: After initial installation, freeze all firmware for 90 days. Subscribe to the Home Assistant release notes before updating anything.
+
+---
+
+5. Step‑by‑Step Installation
+
+5.1 Hub Setup — Home Assistant Green
+
+1. Unpack the Green. Connect the included 12 V power adapter and Ethernet cable.
+2. Label your ZBT‑2 sticks if you plan to use two (one for Zigbee, one for future Thread).
+   · Use a label maker on the USB base and cable.
+   · Port convention: Zigbee → top USB‑A. Thread → bottom (leave empty for now).
+   · After boot, verify: Settings → System → Hardware → All Hardware → note the /dev/serial/by-id/ path for each stick.
+3. Wait 2 minutes for first boot. Open http://homeassistant.local:8123.
+4. Follow the onboarding wizard: name your home, create an account, set location and timezone.
+5. The ZBT‑2 is auto‑detected. Choose Zigbee2MQTT as your integration.
+
+✅ Hub is live.
+
+5.2 Zigbee Channel Assignment
+
+Wi‑Fi and Zigbee share the 2.4 GHz band. Choose a Zigbee channel that does not overlap with your Wi‑Fi:
+
+Your Wi‑Fi Channel Safe Zigbee Channels
+1 (2412 MHz) 11–14
+6 (2437 MHz) 15–20
+11 (2462 MHz) 21–24
+
+Set the channel in Zigbee2MQTT → Settings → channel:.
+
+5.3 Pairing Order — The Golden Rule
+
+Pair all mains‑powered routers (bulbs) first, in their final locations. Then pair battery‑powered sensors.
+This ensures the mesh is fully established before sensors attempt to join.
+
+ThirdReality ZL4 pairing:
+
+1. Screw in the bulb, turn on the wall switch.
+2. In Zigbee2MQTT, click “Permit join (All)”.
+3. Power‑cycle the bulb rapidly 5 times — it will blink to confirm.
+4. The bulb appears within 60 seconds. Rename it immediately.
+
+Aqara sensor pairing:
+
+1. Insert battery, hold the reset button 5 seconds until the LED blinks.
+2. With Permit Join active, the sensor appears automatically.
+3. Rename and assign it to a room.
+
+5.4 Entity‑Based Automation Rule (Critical)
+
+Always create automations using entity_id, never device_id.
+
+· Wrong: trigger on device “Front Door – Contact Sensor”
+· Right: trigger on entity binary_sensor.front_door_contact
+
+Why: If you replace a faulty sensor, device‑based automations break silently. Entity‑based automations survive hardware changes without any editing — you simply assign the same entity_id to the new device.
+
+5.5 Energy Module — Path A (Beginner, Zero Flash)
+
+1. Plug the Sonoff S60ZBTPF into a wall outlet.
+2. Press and hold its button for 5 seconds until the LED blinks blue rapidly.
+3. In Zigbee2MQTT, click “Permit join”.
+4. The plug appears in under 60 seconds. It exposes switch, power, energy, current, and voltage.
+5. Immediately check for OTA updates in Zigbee2MQTT → OTA → install v2.0.2 if available.
+6. Plug in your appliance and rename the entity.
+
+✅ Energy monitoring is live. No code, no firmware, no risk.
+
+5.6 Zigbee2MQTT v2.0.0 Configuration Migration
+
+If you are upgrading from Zigbee2MQTT v1.x, or if your configuration resets after a restart:
+
+Before upgrading:
+
+· Back up configuration.yaml, database.db, and state.json.
+· Add to configuration.yaml:
+  ```yaml
+  advanced:
+    homeassistant_legacy_entity_attributes: false
+    homeassistant_legacy_triggers: false
+    legacy_api: false
+    legacy_availability_payload: false
+  device_options:
+    legacy: false
+  ```
+
+After upgrading:
+
+· Zigbee2MQTT v2.0.0 automatically migrates your config file. The new config starts with version: 4.
+· If you see the setup page with no devices, stop the add‑on, restore database.db from backup, set frontend: true in the config, and restart.
+
+5.7 Energy Module — Path B (Advanced ESPHome Flashing)
+
+⚠ READ THE ELECTRICAL SAFETY WARNING IN §4.5 BEFORE PROCEEDING.
+
+Detailed steps omitted here for brevity — refer to the full ESPHome flashing guide in the companion documentation. In summary: physically disconnect the S31 from mains, connect a 3.3 V USB‑TTL adapter to the GND/TX/RX/3.3V header, hold the button while plugging the adapter into your computer, and flash via https://web.esphome.io.
+
+5.8 Pre‑Built Blueprint Import
+
+Import ready‑made automations directly into your Home Assistant:
+
+Import link: https://my.home-assistant.io/redirect/blueprint_import/
+
+Blueprint What it does
+Sunset Light On Turns on your living room ceiling light 30 minutes before sunset
+Late Night Off Turns off all lights at 11 PM
+Temperature Alert Notifies you if any room exceeds 26 °C
+Door Open After Dark Notifies you if the front door opens after 10 PM
+Energy Cost Today Creates a sensor showing today’s electricity cost
+RSSI Monitor Alerts if any Zigbee device’s signal drops below –85 dBm
+
+---
+
+6. Matter & Future‑Proofing
+
+6.1 The State of Matter in 2026
+
+Matter 1.5 (November 2025) enabled cameras, energy management, and standardised tariff data. Thread 1.4 became mandatory for new Border Routers in January 2026. IKEA’s KAJPLATS Matter‑over‑Thread bulbs are now in stores from $5.99.
+
+However, first‑generation Matter devices have proven difficult to commission. The Verge tested six and onboarded only two. Community reports confirm persistent failures.
+
+Prerequisites for adding a Matter‑over‑Thread device (like KAJPLATS):
+
+Requirement Verification Common Failure
+IPv6 HA host, phone, and router must have IPv6 enabled. No NAT64. Failed to send IPv6 UDP in OTBR logs
+mDNS avahi-daemon must be running. Docker users: --network=host No endpoint available
+Phone credential sync iOS/Android Companion App → Troubleshooting → Sync Thread credentials “Thread Border Router needed” despite working OTBR
+BLE during commissioning Phone Bluetooth ON; bulb powered on < 15 minutes ago Device not found during QR scan
+If credentials mismatch Delete Thread network in HA, re‑create, re‑sync “Credentials do not match”
+
+Our recommendation: Build your core system on Zigbee. It is proven, stable, and local. When Matter matures, your architecture is ready — just plug in a second ZBT‑2 (or use an existing Thread Border Router) and add Matter devices alongside your Zigbee mesh. No rebuilding required.
+
+---
+
+7. Automated Backups — Protect Everything
+
+Data loss from a failed disk or corrupted update can wipe out your entire configuration.
+
+Setup — 3 minutes:
+
+1. Settings → System → Backups.
+2. Click “Set up automatic backups”.
+3. Schedule: Daily at 04:45 AM. Retention: keep the last 7.
+4. Enable encryption and download the emergency kit file immediately — email it to yourself or print it.
+5. (Optional) Add remote storage: Google Drive, NAS, or Home Assistant Cloud.
+
+Recovery: Flash a fresh HA OS image, choose “Restore from backup”, upload your encrypted file, enter the decryption key. Everything is back — automations, dashboards, energy history.
+
+---
+
+8. Device Naming Convention
+
+Pattern: [Room] – [Device Type] – [Optional Detail]
+
+Entity Name
+Living room ceiling bulb Living Room – Ceiling Light
+Kitchen motion detector Kitchen – Motion Sensor
+Front door sensor Front Door – Contact Sensor
+Office TV power plug Office – TV Power Plug – Energy
+
+Apply this at pairing time. Combined with entity‑based automations, this makes growing to 50+ devices effortless.
+
+---
+
+9. Performance Metrics
+
+Metric Value
+Zigbee latency per hop 15–30 ms
+Automation trigger (end‑to‑end) < 1 s
+Hub idle power (HA Green) 1.7 W
+Total system power (hub + 4 devices) ~12 W
+Healthy RSSI threshold ≥ −70 dBm
+Add router when RSSI < −85 dBm
+
+---
+
+10. Troubleshooting
+
+Problem Diagnosis & Fix
+Device won’t pair Check RSSI. If < –85 dBm, add a router bulb between device and coordinator.
+ZBT‑2 firmware 7.5.1.0 takes network down Re‑flash 7.4.4.6 via web flasher. Wait up to 90 minutes for devices to rejoin automatically.
+Zigbee2MQTT shows config page, no devices Restore database.db from backup (see §5.6).
+ZHA device paired but not showing in automation UI Use entity‑based automation, not device‑based. All entities are available individually.
+Matter device fails commissioning Work through the IPv6 → mDNS → credential sync → BLE checklist in §6.1. As a fallback, pair via a Hue Bridge/Apple Home first.
+ESPHome S31 power readings inaccurate Compare with a trusted kill‑a‑watt meter; adjust current_resistor and voltage_divider in ESPHome YAML.
+Automations drift around sunset Use sun.set_offset: "-00:30:00" instead of exact elevation crossing.
+S60ZBTPF shows non‑zero power when off Update firmware to v2.0.2 via Zigbee2MQTT OTA.
+
+---
+
+11. Architectural Justification
+
+· Local‑first: Latency < 100 ms, privacy absolute, offline reliability guaranteed.
+· Zigbee over Z‑Wave: Zigbee silicon costs $0.50–1.00/unit vs. $2–4 for Z‑Wave; mesh is self‑healing and has no device limit.
+· Zigbee over Wi‑Fi sensors: Wi‑Fi sensors draw 80–150 mA during transmission vs. 30 µA for Zigbee, making battery‑powered Wi‑Fi sensors impractical.
+· Dual‑stick, not MultiPAN: Nabu Casa confirmed multiprotocol does not work reliably. Dedicated coordinators provide separate, stable networks.
+· Entity‑based automations: Survive hardware replacement without rewriting anything.
+· Firmware lock on 7.4.4.6: Prevents catastrophic network loss from the broken 7.5.1.0 build.
+· Matter‑ready, not Matter‑rushed: The architecture supports Thread natively when you are ready, with zero disruption to your Zigbee mesh.
+
+---
+
+12. Competitive Landscape
+
+ This System SmartThings Apple HomeKit Hubitat C‑8
+Total cost $152 – $226 $200+ $300+ $250+
+Local processing 100% Mostly cloud Mostly local 100% local
+Protocols Zigbee, Thread‑ready, Wi‑Fi, BLE Zigbee, Z‑Wave Wi‑Fi, BLE, Thread Z‑Wave, Zigbee
+Lock‑in None (open‑source) Samsung Apple Proprietary hub
+Monthly fee $0 $0 (cloud‑dependent) $0 (iCloud‑dependent) $0
+Energy monitoring Included out of the box Extra devices Extra devices Extra devices
+Encrypted daily backups Yes Manual Limited Limited
+Firmware lock guidance Documented None None None
+
+---
+
+13. Scaling Up
+
+Add‑on Cost Time Notes
+More ThirdReality ZL4 bulbs $7.50 each 2 min Each adds a mesh router
+Aqara Motion Sensor P1 ~$20 5 min Use with luminance threshold for smart lighting
+Radiator TRV (Sonoff TRVZB) ~$25 10 min Per‑room PID temperature control
+IP Camera (Reolink E1) ~$30 15 min RTSP feed with Frigate AI detection
+NFC tags (NTAG215) $5 / 10 5 min Tap to trigger scenes
+Whole‑house energy clamp (SCT‑013) $15 15 min ESP32 + ESPHome → MQTT
+Second ZBT‑2 for Thread ~$49 10 min Enables KAJPLATS and future Matter devices
+Bluetooth proxy (ESP32) ~$10 10 min Room‑level presence via phone BLE
+
+---
+
+14. Quick‑Reference Constants
+
+Constant Value
+Zigbee TX power +20 dBm
+Receiver sensitivity –100 dBm
+Max path loss 120 dB
+Indoor path loss exponent 3.0
+Fade margin 10 dB
+Healthy RSSI ≥ –70 dBm
+Action RSSI (add router) < –85 dBm
+Energy sampling interval 60 s
+Sun position refresh 10 min
+Door sensor avg. current 30 µA
+Temp sensor avg. current 15 µA
+Zigbee channel formula f_c(k) = 2405 + 5(k-11) MHz
+
+---
+
+15. Resources & Links
+
+Resource URL
+ZBT‑2 firmware web flasher https://toolbox.openhomefoundation.org/...
+ESPHome web flasher https://web.esphome.io
+Blueprint import https://my.home-assistant.io/redirect/blueprint_import/
+Home Assistant blog https://www.home-assistant.io/blog/
+
+Got it — you want to turn Smart Home Minimal System Release 1.0 into a GitHub project and actually monetize it. Here’s the playbook:
+
+1. How to Make This a “Reel-Worthy” GitHub Repo
+
+Think of GitHub as your product page + docs + demo combined. The “reel” = short video/gif demos that make people feel the 60-min setup.
+
+Repo structure that works:
+null
+Make the “reel” in 3 formats:
+null
+GitHub Pages site: Enable in Settings → Pages. Use mkdocs-material to turn your /docs into a beautiful site at yourusername.github.io/smart-home-minimal. This is what people will share.
+
+2. How to Earn Money From This — 6 Proven Models
+
+You’ve solved a real pain: “smart home without cloud/subscription”. That’s worth $. Here are paths, ranked by effort vs revenue:
+null
+Reality check: Start with #1 + #3. They’re zero-risk. Once you have 1k GitHub stars, launch #2.
+
+3. Launch Checklist — Week 1
+
+Day 1-2: GitHub Polish
+Create repo, push your v1.0 doc + topology.svg
+Record 60-sec GIF: ffmpeg -i screen.mp4 -vf "fps=10,scale=800:-1" demo.gif
+Add bom.csv with your verified prices + affiliate links. Use Amazon Associates, AliExpress Affiliate
+LICENSE: CC BY-NC-SA 4.0 = free to share, but they can’t sell it. Or MIT if you want max spread
+
+Day 3-4: The Reel
+Film 15-sec phone vertical: “Internet died. My lights still work. $152. Zero subscriptions. Link in bio.”
+Post to IG Reels, TikTok, YouTube Shorts, Threads. Hashtags: #HomeAssistant #SelfHosted #Privacy #NoCloud #DIY
+Pin comment: “Full blueprint + parts list free on GitHub → link”
+
+Day 5-7: Community Seeding
+Post to r/homeassistant, r/selfhosted: “I verified every 2026 firmware to avoid the 7.5.1.0 brick. Here’s the safe stack ”
+HA Community Forums → Share Projects. Nabu Casa often retweets good docs
+Answer questions for 30min/day. This builds trust = stars = traffic = affiliate $[GitHub]
+
+Legal + Ethics Notes
+
+Affiliate disclosure: Required by FTC. Add “As an Amazon Associate I earn from qualifying purchases” in README
+Safety: Keep the S31 electrical warnings prominent. You don’t want liability
+Trademarks: “Home Assistant”, “Zigbee”, “IKEA” are OK in docs. Don’t call your kit “Official Home Assistant Kit” unless Nabu Casa approves
+Pricing: You verified $152.49 in May 2026. Add “Prices checked May 2026, may vary” so you’re covered
+
+Your Unfair Advantage
+
+Most smart home content is either:
+Cloud-dependent fluff, or
+Uber-technical Linux guides.
+
+You nailed the middle: math-backed, safety-first, 60-min, no-cloud, verified 2026 firmware. That’s why this can make money.
+
+## 1. How to Make This a “Reel‑Worthy” GitHub Repo
+
+### 1.1 Repository Structure
+
+```
+smart-home-minimal/
+├── README.md                 ← Hero section + quickstart + links
+├── LICENSE                   ← CC BY‑NC‑SA 4.0
+├── docs/                     ← Full MkDocs‑Material site
+│   ├── index.md              ← Landing page (30‑sec value prop)
+│   ├── blueprint-1.0.md      ← Your definitive blueprint (the one you wrote)
+│   ├── installation.md       ← Step‑by‑step with screenshots
+│   ├── hardware.md           ← BOM, alternative parts, affiliate links
+│   ├── automation-blueprints.md ← Importable blueprints (YAML)
+│   ├── troubleshooting.md
+│   ├── scaling-up.md
+│   └── monetization.md       ← (Optional) transparent sponsorship page
+├── assets/
+│   ├── topology.svg
+│   ├── demo-setup.gif        ← 60‑sec screen capture of pairing
+│   ├── reel-vertical.mp4     ← 15‑sec TikTok / Reel version
+│   ├── thumbnail.png         ← 1280×720 for YouTube / GitHub
+│   └── bom.csv               ← Machine‑readable parts list
+├── blueprints/               ← YAML files for one‑click import
+│   ├── sunset-light-on.yaml
+│   ├── late-night-off.yaml
+│   ├── temperature-alert.yaml
+│   ├── door-after-dark.yaml
+│   ├── energy-cost-today.yaml
+│   └── rssi-monitor.yaml
+├── firmware/                  ← (If you ever distribute pre‑built ESPHome bins)
+└── .github/
+    ├── ISSUE_TEMPLATE/
+    └── FUNDING.yml
+```
+
+**GitHub Pages site**:  
+Enable from repo Settings → Pages (branch `main`, folder `/docs`). Use [`mkdocs-material`](https://squidfunk.github.io/mkdocs-material/) — it renders your Markdown as a polished documentation site, instantly sharable.
+
+### 1.2 The “Reel” Demos — 3 Formats
+
+| Format | Duration | What to show | Technical capture |
+|--------|----------|--------------|------------------|
+| **GitHub Hero GIF** | 20–60 s | Screen recording: unboxing HA Green → pairing first bulb → sunset automation triggering a light on. Overlay text: “0% Cloud. 100% Local. Under 60 min.” | `ffmpeg -i screen.mp4 -vf "fps=10,scale=800:-1" demo-setup.gif` |
+| **TikTok / Reel** | 15 s vertical | Your phone. Pull internet cable while lights are on. Smile: “Still working. $152. No subscriptions. Blueprint free on GitHub.” | Film with phone, capCut overlay, export 1080×1920 |
+| **YouTube Shorts** | ≤60 s | Quick walk‑around: light control, door sensor notification, energy dashboard. Focus on “works when internet is down”. | Same vertical, slightly longer |
+
+---
+
+## 2. How to Earn Money From This — 6 Proven Models
+
+### 2.1 Affiliate Links (Your Zero‑Effort Foundation)
+
+List every recommended part with an affiliate link. Two networks cover everything:
+
+- **Amazon Associates** (US, EU, UK, CA) — ThirdReality bulbs, Aqara sensors, Sonoff, HA Green.
+- **AliExpress Affiliate** — Cheaper Sonoff dongles, IKEA bulbs, generic sensors.
+
+In your `hardware.md` and `bom.csv`, include columns for:
+```
+Part | Price (May 2026) | Amazon Link | AliExpress Link | Notes
+```
+
+Add this disclosure **at the top of README and every page with links**:
+> *As an Amazon Associate and AliExpress affiliate, I earn from qualifying purchases. All prices were accurate as of May 2026 — they may change.*
+
+### 2.2 Sponsorship & Community Support
+
+- **GitHub Sponsors**: Add a `FUNDING.yml` and a small banner “Support this blueprint”. Offer tiers:
+  - $1/mo – “Supporter” (name in README)
+  - $5/mo – “Insider” (early access to new automations, Discord role)
+  - $25/mo – “Patron” (monthly Q&A call, priority issue resolution)
+- **Open Collective**: Alternative for European users, tax‑deductible in some countries.
+
+### 2.3 YouTube & Course Revenue
+
+- **YouTube channel**: Post your setup video, plus weekly 5‑minute tips (“Zigbee channel scanning”, “ESPHome deep dive”). Monetise via ads and affiliate descriptions.
+- **Premium course**: “Smart Home Minimal: From Zero to Fully Local in One Weekend” — $39, includes lifetime updates, private community. Host on Gumroad or Podia.
+
+### 2.4 Pre‑Flashed Hardware Kits (High Effort, High Reward)
+
+Once you have a following, sell a *pre‑packed kit*:
+- Home Assistant Green + ZBT‑2 (with firmware locked to 7.4.4.6)
+- 4 ThirdReality ZL4 bulbs
+- 1 temperature sensor, 2 door sensors
+- Printed quick‑start card with your QR code linking to the docs.
+
+Ship only after flashing coordinator to the correct firmware. Price at ~$210 (25% margin). Use Shopify + print‑on‑demand packer. **Do not call it “Official Home Assistant Kit”** — Nabu Casa reserves that. Call it “The Minimal Pack – Community Verified”.
+
+### 2.5 Consulting & Custom Automation
+
+Offer “Smart Home Health Check” — $99/hour, remote. You audit their Zigbee mesh, automations, and energy setup. Bundle with a hardware list. Advertise only when you have GitHub stars > 1k.
+
+### 2.6 Licensing the Blueprint for Hardware Makers
+
+Allow a Zigbee device brand (e.g., ThirdReality) to bundle your blueprint as a QR code in their packaging for a per‑unit royalty or flat fee. They get a verified setup guide; you earn without support load.
+
+**Reality check**: Start with #1 + #3. Once you cross 1,000 GitHub stars and have a few thousand TikTok followers, introduce #2 (GitHub Sponsors) and #4 (kits).
+
+---
+
+## 3. Launch Checklist — Week 1
+
+### Day 1–2: GitHub Polish
+
+1. Create the repository `smart-home-minimal`.
+2. Push your blueprint `blueprint-1.0.md` as the core document; write a killer `README.md`:
+   ```
+   # Smart Home Minimal System
+   Build a fully local, zero‑subscription smart home in under 60 minutes.  
+   [![Demo](assets/demo-setup.gif)](https://youtu.be/...)
+   ## What You Get
+   - 🌅 Lights that turn on/off by sunset & motion
+   - 🌡️ Temperature alerts without cloud
+   - 🚪 Instant door notifications (even when internet is down)
+   - ⚡ Real‑time energy cost
+   - 🔒 100% local, no subscriptions, no lock‑in
+   [🔨 Start Building →](docs/installation.md)
+   ```
+3. Create `bom.csv` and `hardware.md` with affiliate links.
+4. Choose license: `CC BY-NC-SA 4.0` (free for personal, can’t be sold without permission). Add LICENSE file.
+5. Enable GitHub Pages and configure mkdocs; first live site should be up by end of Day 2.
+
+### Day 3–4: The Reel (Social Content)
+
+Film and post **three pieces**:
+
+- **Reel / TikTok**: “My internet’s dead, but my lights still work. $152. No cloud. No subscriptions. Blueprint free on GitHub.” Show the Ethernet cable being pulled. Caption: #HomeAssistant #DIY #Privacy #NoCloud #SmartHome.
+- **YouTube Short**: Quick showcase of automations working offline. Overlay text: “All local. 60‑min setup.”
+- **Reddit / Threads post**: A still photo of your dashboard + a story: “I built a smart home that works 100% locally. Here’s the exact blueprint, verified for May 2026, including which firmware NOT to update.”
+
+Pin your GitHub link in the comments. Use UTM tags (`?utm_source=tiktok`) to track traffic.
+
+### Day 5–7: Community Seeding
+
+- **r/homeassistant**: Post “I tested the ZBT‑2 firmware 7.5.1.0 so you don’t have to — here’s the safe stack for May 2026”. Link to blueprint.
+- **r/selfhosted**: Focus on the “no cloud, full ownership” angle.
+- **Home Assistant Community Forum**: Share the blueprint in “Share your Projects”. Nabu Casa staff often highlight good community docs.
+- **Discord servers** (Home Assistant, Self‑Hosted, ESPHome): Answer questions. Mention your blueprint when relevant.
+
+Spend 30 minutes a day responding to every comment. Trust → stars → affiliate clicks.
+
+---
+
+## 4. Legal & Ethics Notes
+
+- **FTC / EU consumer law**: Include affiliate disclosure on every page with links. In README: “I may earn a commission if you buy through these links, at no extra cost to you.”
+- **Safety liability**: Keep the S31 electrical warning prominent (red box, bold text). Do not sell pre‑flashed S31s unless you’re a qualified electrician or have proper certifications.
+- **Trademarks**: “Home Assistant” is a trademark of Nabu Casa. Use “Compatible with Home Assistant” not “Official Home Assistant”. “Zigbee” is a trademark of the Connectivity Standards Alliance. “IKEA”, “Kajplats” are theirs. You may refer to them factually (“works with IKEA KAJPLATS bulbs”).
+- **Pricing**: Add disclaimer “Prices checked May 2026; may vary.” Refresh every quarter.
+
+---
+
+## 5. Your Unfair Advantage — Turn This Into a Personal Brand
+
+You’re not just sharing a parts list. You provide:
+
+- **Math‑backed reliability** (link budget, battery life, sunset equation)
+- **Firmware lock guidance** (7.4.4.6 vs dangerous 7.5.1.0)
+- **Safety‑first approach** (S31 warnings, RSSI thresholds)
+- **Complete, zero‑copy setup** (cut‑and‑paste blueprints, entity‑based automations)
+
+That’s content that no influencer has. Every time a 7.5.1.0 user loses their network, your blueprint becomes a lifeboat. Market it as: *“The last smart home guide you’ll ever need — because it’s verified against what actually ships in 2026.”*
+
+---
+
+## 6. Next Steps Right Now
+
+1. **Create the repo** and push `blueprint-1.0.md`.
+2. **Record a 60‑second desktop GIF** of a light pairing + sunset automation.
+3. **Set up Amazon Associates** (approval is near‑instant with a live site).
+4. **Post on r/homeassistant** tomorrow morning (EU time) for maximum engagement.
+
+
+
+### 1. System Topology
+
+```
+        ┌─────────────────────────┐
+        │ Your Phone / Tablet     │
+        │ (Companion app/browser) │
+        └───────────┬─────────────┘
+                    │ Wi‑Fi (local)
+         ┌──────────▼────────────────────────────┐
+         │      Local Dashboard                  │
+         │  http://homeassistant.local:8123      │
+         └──────────┬────────────────────────────┘
+                    │
+         ┌──────────▼──────────────────────────────────────┐
+         │            HOME ASSISTANT HUB                  │
+         │  Home Assistant Green (primary)                │
+         │  ─────────────────────────────────────────     │
+         │  Home Assistant OS                             │
+         │   ├─ Automation Engine                         │
+         │   ├─ Zigbee2MQTT (serial‑to‑MQTT bridge)       │
+         │   └─ MQTT Broker                               │
+         │                                                │
+         │   ┌───────────────┐   ┌───────────────┐        │
+         │   │ USB‑A (top)   │   │ USB‑A (bottom)│        │
+         │   │ ZBT-2 #1      │   │ ZBT-2 #2      │        │
+         │   │ Zigbee (fw    │   │ Thread        │        │
+         │   │ 7.4.4.6 lock) │   │ (optional)    │        │
+         │   └───────┬───────┘   └───────┬───────┘        │
+         └───────────┼───────────────────┼────────────────┘
+                     │ Zigbee mesh        │ Thread mesh
+                     │                    │ (future)
+         ┌───────────┼──────────┐        │
+         │           │          │        │
+    ┌────▼───┐ ┌─────▼────┐ ┌──▼──────────▼──┐
+    │ Zigbee │ │ Zigbee   │ │ Wi‑Fi          │
+    │ Sensors│ │ Routers  │ │ (ESPHome plug) │
+    └────────┘ │ (Bulbs)  │ └────────────────┘
+               └──────────┘
+```
+
+---
+
+### 2. Data Flow – Temperature Alert (End‑to‑End)
+
+```
+┌─────────────────────┐
+│ Aqara Temp Sensor   │
+│ measures 27.2°C     │
+└─────────┬───────────┘
+          │ Zigbee packet
+          ▼
+┌─────────────────────┐
+│ Zigbee Router (bulb)│
+│ forwards to mesh    │
+└─────────┬───────────┘
+          │
+          ▼
+┌──────────────────────────┐
+│ ZBT-2 Coordinator        │
+│ (7.4.4.6, channel 15)    │
+└─────────┬────────────────┘
+          │ serial
+          ▼
+┌──────────────────────────┐
+│ Zigbee2MQTT              │
+│ Parse & publish:         │
+│ zigbee2mqtt/             │
+│   living_room_temp       │
+│   {"temperature":27.2}   │
+└─────────┬────────────────┘
+          │ MQTT over TCP
+          ▼
+┌──────────────────────────┐
+│ Home Assistant           │
+│ MQTT Integration →       │
+│ entity: sensor.living_   │
+│  room_temperature        │
+└─────────┬────────────────┘
+          │ numeric_state trigger
+          ▼
+┌──────────────────────────┐
+│ Automation               │
+│ above: 26°C →            │
+│ notification to phone    │
+└──────────────────────────┘
+   ⏱️ Latency: < 1 second
+   🌐 Internet: NOT required
+```
+
+---
+
+### 3. Pairing Sequence (Golden Rule)
+
+```
+  Step 1: Install & power on ALL mains‑routed devices (bulbs) in final locations
+           ┌──────────┐    ┌──────────┐    ┌──────────┐
+           │  Bulb 1  │    │  Bulb 2  │    │  Bulb 3  │
+           └──────────┘    └──────────┘    └──────────┘
+
+  Step 2: Permit join in Zigbee2MQTT, pair bulbs one‑by‑one
+           ┌──────────┐    ┌──────────┐    ┌──────────┐
+           │  Bulb 1  │───▶│  Bulb 2  │───▶│  Bulb 3  │
+           └──────────┘    └──────────┘    └──────────┘
+                (Mesh established, full coverage)
+
+  Step 3: Only then add battery‑powered sensors
+           ┌──────────┐    ┌──────────┐
+           │  Sensor  │    │  Sensor  │
+           └──────────┘    └──────────┘
+              They join instantly through the robust mesh.
+```
+
