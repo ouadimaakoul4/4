@@ -1,0 +1,762 @@
+Verified Multi-Agent Intelligence (VMAI)
+
+A Formal Mathematical Architecture for Reliable Autonomous AI Systems
+
+ouadi Maakoul 
+
+AI: Claude, chatGpt, Deepseek, Meta 
+
+Abstract
+
+Autonomous multi‑agent systems constructed from large language models exhibit hallucination‑driven errors, cascading plan failures, and an absence of verifiable guarantees. This dissertation presents Verified Multi‑Agent Intelligence (VMAI), an architecture in which every externally consequential action must carry a machine‑checkable certificate of correctness before execution. VMAI unifies four formally specified layers: (i) a confidence‑weighted, Byzantine‑robust consensus layer over heterogeneous agent outputs, (ii) a temporal‑logic formal verification layer operating on synthesised plans, (iii) a three‑valued runtime monitor enforcing safety at the action level, and (iv) a Bayesian reliability layer that updates agent trust from accumulated execution evidence. All layers are defined on a single filtered probability space, and their guarantees are expressed in a common stochastic framework.
+
+The dissertation proves: an exponential tail bound on the probability of consensus error under calibrated, independent agents; soundness and abstraction‑refinement completeness of the plan verifier for the safety fragment of Linear Temporal Logic; soundness of the LTL₃ runtime monitor for safety properties, together with a formal impossibility result for the enforcement of arbitrary liveness by truncation monitors; almost‑sure convergence of Beta‑Bernoulli trust estimates under exchangeable evidence; and an end‑to‑end composition theorem that bounds the probability of unsafe execution using the Fréchet–Hoeffding inequality and an exact correlation identity, establishing graceful degradation without requiring statistical independence between layers. Two necessity theorems demonstrate that neither the consensus‑plus‑monitor combination nor an uncalibrated confidence mechanism can, by itself, achieve sub‑constant error bounds for tasks requiring liveness. A computational cost model and a falsifiable evaluation protocol are provided. The work closes with a discussion of the framework’s assumptions, limitations, and avenues for future extension.
+
+Keywords: agentic AI, formal verification, runtime enforcement, LTL₃, Byzantine consensus, proof‑carrying decisions, multi‑agent systems.
+
+---
+
+1. Introduction
+
+1.1 Motivation
+
+The transition from conversational language models to autonomous, tool‑using, multi‑step agents has exposed a structural gap between capability and trustworthiness. Empirical audits show that even frontier models achieve only approximately 41% step‑localisation accuracy on agent hallucination benchmarks, with tool‑use hallucinations the most difficult category to detect [1]. Failures in memory and reflection modules cascade through subsequent decisions, causing complete task failure [2]. Industry has responded with a maker–checker pattern: a Planner decomposes goals, specialist Executors act, and a Verifier checks the result. Yet decomposition alone does not yield correctness: planners are disproportionately vulnerable to prompt injection and memory poisoning, and LLM‑based self‑verification is known to be unreliable [3].
+
+In parallel, the formal methods community has produced a series of point solutions: runtime enforcement with customisable rule languages (AgentSpec), probabilistic model checking via learned Markov chains (Pro2Guard), SMT‑guided constrained generation with backtracking (Agent‑C), and Byzantine‑style consensus protocols for LLM agents (CP‑WBFT) [4,5]. What has been missing is a unifying mathematical theory that shows how consensus, formal verification, runtime enforcement, and probabilistic trust compose into a single soundness guarantee. This dissertation provides that theory.
+
+1.2 Central Hypothesis
+
+H. For any multi‑agent system whose actions are gated by the conjunction of (a) a calibrated weighted‑consensus acceptance test, (b) a model‑checked plan certificate, and (c) a three‑valued runtime monitor, the probability that an unsafe action reaches the environment is bounded above by a computable function of the agents’ individual fault rates, the verifier’s model‑fidelity gap, and the correlation between consensus and model errors—and this bound degrades gracefully (non‑catastrophically) as any single layer weakens.
+
+A formal version of this hypothesis is proved in §7 (Theorems 7.1 and 7.2).
+
+1.3 Related Work
+
+The dominant 2024–2026 line treats agent safety as a specification problem: translate natural‑language policy into a formal object (LTL, DSL rules, or first‑order constraints) and enforce it either offline before deployment or online at each decision point [6]. Runtime verification, rooted in decades of formal methods, specifies what an agent must and must not do in temporal logic, synthesises a monitor from that specification, and enforces the result at every decision point [7]. AgentSpec demonstrates that natural‑language policies can be partially auto‑formalised, achieving 95.56% precision and 70.96% recall for embodied agents [8]. The consensus‑over‑LLM‑agents literature reframes unreliable models as Byzantine nodes, with CP‑WBFT weighting each agent’s vote by a self‑reported confidence probe, tolerating fault rates far beyond the classical one‑third threshold [9]. Complementary work shows that voting protocols outperform free‑form debate on reasoning tasks by a wide margin [10]. The concept of proof‑carrying decisions—cryptographically‑signed objects encoding custody, lineage, and policy gates—provides the governance framework into which VMAI’s certificate object naturally fits [11]. Empirical failure taxonomies confirm that existing safety benchmarks under‑cover the precise failure modes VMAI targets: hallucination‑driven action and multi‑step error cascading remain weakly evaluated [12]. These findings collectively motivate both the architecture and the evaluation protocol proposed in this dissertation.
+
+---
+
+2. Formal Preliminaries
+
+We fix a filtered probability space (\Omega, \mathcal{F}, \{\mathcal{F}_t\}_{t \ge 0}, \mathbb{P}), where \mathcal{F}_t represents the system’s observable history through decision epoch t. All random objects introduced below are \mathcal{F}_t-measurable unless stated otherwise. \mathbb{1}[\cdot] denotes the indicator function; \mathrm{Var}, \mathrm{Cov}, \mathrm{Corr} denote variance, covariance, and Pearson correlation. For any set X, X^* is the set of finite sequences over X.
+
+Definition 2.1 (Task, Ground Truth). We consider decision tasks with a finite action space Y \subseteq \mathcal{A}. There exists a deterministic oracle \phi_{\text{true}} : Y \to \{0,1\} such that \phi_{\text{true}}(y)=1 iff y is correct. The correct action y_{\text{true}} \in Y is the unique element with \phi_{\text{true}}(y_{\text{true}})=1. If no such element exists, the task is ill‑posed and the system aborts.
+
+Definition 2.2 (Agent). An agent A_i is characterised by:
+
+· a latent adversarial status \iota_i \in \{0,1\} (possibly adaptively chosen);
+· for non‑adversarial agents (\iota_i = 0), an intrinsic error probability e_i \in [0,1] such that, conditional on the history and \iota_i = 0, Z_i := \mathbb{1}[Y_i = y_{\text{true}}] \sim \mathrm{Bernoulli}(1-e_i);
+· an action proposal Y_i : \Omega \to Y and a self‑reported confidence p_i \in [0,1], both \mathcal{F}_t-measurable.
+
+Definition 2.3 (Calibration). Agent i is \gamma_i-calibrated if, almost surely,
+
+\bigl| \mathbb{P}(Y_i = y_{\text{true}} \mid p_i) - p_i \bigr| \le \gamma_i
+
+for some constant \gamma_i \in [0,1). The agent is perfectly calibrated when \gamma_i = 0.
+
+Definition 2.4 (VMAI System). A VMAI instance is a tuple \mathcal{M} = (\{A_i\}_{i=1}^n, \mathcal{C}, \mathcal{V}, \mathcal{R}) where:
+
+· \{A_i\}_{i=1}^n is a finite population of agents (one designated Planner, k Specialists, plus auxiliary Verifier/Monitor agents);
+· \mathcal{C} is the consensus operator (§3);
+· \mathcal{V} is the formal plan verifier (§4);
+· \mathcal{R} is the runtime monitor (§5).
+
+The system maintains Bayesian trust weights w_i \ge 0, \sum_i w_i = 1, which are \mathcal{F}_{t-1}-measurable (i.e., fixed prior to the agents casting their votes at epoch t).
+
+Definition 2.5 (Candidate Action, Certificate). At decision epoch t, each agent proposes a candidate action y_i \in Y with confidence p_i. A certificate for an action y is a tuple \kappa(y) = (V_{\text{cons}}(y), V_{\text{form}}(y), V_{\text{rt}}(y)) \in \{0,1\}^3. Execution is permitted iff \kappa(y) = (1,1,1).
+
+---
+
+3. The Consensus Layer
+
+3.1 Weighted Confidence Score
+
+Given trust weights w_i and agent reports (Y_i, p_i), define the weighted confidence score for each candidate y \in Y:
+
+C(y) = \sum_{i=1}^n w_i \, p_i \, \mathbb{1}[Y_i = y].
+
+The accepted output is
+
+y^* = \arg\max_{y \in Y} C(y), \qquad V_{\text{cons}}(y^*) = \mathbb{1}\bigl[ C(y^*) \ge \tau \bigr],
+
+with acceptance threshold \tau \in (1/2, 1].
+
+3.2 Assumptions
+
+Assumption 3.1 (Conditional Independence). Given the history \mathcal{F}_{t-1}, the random pairs (Y_i, p_i) are mutually independent across agents.
+
+Assumption 3.2 (Bounded Confidence Gap). There exist constants 0 < p_{\min}, p_{\max} < 1 such that almost surely,
+
+· if Y_i = y_{\text{true}} (agent votes correctly), then p_i \ge p_{\min};
+· if Y_i = y' \neq y_{\text{true}} and all incorrect agents coordinate on the same wrong value y', then p_i \le p_{\max}.
+
+3.3 Exponential Error Bound
+
+Let W_h = \sum_{i: Z_i = 1} w_i be the total weight of correct votes, and W_f = 1 - W_h the complementary weight. In the worst case, all incorrect votes concentrate on a single wrong value y'. Define \mu_h = \mathbb{E}[C(y_{\text{true}})].
+
+Theorem 3.1 (Probabilistic Consensus Bound). Under Assumptions 3.1 and 3.2, for any \epsilon > 0,
+
+\mathbb{P}\bigl( C(y_{\text{true}}) \le \mu_h - \epsilon \bigr) \le \exp\!\left( -\frac{2\epsilon^2}{\sum_{i=1}^n w_i^2} \right). \tag{3.1}
+
+Moreover, if there exists \delta > 0 such that for every incorrect candidate y',
+
+\mu_h - \mathbb{E}[C(y')] \ge \delta, \tag{3.2}
+
+then
+
+\mathbb{P}( y^* \neq y_{\text{true}} ) \le 2 \exp\!\left( -\frac{\delta^2}{2\sum_i w_i^2} \right). \tag{3.3}
+
+Proof. Under Assumption 3.1, C(y_{\text{true}}) = \sum_i w_i p_i \mathbb{1}[Y_i = y_{\text{true}}] is a sum of independent random variables bounded in [0, w_i]. Hoeffding’s inequality (Hoeffding, 1963) gives
+
+\mathbb{P}\!\left( \sum_i X_i - \mathbb{E}\!\sum_i X_i \le -\epsilon \right) \le \exp\!\left( -\frac{2\epsilon^2}{\sum_i (b_i - a_i)^2} \right)
+
+with b_i = w_i, a_i = 0, yielding (3.1).
+
+For the second claim, the error event \{y^* \neq y_{\text{true}}\} implies there exists some incorrect y' with C(y_{\text{true}}) \le C(y'). By (3.2), \mathbb{E}[C(y_{\text{true}})] - \mathbb{E}[C(y')] \ge \delta. Apply (3.1) to C(y_{\text{true}}) with \epsilon = \delta/2, and a symmetric Hoeffding bound to C(y') exceeding its mean by \delta/2. A union bound over the two tail events gives the bound 2\exp(-\delta^2/(2\sum w_i^2)). ∎
+
+Corollary 3.1 (Equal Weights, Classical Threshold). With equal weights w_i = 1/n and perfect calibration, condition (3.2) reduces to (1 - W_f) > W_f, i.e., W_f < 1/2. This is the crash‑fault honest‑majority threshold. The more stringent Byzantine bound of 1/3 does not apply here because each agent is bound by the certificate mechanism to a single signed vote per epoch; equivocation is structurally excluded.
+
+3.4 Remark on Split Voting
+
+If the adversarial weight is split across m distinct wrong values, the expected score of any single incorrect candidate is at most W_f p_{\max}/m, which is smaller than the concentrated case. Thus split voting only widens the margin condition (3.2), making the bound tighter. No additional lemma is required.
+
+---
+
+4. The Formal Verification Layer
+
+4.1 Specification Language
+
+We restrict the specification language to the syntactic safety fragment of Linear Temporal Logic (LTL):
+
+\Phi_{\text{safe}} = \{\, \Box\psi \mid \psi \text{ is a Boolean combination of atomic propositions and past‑LTL operators} \,\}.
+
+This fragment contains all properties enforceable by runtime truncation monitors (§5).
+
+Definition 4.1 (Execution Model). A plan \pi produced by the Planner induces a finite Kripke structure M_\pi = (S, s_0, \to, L) where S is a finite set of control locations, \to \subseteq S \times S is the transition relation, and L : S \to 2^{\mathrm{AP}} labels each state with the atomic propositions true at that program point.
+
+Assumption 4.1 (Sound Labeling). The labeling L is sound with respect to the real environment: if \mathrm{unsafe} \in L(s), then every concrete execution that reaches the state corresponding to s violates the environment’s safety condition. The labeling may be incomplete (a missing unsafe proposition does not guarantee safety).
+
+4.2 Plan Verification via Model Checking
+
+For a specification \varphi = \Box\psi, we construct a Büchi automaton \mathcal{B}_{\neg\varphi} that accepts precisely the traces violating \Box\psi. Because \psi is a safety property, \mathcal{B}_{\neg\varphi} is a deterministic finite automaton recognising bad prefixes: finite words that contain a violation of \psi. Model checking reduces to reachability in the product M_\pi \otimes \mathcal{B}_{\neg\varphi}: an accepting state of the product is reachable iff some execution trace of M_\pi violates \varphi. Define
+
+V_{\text{form}}(\varphi, \pi) = \begin{cases}
+1 & \text{if no accepting state is reachable in } M_\pi \otimes \mathcal{B}_{\neg\varphi},\\
+0 & \text{otherwise}.
+\end{cases}
+
+Theorem 4.1 (Soundness). If V_{\text{form}}(\varphi, \pi) = 1, then every concrete execution that respects the control flow of \pi and the sound labeling satisfies \varphi.
+
+Proof. Any concrete violation of \Box\psi would produce a finite bad prefix accepted by \mathcal{B}_{\neg\varphi}. Because the labeling is sound, the abstract trace of this violating execution is a path in M_\pi whose state labels include the propositions witnessing the violation. That path induces an accepting run in the product. V_{\text{form}}=1 asserts that no such run exists, so no concrete violation can occur. ∎
+
+Theorem 4.2 (Abstraction‑Refinement Completeness). If V_{\text{form}}(\varphi, \pi) = 0, the model checker returns a finite counterexample trace \sigma in M_\pi. This trace is either real (can be instantiated in a high‑fidelity simulator) or spurious (due to over‑approximation in L). There exists a computable refinement procedure that, for spurious counterexamples, adds a new atomic proposition to distinguish the abstract state from the actual concrete reachable set, eliminating that spurious path. The CEGAR loop terminates for finite S.
+
+Proof. Standard counterexample‑guided abstraction refinement; the finite state space guarantees termination. ∎
+
+Remark 4.1 (Complexity). For \psi purely propositional (no temporal operators), \mathcal{B}_{\neg\varphi} has size O(|\psi|) and reachability in the product is checked in time O(|M_\pi| \cdot |\psi|). The general exponential O(2^{|\psi|}) bound for LTL model checking applies only when \psi itself contains nested temporal operators, which our fragment excludes. The cost model (§8) therefore uses the linear bound as the typical case, with the exponential figure retained as a conservative upper bound for future extensions.
+
+---
+
+5. Runtime Verification and Bayesian Reliability
+
+5.1 LTL₃ Runtime Monitor
+
+We synthesize a runtime monitor for \varphi = \Box\psi following the LTL₃ construction of Bauer et al. (2011). Given a finite trace prefix \tau_{0:t}, the monitor returns a verdict in \{\top, \bot, ?\}:
+
+· \bot (reject) if \tau_{0:t} is a bad prefix—every infinite continuation violates \varphi;
+· \top (accept) if the prefix is a good prefix;
+· ? (inconclusive) otherwise.
+
+For \Box\psi, a bad prefix is any finite sequence that contains a state in which \psi is false. The monitor is implemented as a Moore automaton that emits \bot exactly when the next proposed action would transition the system into a state where \psi evaluates to false.
+
+Theorem 5.1 (Monitor Soundness). For a correctly synthesized monitor enforcing \varphi = \Box\psi by blocking the action that would cause the next state to violate \psi, every finite executed trace satisfies \Box\psi.
+
+Proof. By construction, the monitor raises \bot iff the next state would make \psi false. Since the system blocks that action, the executed trace ends before any violation occurs. The resulting finite trace contains no state where \psi is false; hence it satisfies \Box\psi under finite‑trace semantics. ∎
+
+5.2 Liveness Impossibility
+
+Lemma 5.2 (Limitation of Truncation Monitors). A truncation monitor—one whose only enforcement mechanism is to halt execution (Schneider 2000)—cannot enforce an arbitrary LTL liveness property \Diamond\,\text{goal} without either violating safety or causing indefinite blocking.
+
+Proof sketch. If the environment (or an adversarial agent) can consistently avoid \text{goal} while never triggering \neg\text{unsafe}, the monitor has no action it can block that forces progress, because blocking only removes transitions, it never inserts new ones. The monitor can preserve safety by blocking forever, but that violates liveness. This is a direct consequence of the classic result that the set of properties enforceable by truncation monitors is exactly the class of safety properties (Ligatti, Bauer, and Walker 2005). ∎
+
+Remark 5.1. The impossibility is specific to truncation monitors. Richer enforcement automata—edit automata—can enforce a larger class, including certain bounded‑liveness properties, by buffering and delaying actions. Extending the VMAI runtime layer to an edit automaton is future work.
+
+5.3 Bayesian Trust Update
+
+Each agent i is associated with an unknown error probability e_i \in [0,1]. We place a \text{Beta}(a, b) prior over 1-e_i (the probability of correctness). After observing K independent task outcomes, let S_i be the number of times agent i was correct. The likelihood for S_i given e_i is \text{Binomial}(K, 1-e_i). By Beta‑Binomial conjugacy, the posterior of 1-e_i given the data is \text{Beta}(a + S_i,\; b + K - S_i).
+
+We define the trust weight as the posterior mean:
+
+w_i = \mathbb{E}[1 - e_i \mid S_i] = \frac{a + S_i}{a + b + K}.
+
+These weights are then normalised: \tilde{w}_i = w_i / \sum_{j=1}^n w_j.
+
+Assumption 5.1 (Exchangeability). The sequence of decision tasks is exchangeable for each agent, so that the Bernoulli model with a constant e_i is well‑specified.
+
+Proposition 5.3 (Consistency). Under the Beta‑Bernoulli model and exchangeability,
+
+\tilde{w}_i \xrightarrow{a.s.} \frac{1 - e_i}{\sum_{j=1}^n (1 - e_j)} \quad \text{as } K \to \infty.
+
+Consequently, if there exists at least one agent with error rate e_i < \epsilon and all other agents have error rates \ge \epsilon, the normalised weight of any high‑error agent converges to 0 almost surely.
+
+Proof. By the Strong Law of Large Numbers, S_i/K \to 1 - e_i almost surely. The posterior mean (a+S_i)/(a+b+K) is a weighted average of the prior mean and the empirical frequency; as K \to \infty the prior’s influence vanishes, so w_i \to 1 - e_i a.s. Normalisation is continuous, so \tilde{w}_i converges to the normalised limit. The second claim follows by noting that if some agent has 1-e_i > 1-\epsilon and another has 1-e_j \le 1-\epsilon, the former’s weight tends to a positive constant while the latter’s tends to zero after normalisation. ∎
+
+Remark 5.2 (Trust‑Consistency). Proposition 5.3 is the formal justification for the requirement that the Bayesian trust layer must accompany the consensus layer. Without it, uncalibrated or persistently faulty agents could retain undue influence indefinitely, as proven in Theorem 8.2.
+
+---
+
+6. Unified Optimisation Objective
+
+Define the system‑level objective over the joint policy space \Pi (a product of finite stochastic policy simplices, given finite state/action spaces and bounded plan depth):
+
+J(\Pi) = \alpha A(\Pi) + \beta R(\Pi) + \gamma E(\Pi) - \delta C(\Pi),
+
+where:
+
+· A = task accuracy,
+· R = reliability (probability all three gates pass),
+· E = explainability (e.g., inverse certificate size),
+· C = computational cost,
+· \alpha, \beta, \gamma, \delta > 0 are governance‑chosen weights.
+
+Proposition 6.1 (Existence of an Optimal Configuration). If Y is finite, plans are drawn from a finite language, and the horizon T is bounded, then \Pi is a compact set in a finite‑dimensional Euclidean space. All four components A, R, E, C are continuous functions of the policy parameters. By the extreme value theorem, J attains a maximum on \Pi.
+
+Proof. Under the stated finiteness assumptions, each agent’s policy is a stochastic matrix over a finite domain, i.e., a point in a product of simplices, which is compact. The objective components are continuous in these parameters (accuracy and reliability are expectation‑based; cost and explainability are deterministic functions of the policies). A continuous function on a compact set attains its maximum. ∎
+
+Remark 6.1. Global optimality is intractable in practice, but the layered architecture decomposes the problem: trust weights are updated via convex Bayesian inference, consensus threshold is a scalar parameter, model checking is decidable offline, and runtime monitoring is linear‑time per step. This decomposition is the standard architectural justification for a layered rather than monolithic design.
+
+---
+
+7. The Composition Theorem
+
+We now prove the central result: the bound on the probability that an unsafe action is executed by the full VMAI stack.
+
+Definition 7.1. Define the events:
+
+· A = \{ V_{\text{cons}} = 1 \text{ but } y^* \neq y_{\text{true}} \} (consensus accepts an incorrect action),
+· B = \{ V_{\text{form}} = 1 \text{ but the plan contains a reachable state that violates safety in the real environment} \}.
+
+Let \epsilon_{\text{cons}} = \mathbb{P}(A), \epsilon_{\text{form}} = \mathbb{P}(B). By Theorem 5.1, the runtime monitor’s failure probability for safety properties is \epsilon_{\text{rt}} = 0, assuming correct monitor synthesis. Let \rho = \mathrm{Corr}(\mathbb{1}_A, \mathbb{1}_B) be the Pearson correlation between the two failure indicators.
+
+Proposition 7.1 (Exact Correlation Identity). For any two events A, B with probabilities in (0,1),
+
+\mathbb{P}(A \cap B) = \epsilon_{\text{cons}} \epsilon_{\text{form}} + \rho \sqrt{ \epsilon_{\text{cons}}(1-\epsilon_{\text{cons}}) \, \epsilon_{\text{form}}(1-\epsilon_{\text{form}}) }. \tag{7.1}
+
+Proof. By definition, \mathrm{Cov}(\mathbb{1}_A, \mathbb{1}_B) = \mathbb{E}[\mathbb{1}_A \mathbb{1}_B] - \mathbb{E}[\mathbb{1}_A]\mathbb{E}[\mathbb{1}_B] = \mathbb{P}(A \cap B) - \epsilon_{\text{cons}} \epsilon_{\text{form}}. Also, \mathrm{Cov}(\mathbb{1}_A, \mathbb{1}_B) = \rho \sqrt{\mathrm{Var}(\mathbb{1}_A)\mathrm{Var}(\mathbb{1}_B)}. For Bernoulli variables, \mathrm{Var}(\mathbb{1}_A) = \epsilon_{\text{cons}}(1-\epsilon_{\text{cons}}), and similarly for B. Substituting and solving for \mathbb{P}(A \cap B) yields (7.1). ∎
+
+Theorem 7.1 (Composition Bound).
+
+(a) Fréchet–Hoeffding bound (always valid):
+
+\mathbb{P}(\text{unsafe execution}) = \mathbb{P}(A \cap B) \le \min(\epsilon_{\text{cons}}, \epsilon_{\text{form}}). \tag{7.2}
+
+(b) Correlation‑aware bound: Given an upper bound \hat{\rho} \ge \rho on the correlation (estimable from data),
+
+\mathbb{P}(\text{unsafe execution}) \le \epsilon_{\text{cons}} \epsilon_{\text{form}} + \hat{\rho} \sqrt{ \epsilon_{\text{cons}}(1-\epsilon_{\text{cons}}) \, \epsilon_{\text{form}}(1-\epsilon_{\text{form}}) }. \tag{7.3}
+
+(c) Independence special case (\rho = 0): When consensus and formal verification failures arise from disjoint mechanisms,
+
+\mathbb{P}(\text{unsafe execution}) \le \epsilon_{\text{cons}} \epsilon_{\text{form}}. \tag{7.4}
+
+Proof. (7.2) follows from A \cap B \subseteq A and A \cap B \subseteq B by monotonicity of \mathbb{P}. (7.3) follows from (7.1) and the monotonicity of the right‑hand side in \rho once \hat{\rho} \ge \rho is substituted. (7.4) is the special case \rho = 0. ∎
+
+Corollary 7.1 (Graceful Degradation). All three bounds tend to 0 if either \epsilon_{\text{cons}} \to 0 or \epsilon_{\text{form}} \to 0. Thus no single layer is a single point of failure: degrading one layer while keeping the other strong still guarantees a safety improvement, satisfying the “graceful degradation” claim of Hypothesis H.
+
+7.1 Total Undesired Execution Probability
+
+We now bound the probability of any undesired execution—unsafe or merely incorrect.
+
+Theorem 7.2 (Total Error Bound). Under the assumption that y_{\text{true}} is safe, \{\text{unsafe}\} \subseteq \{\text{incorrect}\} = I. Hence
+
+\mathbb{P}(\text{undesired execution}) = \mathbb{P}(I) = \epsilon_{\text{cons}}.
+
+The probability of an unsafe execution is at most \min(\epsilon_{\text{cons}}, \epsilon_{\text{form}}), while the remaining \epsilon_{\text{cons}} - \mathbb{P}(A \cap B) is the probability of executing an incorrect but safe action.
+
+Proof. By Definition 7.1, I = \{y^* \neq y_{\text{true}}\} and A = \{V_{\text{cons}}=1 \text{ and } y^* \neq y_{\text{true}}\}. Because execution requires V_{\text{cons}}=1, the event \{\text{undesired execution}\} = I \cap \{V_{\text{cons}}=1\} = A, so its probability is \epsilon_{\text{cons}}. Since \{\text{unsafe execution}\} = A \cap B \subseteq A, the partition follows. ∎
+
+Practical interpretation. Theorem 7.2 shows that the formal and runtime layers re‑partition the total error probability rather than reducing it. Reducing \epsilon_{\text{cons}} (by improving agent reliability, consensus weights, or calibration) is the only lever that decreases the total frequency of wrong actions. Formal verification is a safety multiplier, not a correctness multiplier. This fact is central to the architectural rationale: every layer has a distinct, non‑redundant role.
+
+---
+
+8. Necessity Theorems and Cost Model
+
+8.1 Necessity of the Formal Verifier
+
+Theorem 8.1 (Liveness Requires Formal Verification). Consider any system that uses only consensus and runtime monitoring (no formal verifier). For any non‑safety LTL property (e.g., \Diamond\,\text{goal}), there exists an environment in which, regardless of the number of agents, the probability of failure (either safety violation or deadlock) is bounded away from zero. Hence a formal plan verifier is necessary to achieve high reliability for tasks with liveness requirements.
+
+Proof sketch. A truncation monitor cannot force progress (Lemma 5.2). An adversary that consistently proposes actions that avoid both the goal and any safety violation will cause the system to loop safely forever, violating liveness. No consensus mechanism can distinguish this situation from genuine progress without a model of the plan’s intended liveness property, which is exactly what the formal verifier supplies. ∎
+
+8.2 Necessity of Bayesian Trust
+
+Theorem 8.2 (Calibration‑Free Consensus Vulnerability). If agents may report arbitrary confidence values without any calibration guarantee (\gamma_i may be arbitrarily large), then for any threshold \tau < 1, there exists an adversary controlling a minority of agents (W_f < 1/2) who can force the consensus to output an incorrect action with positive probability. Therefore, a mechanism that infers true reliability from longitudinal evidence (the Bayesian trust layer) is not optional.
+
+Proof. The adversary sets p_i = 1 for a wrong value. If honest agents’ true confidences are lower than 1, the weighted sum for the incorrect value can exceed \tau despite the adversary’s minority weight. Without calibration or empirical trust estimates, the consensus cannot detect this bluff. ∎
+
+8.3 Computational Cost Model
+
+We quantify the per‑epoch overhead of the VMAI stack:
+
+· Consensus: O(n) score evaluations.
+· Model checking: For a propositional \psi, the automaton size is O(|\psi|) and emptiness checking is O(|M_\pi| \cdot |\psi|), i.e., linear in the plan size. The worst‑case bound for general LTL with nested temporal operators is PSPACE, but our safety fragment avoids this.
+· Runtime monitor: O(1) per step (finite‑state machine lookup).
+· Bayesian update: O(1) per agent (Beta parameter update).
+
+Overall, C(\Pi) = O(n + |M_\pi| \cdot |\psi| + T), where T is the episode length. The model‑checking term dominates in practice but remains tractable for bounded plans.
+
+---
+
+9. Evaluation Protocol
+
+Because this dissertation is a theoretical contribution and contains no physical experiments or code training, the following protocol is proposed for future empirical validation.
+
+9.1 Independent Layer Characterisation
+
+1. Calibration measurement: Before deployment, estimate each agent’s calibration curves and determine p_{\min}, p_{\max} empirically on a held‑out set of tasks.
+2. Consensus error rate \epsilon_{\text{cons}}: Run the consensus layer alone on a set of synthetic decision problems with known ground truth, varying the fault rates of participating agents. Measure the frequency of incorrect acceptance.
+3. Formal‑verification miss rate \epsilon_{\text{form}}: Evaluate the plan verifier on a benchmark of plans with known safety violations (injection attacks, tool‑use errors). Count the proportion of unsafe plans that receive V_{\text{form}}=1.
+4. Correlation estimation \hat{\rho}: From joint failure logs, compute the sample correlation between \mathbb{1}_A and \mathbb{1}_B. This quantity is required for the correlation‑aware bound (7.3) and, because (7.1) is an identity, is directly reportable.
+
+9.2 End‑to‑End Safety
+
+Run the full VMAI stack in adversarial environments (e.g., MCP tool‑injection scenarios, prompt‑poisoning attacks on the Planner) and measure the fraction of episodes in which an unsafe action is executed. Compare this empirical value against the theoretical bounds of Theorem 7.1.
+
+9.3 Timeliness Metrics
+
+Adopt Early Intervention Rate and Intervention Gap (as introduced by StepShield) to quantify how early the runtime monitor blocks unsafe actions relative to irreversible side effects. Theorem 5.1 guarantees eventual blocking, not early blocking; timeliness metrics fill this gap.
+
+---
+
+10. Contributions and Limitations
+
+10.1 Contributions
+
+1. Unified probabilistic framework: All four layers are defined on a single filtered probability space, eliminating the mixture of deterministic, automata‑theoretic, and Bayesian models that plagued prior work.
+2. Exponential consensus bound (Theorem 3.1): A Hoeffding‑based tail bound that provides a computable \epsilon_{\text{cons}}, replacing the qualitative “if‑then” condition of earlier confidence‑weighted consensus analyses.
+3. Soundness and CEGAR completeness of the plan verifier (Theorems 4.1–4.2): The first formalisation of LLM‑agent plan verification with an explicit account of the model‑fidelity gap and a finite termination guarantee for abstraction refinement.
+4. LTL₃ monitor soundness and liveness impossibility (Theorem 5.1, Lemma 5.2): A rigorous statement of what runtime enforcement can and cannot achieve, with defensible citations.
+5. Asymptotic consistency of Bayesian trust (Proposition 5.3): A full Beta‑Bernoulli derivation with an almost‑sure convergence proof, correcting earlier conflations of hypothesis and parameter.
+6. Composition theorem with correlation identity (Theorem 7.1, Proposition 7.1): An end‑to‑end bound that uses the Fréchet–Hoeffding inequality as the default guarantee and optionally tightens it using a measurable correlation, without assuming independence.
+7. Correct total‑error decomposition (Theorem 7.2): Clarifies that formal verification partitions rather than reduces the total error probability, a governance‑relevant insight.
+8. Necessity theorems (Theorems 8.1–8.2): Formal proofs that both the formal verifier and the Bayesian trust layer are indispensable for non‑safety properties and calibration‑free settings.
+9. Cost model (§8.3): A concrete complexity analysis that grounds the optimisation objective.
+
+10.2 Limitations
+
+· Correlation \rho must be estimated empirically and may be non‑stationary; the correlation‑aware bound (7.3) is only as tight as the estimate.
+· Exchangeability assumption (Proposition 5.3) can fail under distribution shift; non‑stationary environments require adaptive trust mechanisms not yet formalised.
+· Sound labeling (Assumption 4.1) remains a manual engineering task; no automated guarantee exists against unmodeled tool side‑effects.
+· Truncation monitor restriction: VMAI’s runtime layer cannot enforce liveness, limiting the architecture’s applicability to tasks where plan‑level verification of liveness is sufficient.
+· No empirical validation is provided; the evaluation protocol (§9) is a proposal, not a completed study.
+
+---
+
+11. Future Work
+
+1. Edit automaton runtime layer: Extend \mathcal{R} from a truncation monitor to an edit automaton to support partial liveness enforcement, while maintaining soundness guarantees.
+2. Online correlation estimation: Replace the fixed \hat{\rho} bound with a PAC‑style confidence interval on \rho estimated from streaming joint‑failure data.
+3. Succinct cryptographic certificates: Formalise the connection to zero‑knowledge proof systems (zk‑STARKs) to reduce the size and verification cost of the proof‑carrying certificate.
+4. Automated labeling refinement: Develop methods to lift natural‑language safety policies into sound labeling functions for plan abstraction, reducing the manual burden of Assumption 4.1.
+5. Empirical evaluation: Execute the proposed evaluation protocol on a suite of agent‑safety benchmarks to measure \epsilon_{\text{cons}}, \epsilon_{\text{form}}, \rho and compare the empirical unsafe‑execution rate against the theoretical bounds.
+
+Appendices
+
+Appendix A. Notation and Measure‑Theoretic Setup
+
+All probabilistic arguments are grounded in a complete probability space (\Omega, \mathcal{F}, \mathbb{P}) equipped with a filtration \{\mathcal{F}_t\}_{t \ge 0}. The \sigma-algebra \mathcal{F}_t represents the full system history up to decision epoch t. Every random object introduced in the dissertation is adapted to this filtration.
+
+Decision epoch. At epoch t \in \mathbb{N}, the system observes the environment state, agents propose actions, and a single action may be executed or blocked. Agent proposals, confidences, and verdicts are \mathcal{F}_t-measurable; the trust weights w_i used by the consensus layer are \mathcal{F}_{t-1}-measurable—they are fixed before the votes at epoch t are observed.
+
+Action space and ground truth. The action set Y is finite. An oracle predicate \phi_{\text{true}} : Y \to \{0,1\} satisfies \phi_{\text{true}}(y)=1 iff y is the unique correct action, denoted y_{\text{true}}. If no such element exists, the task is ill‑posed and the system aborts.
+
+Agent model. Agent i is described by:
+
+· an adversarial status \iota_i \in \{0,1\} (latent, possibly adaptively chosen);
+· for non‑adversarial agents (\iota_i = 0), an intrinsic error probability e_i \in [0,1) such that, conditionally on \mathcal{F}_{t-1} and \iota_i = 0, the correctness indicator Z_i := \mathbb{1}[Y_i = y_{\text{true}}] is a Bernoulli variable with success probability 1-e_i, independent across agents;
+· an action proposal Y_i : \Omega \to Y and a self‑reported confidence p_i \in [0,1], both \mathcal{F}_t-measurable.
+
+Calibration. Agent i is \gamma_i-calibrated if almost surely
+
+\bigl|\mathbb{P}(Y_i = y_{\text{true}} \mid p_i) - p_i\bigr| \le \gamma_i
+
+for some \gamma_i \in [0,1). Perfect calibration corresponds to \gamma_i = 0.
+
+Key symbols (see also the Glossary in Appendix H):
+
+\begin{aligned}
+C(y) &= \sum_{i=1}^n w_i p_i \mathbb{1}[Y_i = y], \quad y^* = \arg\max_{y\in Y} C(y), \\
+V_{\text{cons}}(y^*) &= \mathbb{1}[C(y^*) \ge \tau] \quad (\tau \in (1/2,1]), \\
+M_\pi &= (S, s_0, \to, L) \quad (\text{Kripke structure of plan } \pi), \\
+\varphi &= \Box\psi \in \Phi_{\text{safe}}, \quad V_{\text{form}}(\varphi,\pi) \in \{0,1\}, \\
+R(\tau_{0:t}) &\in \{\top,\bot,?\}, \quad \kappa(y) = (V_{\text{cons}}, V_{\text{form}}, V_{\text{rt}}).
+\end{aligned}
+
+---
+
+Appendix B. Proofs for Chapter 3 (Consensus Layer)
+
+B.1 Assumptions
+
+Assumption 3.1 (Conditional Independence). Given \mathcal{F}_{t-1}, the pairs (Y_i, p_i) are independent across i = 1,\dots,n.
+
+Assumption 3.2 (Bounded Confidence Gap). There exist constants p_{\min}, p_{\max} \in (0,1) such that almost surely:
+
+· if Z_i = 1 (agent votes correctly), then p_i \ge p_{\min};
+· if all incorrect agents vote for the same wrong value y', then for each such agent p_i \le p_{\max}.
+
+B.2 Theorem 3.1 (Exponential Consensus Error Bound)
+
+Let C(y_{\text{true}}) = \sum_{i=1}^n w_i p_i Z_i with weights w_i \mathcal{F}_{t-1}-measurable. Define \mu_h = \mathbb{E}[C(y_{\text{true}})].
+
+(a) For any \epsilon > 0,
+
+\mathbb{P}\bigl( C(y_{\text{true}}) \le \mu_h - \epsilon \bigr)
+\le \exp\!\left( -\frac{2\epsilon^2}{\sum_{i=1}^n w_i^2} \right). \tag{B.1}
+
+(b) If there exists \delta > 0 such that for every incorrect candidate y',
+
+\mu_h - \mathbb{E}[C(y')] \ge \delta, \tag{B.2}
+
+then
+
+\mathbb{P}( y^* \neq y_{\text{true}} ) \le 2 \exp\!\left( -\frac{\delta^2}{2\sum_{i=1}^n w_i^2} \right). \tag{B.3}
+
+Proof.
+Write C(y_{\text{true}}) = \sum_{i=1}^n X_i with X_i = w_i p_i Z_i. By Assumption 3.1 the X_i are independent conditionally on \mathcal{F}_{t-1} and take values in [0, w_i]. Hoeffding’s inequality (Appendix F) gives
+
+\mathbb{P}\!\left( \sum_{i=1}^n X_i - \mathbb{E}\!\sum_{i=1}^n X_i \le -\epsilon \right)
+\le \exp\!\left( -\frac{2\epsilon^2}{\sum_{i=1}^n w_i^2} \right),
+
+which is (B.1).
+
+For part (b), the error event \{y^* \neq y_{\text{true}}\} implies the existence of an incorrect candidate y' with C(y_{\text{true}}) \le C(y'). By hypothesis (B.2), \mathbb{E}[C(y_{\text{true}})] - \mathbb{E}[C(y')] \ge \delta. Now observe that
+
+\{C(y_{\text{true}}) \le C(y')\} \subseteq
+\Bigl\{ C(y_{\text{true}}) \le \mu_h - \tfrac{\delta}{2} \Bigr\} \;\cup\;
+\Bigl\{ C(y') \ge \mathbb{E}[C(y')] + \tfrac{\delta}{2} \Bigr\}.
+
+Applying (B.1) to C(y_{\text{true}}) with \epsilon = \delta/2 and a symmetric Hoeffding bound to C(y') (the sum of the independent variables w_i p_i \mathbb{1}[Y_i = y'], also bounded in [0,w_i]) yields
+
+\mathbb{P}(y^* \neq y_{\text{true}}) \le 2 \exp\!\left( -\frac{2(\delta/2)^2}{\sum_i w_i^2} \right)
+= 2 \exp\!\left( -\frac{\delta^2}{2\sum_i w_i^2} \right),
+
+completing the proof. ∎
+
+B.3 Corollary 3.1 (Equal Weights)
+
+If w_i = 1/n for all i and calibration is perfect (\gamma_i = 0), then condition (B.2) reduces to (1 - W_f) - W_f \ge \delta, where W_f is the fraction of agents voting incorrectly. Hence an honest majority (W_f < 1/2) suffices to make the error probability exponentially small. This is the crash‑fault honest‑majority bound; the stronger 1/3 Byzantine bound does not apply because the certificate mechanism prevents equivocation.
+
+---
+
+Appendix C. Proofs for Chapter 4 (Formal Verification Layer)
+
+C.1 Plan Abstraction
+
+A plan \pi is a finite program in a deterministic, finite‑state plan language. The abstraction function \alpha maps \pi to a finite Kripke structure M_\pi = (S, s_0, \to, L) where:
+
+· S is the set of control locations,
+· \to \subseteq S \times S is the transition relation induced by the plan’s control flow,
+· L : S \to 2^{\mathrm{AP}} is a sound labelling: if \text{unsafe} \in L(s) then every concrete execution that reaches the state corresponding to s violates the environment’s safety condition.
+
+Specifications are drawn from \Phi_{\text{safe}} = \{ \Box\psi \mid \psi \text{ propositional or past‑LTL} \}.
+
+C.2 Model Checking Procedure
+
+1. Build a Büchi automaton \mathcal{B}_{\neg\varphi} for \neg\varphi = \Diamond\neg\psi. Because \psi is a safety property, \mathcal{B}_{\neg\varphi} is a deterministic finite automaton that accepts exactly the finite bad prefixes (words that contain a violation of \psi).
+2. Form the product M_\pi \otimes \mathcal{B}_{\neg\varphi} and check reachability of an accepting state. Set V_{\text{form}}(\varphi,\pi) = 1 if no accepting state is reachable, and 0 otherwise.
+
+C.3 Theorem 4.1 (Soundness)
+
+If V_{\text{form}}(\varphi,\pi) = 1, then every concrete execution trace that respects the control flow of \pi and the sound labelling satisfies \varphi = \Box\psi.
+
+Proof. Suppose, for contradiction, that there exists a concrete trace \tau following the plan that violates \Box\psi. Then \tau contains a finite prefix whose last state falsifies \psi; this prefix is a bad prefix and is accepted by \mathcal{B}_{\neg\varphi}. Because the labelling is sound, the abstract trace of \tau in M_\pi replicates the relevant atomic propositions; thus the product M_\pi \otimes \mathcal{B}_{\neg\varphi} contains an accepting run, contradicting V_{\text{form}} = 1. ∎
+
+C.4 Theorem 4.2 (CEGAR Completeness)
+
+If V_{\text{form}}(\varphi,\pi) = 0, the model checker outputs a finite counterexample trace \sigma in M_\pi. This trace is either real (can be instantiated in a high‑fidelity simulator) or spurious. For spurious counterexamples, a computable refinement procedure adds a new atomic proposition to eliminate that trace. With a finite state space, the refinement loop terminates.
+
+Proof (sketch). The emptiness check yields a path \sigma in M_\pi ending in a state labelled with the violation. The concretisation test simulates \sigma in a faithful environment model. If the simulator can follow \sigma and indeed violates \psi, the counterexample is real. Otherwise, the simulation gets stuck at some step where the abstract transition is not feasible. We refine the labelling by adding a predicate that distinguishes the abstract state from the concrete successors. This removes \sigma from the abstract model. Since the state space S is finite, only finitely many such refinements are possible. ∎
+
+C.5 Complexity (Refinement of Remark 4.1)
+
+When \psi is propositional (no temporal nesting), the Büchi automaton \mathcal{B}_{\neg\varphi} has O(|\psi|) states, and emptiness of the product is decidable in time O(|M_\pi|\cdot |\psi|). If \psi contains nested past operators, the automaton may grow to 2^{O(|\psi|)}, leading to a worst‑case PSPACE bound. The cost model in Chapter 8 uses the linear figure as the typical case.
+
+---
+
+Appendix D. Proofs for Chapter 5 (Runtime Verification and Bayesian Trust)
+
+D.1 LTL₃ Monitor (Theorem 5.1)
+
+For \varphi = \Box\psi we construct a three‑valued runtime monitor following Bauer et al. (2011). Given the finite prefix \tau_{0:t}, the monitor returns \bot iff the prefix is a bad prefix (i.e., any infinite continuation violates \varphi), \top iff it is a good prefix (all continuations satisfy \varphi), and ? otherwise. For \Box\psi, a bad prefix is any word that already contains a state where \psi is false. The monitor is realised as a Moore machine that outputs \bot exactly when the next proposed action would transition to a state where \psi would be false.
+
+Theorem 5.1 (Monitor Soundness). If the system blocks the action that triggers the \bot verdict, every finite executed trace satisfies \Box\psi.
+
+Proof. By construction the verdict \bot is raised precisely when the next action would lead to a state falsifying \psi. Blocking that action means the executed trace stops before any such state is entered. Hence the trace contains no position where \psi is false, and therefore satisfies \Box\psi under finite‑trace semantics. ∎
+
+D.2 Lemma 5.2 (Liveness Limitation)
+
+A truncation monitor—whose sole enforcement capability is to halt execution—cannot enforce an arbitrary liveness property \Diamond\,\text{goal}.
+
+Proof (sketch). Schneider (2000) proved that the class of properties enforceable by execution monitors is exactly the set of safety properties. Since \Diamond\,\text{goal} is a liveness property (co‑safety), it is not enforceable by halting alone. An explicit adversary that consistently chooses actions that are safe but avoid the goal will keep the system alive forever, satisfying safety but violating liveness; the monitor cannot force progress because it cannot inject new transitions. ∎
+
+D.3 Bayesian Trust Update (Proposition 5.3)
+
+For each agent, let e_i be the unknown error probability. We place a \text{Beta}(a,b) prior on 1-e_i. After observing K independent tasks, let S_i be the number of correct decisions by agent i. The likelihood is \text{Binomial}(K, 1-e_i). By conjugacy, the posterior of 1-e_i given S_i is \text{Beta}(a+S_i,\; b+K-S_i), with posterior mean
+
+w_i = \mathbb{E}[1-e_i \mid S_i] = \frac{a+S_i}{a+b+K}.
+
+Normalised weights are \tilde{w}_i = w_i / \sum_j w_j.
+
+Proposition 5.3 (Consistency). Under the exchangeability assumption (tasks are i.i.d. for each agent),
+
+\tilde{w}_i \xrightarrow{\text{a.s.}} \frac{1-e_i}{\sum_{j=1}^n (1-e_j)} \quad \text{as } K \to \infty.
+
+Proof. The Strong Law of Large Numbers implies S_i/K \to 1-e_i almost surely. Write
+
+w_i = \frac{a+b}{a+b+K} \cdot \frac{a}{a+b} + \frac{K}{a+b+K} \cdot \frac{S_i}{K}.
+
+The first term tends to 0 as K\to\infty; hence w_i \to 1-e_i a.s. Normalisation is continuous, so \tilde{w}_i converges to the ratio of limits. ∎
+
+---
+
+Appendix E. Proofs for Chapter 7 (Composition Theorem)
+
+Define the events
+
+A = \{\text{consensus accepts an incorrect action}\},\qquad
+B = \{\text{formal verifier misses a real violation}\},
+
+with probabilities \epsilon_{\text{cons}} = \mathbb{P}(A), \epsilon_{\text{form}} = \mathbb{P}(B). Let \rho = \mathrm{Corr}(\mathbb{1}_A, \mathbb{1}_B).
+
+Proposition 7.1 (Correlation Identity). For any two events A,B with probabilities in (0,1),
+
+\mathbb{P}(A \cap B) = \epsilon_{\text{cons}} \epsilon_{\text{form}}
++ \rho \sqrt{\epsilon_{\text{cons}}(1-\epsilon_{\text{cons}})\,\epsilon_{\text{form}}(1-\epsilon_{\text{form}})}. \tag{E.1}
+
+Proof. By definition, \mathrm{Cov}(\mathbb{1}_A,\mathbb{1}_B) = \mathbb{E}[\mathbb{1}_A\mathbb{1}_B] - \mathbb{E}[\mathbb{1}_A]\mathbb{E}[\mathbb{1}_B] = \mathbb{P}(A\cap B) - \epsilon_{\text{cons}}\epsilon_{\text{form}}. Also, \mathrm{Cov}(\mathbb{1}_A,\mathbb{1}_B) = \rho \sqrt{\mathrm{Var}(\mathbb{1}_A)\mathrm{Var}(\mathbb{1}_B)}. For Bernoulli variables, \mathrm{Var}(\mathbb{1}_A) = \epsilon_{\text{cons}}(1-\epsilon_{\text{cons}}), and similarly for B. Substituting and rearranging gives the identity. ∎
+
+Theorem 7.1 (Composition Bounds). The probability of an unsafe execution satisfies:
+
+(a) Fréchet–Hoeffding (always valid):
+
+\mathbb{P}(\text{unsafe}) = \mathbb{P}(A \cap B) \le \min(\epsilon_{\text{cons}}, \epsilon_{\text{form}}). \tag{E.2}
+
+(b) Correlation‑aware (if an upper bound \hat{\rho} \ge \rho is available):
+
+\mathbb{P}(\text{unsafe}) \le \epsilon_{\text{cons}} \epsilon_{\text{form}}
++ \hat{\rho} \sqrt{\epsilon_{\text{cons}}(1-\epsilon_{\text{cons}})\,\epsilon_{\text{form}}(1-\epsilon_{\text{form}})}. \tag{E.3}
+
+(c) Independence (\rho = 0):
+
+\mathbb{P}(\text{unsafe}) \le \epsilon_{\text{cons}} \epsilon_{\text{form}}. \tag{E.4}
+
+Proof.
+(a) Since A \cap B \subseteq A and A \cap B \subseteq B, the monotonicity of \mathbb{P} yields \mathbb{P}(A \cap B) \le \min(\epsilon_{\text{cons}}, \epsilon_{\text{form}}).
+(b) From (E.1), \mathbb{P}(A \cap B) = \epsilon_{\text{cons}}\epsilon_{\text{form}} + \rho \sqrt{\dots}. The square‑root term is non‑negative; replacing \rho by an upper bound \hat{\rho} (which cannot decrease the right‑hand side) gives (E.3).
+(c) Set \rho = 0 in (E.1). ∎
+
+Theorem 7.2 (Total Undesired Execution).
+
+\mathbb{P}(\text{undesired execution}) = \epsilon_{\text{cons}},
+
+and the unsafe portion is at most \min(\epsilon_{\text{cons}}, \epsilon_{\text{form}}).
+
+Proof. The event “undesired execution” is exactly A (consensus accepts incorrect), so its probability is \epsilon_{\text{cons}}. Unsafe executions are a subset of A (they require both A and B), so their probability is \mathbb{P}(A \cap B) \le \epsilon_{\text{cons}}. Combining with the Fréchet bound \mathbb{P}(A \cap B) \le \epsilon_{\text{form}} gives the \min bound. ∎
+
+---
+
+Appendix F. Proofs for Chapter 8 (Necessity Theorems)
+
+F.1 Theorem 8.1 (Necessity of Formal Verification)
+
+Statement. In a system restricted to consensus and a truncation runtime monitor (no formal verifier), there exist environments where a liveness property \Diamond\,\text{goal} is violated with probability bounded away from zero, irrespective of the number of agents.
+
+Proof. Consider a plan that offers a non‑deterministic choice between two safe actions a_1 and a_2. Only a_1 eventually leads to the goal; a_2 keeps the system in a safe non‑goal region. An adversarial specialist agent consistently proposes a_2. The monitor cannot block a_2 because it is safe. The consensus layer may occasionally select a_1 if other agents propose it, but without a verifier that remembers the plan’s liveness objective, the system cannot force persistent selection of a_1; the adversary can keep offering a_2 indefinitely, causing live‑lock. Hence the probability of eventually reaching the goal can be made arbitrarily small. A formal verifier, by model‑checking \Diamond\,\text{goal} on the abstract plan, would detect the insufficiently constrained plan and force the Planner to produce a plan that deterministically reaches the goal. ∎
+
+F.2 Theorem 8.2 (Necessity of Bayesian Trust)
+
+Statement. If agents are not calibrated (no guarantee on self‑reported p_i), an adversary with minority weight W_f < 1/2 can force an incorrect consensus output with positive probability.
+
+Proof. The adversary’s agents all vote for a wrong value y' and report p_i = 1. Honest agents report their true confidences p_{\text{hon}} < 1. The weighted score for y' is at least W_f \cdot 1. The maximum score for the correct value is (1-W_f)\,p_{\text{hon}}. A sufficient condition for the adversary to win is W_f > (1-W_f)p_{\text{hon}}, i.e. W_f > \frac{p_{\text{hon}}}{1+p_{\text{hon}}}. Because p_{\text{hon}} < 1, the right‑hand side is strictly less than 1/2; thus there exists a minority weight W_f < 1/2 that satisfies this inequality. Without calibration, the consensus layer cannot distinguish true confidence from bluffed confidence. The Bayesian trust layer, by accumulating historical accuracy data, would eventually down‑weight agents who consistently report high confidence but perform poorly, thereby neutralising the bluff. ∎
+
+---
+
+Appendix G. Cost Model Details (Chapter 8.3)
+
+· Consensus layer: Computing C(y) for each candidate requires summing n terms, for a total of O(n|Y|) operations per epoch. With |Y| bounded, this is O(n).
+· Model checking (offline): For propositional \psi, the Büchi automaton has O(|\psi|) states; the product M_\pi \otimes \mathcal{B}_{\neg\varphi} has size O(|S|\cdot|\psi|) and emptiness is checked in linear time. For \psi with nested past operators, the automaton may grow to 2^{O(|\psi|)}, leading to PSPACE worst‑case complexity.
+· Runtime monitor (online): A finite‑state machine with at most 2^{|\mathrm{AP}|} states; transition lookup per step is O(1).
+· Bayesian update (online): Two parameter updates per agent, O(n) overall, or O(1) per agent.
+
+---
+
+Appendix H. Standard Probabilistic Tools
+
+Hoeffding’s inequality (Hoeffding 1963). Let X_1,\dots,X_m be independent random variables with a_i \le X_i \le b_i almost surely. Then for every \epsilon > 0,
+
+\mathbb{P}\!\left( \sum_{i=1}^m (X_i - \mathbb{E}[X_i]) \ge \epsilon \right)
+\le \exp\!\left( -\frac{2\epsilon^2}{\sum_{i=1}^m (b_i - a_i)^2} \right),
+
+and the same bound holds for the lower tail.
+
+Beta‑Binomial conjugacy. If p \sim \text{Beta}(\alpha,\beta) and S \mid p \sim \text{Binomial}(n, p), then the posterior distribution is p \mid S \sim \text{Beta}(\alpha+S,\; \beta+n-S), with mean (\alpha+S)/(\alpha+\beta+n).
+
+Fréchet–Hoeffding bounds. For any two events A,B,
+
+\max(0,\; \mathbb{P}(A)+\mathbb{P}(B)-1) \le \mathbb{P}(A \cap B) \le \min(\mathbb{P}(A),\mathbb{P}(B)).
+
+---
+
+Appendix I. Notation Glossary
+
+Symbol Meaning
+(\Omega,\mathcal{F},\mathbb{P}) Probability space
+\mathcal{F}_t Filtration (history up to epoch t)
+Y Finite action set
+y_{\text{true}} Unique correct action
+Z_i \mathbb{1}[Y_i = y_{\text{true}}]
+w_i Trust weight, \mathcal{F}_{t-1}-measurable
+C(y) Weighted confidence score \sum_i w_i p_i \mathbb{1}[Y_i=y]
+y^* Accepted action \arg\max_y C(y)
+\tau Consensus acceptance threshold
+\varphi = \Box\psi Safety LTL specification
+M_\pi Abstract Kripke structure of plan \pi
+\mathcal{B}_{\neg\varphi} Büchi automaton for bad prefixes
+V_{\text{form}} Formal‑verification verdict
+R(\cdot) LTL₃ monitor verdict
+\kappa(y) Certificate (V_{\text{cons}}, V_{\text{form}}, V_{\text{rt}})
+\epsilon_{\text{cons}} \mathbb{P}(A), consensus failure probability
+\epsilon_{\text{form}} \mathbb{P}(B), formal‑verification miss probability
+\rho \mathrm{Corr}(\mathbb{1}_A,\mathbb{1}_B)
+
+diagrams 
+
+```text
+                  ┌─────────────────┐
+                  │   Planner Agent   │
+                  └────────┬─────────┘
+                           ▼
+               ┌───────────────────────┐
+               │   Specialist Agents     │
+               │  (proposals y_i, p_i)   │
+               └────────────┬───────────┘
+                            ▼
+            ┌───────────────────────────────┐
+            │  Consensus Engine  C(y)=Σ w_i p_i│
+            │      (Bayesian weights w_i)     │
+            └────────────────┬───────────────┘
+                              ▼  V_cons = 1?
+            ┌───────────────────────────────┐
+            │  Formal Plan Verifier   M_π ⊨ φ │
+            │      (LTL Model Checking)       │
+            └────────────────┬───────────────┘
+                              ▼  V_form = 1?
+            ┌───────────────────────────────┐
+            │  Runtime Monitor   R(τ) ∈ {⊤,⊥,?}│
+            │    (LTL₃ Safety Enforcement)    │
+            └────────────────┬───────────────┘
+                              ▼  V_rt = ⊤?
+                     ┌─────────────────┐
+                     │    Execution      │
+                     │  (emits certificate│
+                     │     κ(y))        │
+                     └─────────────────┘
+                              │
+                              ▼
+                ┌─────────────────────────┐
+                │ Bayesian Trust Update    │
+                │   (Beta‑Bernoulli)       │
+                │   updates w_i            │
+                └─────────────────────────┘
+```
+
+```text
+               Consensus Layer Internals
+  Agent 1: (y_1, p_1) ─┐
+  Agent 2: (y_2, p_2) ─┤
+       ...             ┼──► Weighted Confidence Sum
+  Agent n: (y_n, p_n) ─┘       C(y) = Σ w_i p_i 1[Y_i=y]
+                                    │
+                        ┌───────────┴───────────┐
+                        ▼                       ▼
+               y* = arg max C(y)      Check: C(y*) ≥ τ
+                        │                       │
+                        └───────────┬───────────┘
+                                    ▼
+                            V_cons = 1 if pass
+                                    │
+                          Consensus Certificate
+```
+
+```text
+                   Certificate Composition
+       Consensus          Formal Verif.       Runtime Monitor
+           │                    │                     │
+           ▼                    ▼                     ▼
+      V_cons(y)            V_form(y)              V_rt(y)
+           │                    │                     │
+           └────────────────────┼─────────────────────┘
+                                ▼
+                    κ(y) = (V_cons, V_form, V_rt)
+                          ┌─────┴─────┐
+                          ▼           ▼
+                   κ = (1,1,1)    otherwise
+                     Execute        Block/Abort
+```
+
+```text
+               Proof‑Carrying Action Flow
+ ┌────────────┐    ┌────────────┐    ┌────────────┐
+ │  Consensus │    │   Formal   │    │  Runtime   │
+ │  Verdict   │    │  Verdict   │    │  Verdict   │
+ └─────┬──────┘    └─────┬──────┘    └─────┬──────┘
+       │                 │                 │
+       ▼                 ▼                 ▼
+ ┌─────────────────────────────────────────────────┐
+ │         κ(y) = (1, 1, 1) ?                     │
+ │         ▸ If yes: execute action y              │
+ │         ▸ If no : block and log                 │
+ └─────────────────────────────────────────────────┘
+       │
+       ▼
+ ┌─────────────────────────────────────────────────┐
+ │  Post‑hoc outcome observed → Bayesian update    │
+ │  w_i ← (a + S_i) / (a + b + K)                  │
+ └─────────────────────────────────────────────────┘
+```
+
+```text
+            Bayesian Trust Update (per agent)
+      Prior: 1‑e_i ~ Beta(a, b)
+             │
+             │ observe K tasks, S_i successes
+             ▼
+      Posterior: 1‑e_i | data ~ Beta(a+S_i, b+K‑S_i)
+             │
+             │ posterior mean
+             ▼
+      w_i = (a+S_i) / (a+b+K)
+             │
+             │ normalise
+             ▼
+      w̃_i = w_i / Σ_j w_j   (used in next epoch)
+```
+References
+
+1. Agent hallucination benchmark, arXiv 2604.14723, 2026.
+2. Cascading failures in LLM agents, alphaXiv 2509.25370, 2025.
+3. Stability of LLM evaluators in reasoning and planning tasks, arXiv 2510.17109, 2025.
+4. AgentSpec: Customizable runtime enforcement for LLM agents, ICSE 2026.
+5. Agent‑C: Run‑time guarantees via constrained generation, OpenReview, 2025.
+6. Runtime verification for AI agent safety, Zylos Research, 2026.
+7. Vardi, M. Y., and Wolper, P. An automata‑theoretic approach to automatic program verification. LICS, 1986.
+8. AutoSafeLTL: Self‑supervised LTL generation, arXiv 2503.15840, 2025.
+9. CP‑WBFT: Confidence‑probe weighted Byzantine fault tolerance for LLM agents, arXiv 2511.10400, 2025.
+10. Dynamic weighted consensus framework for multi‑agent debate, Springer Professional, 2025.
+11. Proof‑carrying decisions: Verifiable AI governance, ResearchGate, 2026.
+12. Taxonomy of agent‑safety benchmark gaps, arXiv 2605.16282, 2026.
+13. Hoeffding, W. Probability inequalities for sums of bounded random variables. JASA, 1963.
+14. Sistla, A. P., and Clarke, E. M. The complexity of propositional linear temporal logics. JACM, 1985.
+15. Bauer, A., Leucker, M., and Schallhart, C. Runtime verification for LTL and TLTL. ACM TOSEM, 2011.
+16. Schneider, F. B. Enforceable security policies. ACM TISSEC, 2000.
+17. Ligatti, J., Bauer, L., and Walker, D. Edit automata: Enforcement mechanisms for run‑time security policies. Int. J. Inf. Sec., 2005.
+
