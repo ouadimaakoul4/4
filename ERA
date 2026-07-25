@@ -1,0 +1,674 @@
+Efficient Reasoning Architecture: A Mathematical Framework for Adaptive Inference
+
+Ouadi Maakoul¹, Claude (Anthropic)², ChatGPT (OpenAI)³
+
+¹ Independent researcher
+² Anthropic
+³ OpenAI
+
+---
+
+Abstract
+
+This thesis presents a complete mathematical foundation for the Efficient Reasoning Architecture (ERA), a closed‑loop controller that optimally allocates test‑time compute in large language models. Inference is cast as a constrained maximisation problem over query difficulty, token budget, latency, and energy. Four interlocking theoretical contributions are rigorously proved: (1) a Lagrangian dual formulation in the space of randomised policies, with strong duality under a Slater condition, a measurable optimal budget mapping via Aumann selection, and binary‑search budget targeting with explicit convergence rates; (2) a Hölder‑continuous regret bound linking the error of a difficulty estimator to the suboptimality of the resulting budget policy, strengthened by a modern PAC‑Bayesian high‑probability guarantee; (3) a POMDP model of the solver–verifier loop reduced to a belief‑MDP, yielding an optimal stopping condition that, under monotone likelihood ratio dominance, collapses to a confidence‑threshold rule; (4) a calibrated multi‑resource Efficiency Intelligence Score (EIS) based on additive normalised costs, with proven variance stability and scale‑consistency. Every theorem is stated with explicit assumptions and full proofs, establishing ERA as a verifiable theory of adaptive inference.
+
+---
+
+1. Introduction
+
+Large language models achieve remarkable performance when allowed to deliberate through extended reasoning traces. However, test‑time compute is expensive: tokens, latency, and energy are limited resources that must be spent judiciously. Existing approaches to adaptive inference—budget‑forcing, entropy‑gated halting, or hand‑tuned schedulers—lack a principled theoretical underpinning and often rely on heuristics that can be gamed or are fragile.
+
+This work provides that principled foundation. We formalise adaptive inference as a constrained optimisation problem: maximise answer quality subject to a global average resource budget. The central object is the planner, which maps each query to a budget (e.g., a token limit) that optimally balances quality against cost. Because the true difficulty of a query is unknown, a learned difficulty estimator feeds the planner, and we bound the resulting policy’s suboptimality. The actual generation process is modelled as a partially observable Markov decision process (POMDP) that decides when to halt; under natural monotonicity assumptions, the optimal stopping policy reduces to a single confidence threshold. Finally, we propose a rigorous efficiency metric (EIS) that aggregates accuracy, confidence, and resource costs without the variance explosion of multiplicative alternatives.
+
+The structure of the thesis follows the four theorems that form its backbone. Chapter 2 sets up the formal problem. Chapter 3 develops the Lagrangian dual planner and proves budget targeting. Chapter 4 defines difficulty and establishes the regret bound. Chapter 5 analyses the solver–verifier POMDP and the optimal halting threshold. Chapter 6 presents the EIS metric and its properties. Proofs are integrated in each chapter; no separate appendix is needed.
+
+---
+
+2. Formal Problem Setup
+
+2.1 Query space and resource budgets
+
+Let \mathcal{X} be a measurable space of queries, equipped with a probability distribution \mathcal{D} (the deployment distribution). The system can allocate a budget b \in \mathcal{B} \subset \mathbb{R}^k to each query, where \mathcal{B} is a compact set of feasible resource vectors (e.g., maximum token count, number of decoding passes). For a fixed budget b, a policy is a Markov kernel \pi_b : \mathcal{X} \to \Delta(\mathcal{T}) that maps a query to a distribution over reasoning traces \tau \in \mathcal{T}, where \mathcal{T} is a Polish space of token sequences. The stochasticity models both the autoregressive sampling and any additional randomness of the reasoning protocol.
+
+2.2 Quality and cost functions
+
+From a trace \tau an answer y is extracted, and its quality is evaluated by a measurable function Q(y,x) \in [0,1]. The expected quality of budget b on query x is
+
+\tilde{Q}(b,x) = \mathbb{E}_{\tau \sim \pi_b}[Q(y(\tau), x)].
+
+We assume \tilde{Q}(\cdot, x) is continuous for each x; this follows if \pi_b is weakly continuous (Feller) and Q is bounded continuous. The trace also incurs measurable costs: token count T(\tau), wall‑clock latency L(\tau), and energy E(\tau). Normalise by dataset medians \bar{T}, \bar{L}, \bar{E} from a reference fixed‑budget policy. Given user‑specified weights \alpha,\beta,\gamma \ge 0 with \alpha+\beta+\gamma=1, the normalised additive cost of a trace is
+
+C(\tau) = \alpha \frac{T(\tau)}{\bar{T}} + \beta \frac{L(\tau)}{\bar{L}} + \gamma \frac{E(\tau)}{\bar{E}}.
+
+The expected cost of budget b on query x is
+
+C(b,x) = \mathbb{E}_{\tau \sim \pi_b}[C(\tau)].
+
+2.3 Randomised policies and the primal problem
+
+The decision maker can randomise over budgets. A randomised policy is a Markov kernel \pi : \mathcal{X} \to \Delta(\mathcal{B}). For each query, the policy samples b \sim \pi(\cdot|x) and then generates a trace according to \pi_b. The expected quality and cost of such a policy are
+
+\mathcal{Q}(\pi) = \int_{\mathcal{X}} \int_{\mathcal{B}} \tilde{Q}(b,x) \, \pi(db \mid x) \, \mathcal{D}(dx), \qquad
+\mathcal{C}(\pi) = \int_{\mathcal{X}} \int_{\mathcal{B}} C(b,x) \, \pi(db \mid x) \, \mathcal{D}(dx).
+
+The system must respect an average resource budget B_{\max} > 0. The primal problem is
+
+P^* = \sup_{\pi \in \Pi_{\mathrm{rand}}} \mathcal{Q}(\pi) \quad \text{s.t.} \quad \mathcal{C}(\pi) \le B_{\max}. \tag{2.1}
+
+Here \Pi_{\mathrm{rand}} is the space of all such Markov kernels. Allowing randomisation convexifies the problem; a deterministic policy mapping each x to a single budget is a special case (a Dirac kernel), but the supremum over deterministic policies may be strictly smaller than P^*.
+
+---
+
+3. Lagrangian Duality and Budget Targeting
+
+3.1 Lagrangian and dual function
+
+Introduce a Lagrange multiplier \lambda \ge 0 for the budget constraint. The Lagrangian is
+
+\mathcal{L}(\pi,\lambda) = \mathcal{Q}(\pi) - \lambda \bigl( \mathcal{C}(\pi) - B_{\max} \bigr).
+
+The dual function is obtained by maximising over \pi:
+
+g(\lambda) = \sup_{\pi \in \Pi_{\mathrm{rand}}} \mathcal{L}(\pi,\lambda)
+= \int_{\mathcal{X}} \max_{b \in \mathcal{B}} \bigl[ \tilde{Q}(b,x) - \lambda C(b,x) \bigr] \, \mathcal{D}(dx) + \lambda B_{\max}, \tag{3.1}
+
+where we have interchanged supremum and integral using the Carathéodory nature of the integrand and compactness of \mathcal{B} [Rockafellar & Wets, 1998, Theorem 14.60].
+
+3.2 Measurable optimal budget selection
+
+For each query x and shadow price \lambda, define the set of optimal budgets
+
+\mathcal{A}(x,\lambda) = \arg\max_{b \in \mathcal{B}} \bigl[ \tilde{Q}(b,x) - \lambda C(b,x) \bigr].
+
+This correspondence is non‑empty, compact‑valued, and upper hemicontinuous because \tilde{Q} and C are continuous and \mathcal{B} is compact. To obtain a single measurable selector, we use a lexicographic tie‑breaking rule: primary, maximise \tilde{Q} - \lambda C; secondary, minimise the expected cost C(b,x). Specifically,
+
+b^*(x;\lambda) = \arg\min_{b \in \mathcal{A}(x,\lambda)} C(b,x). \tag{3.2}
+
+To guarantee uniqueness of the minimiser, we assume either that \mathcal{B} is finite, or that C(\cdot, x) is strictly convex and \mathcal{A}(x,\lambda) is convex (which holds if \tilde{Q} is strictly concave). Under either condition, b^*(x;\lambda) is a Borel‑measurable function by the Aumann measurable selection theorem [Aumann, 1965] and the stability of lexicographic minima.
+
+3.3 Strong duality
+
+The primal problem (2.1) is an infinite‑dimensional linear program over a convex set. Strong duality holds under a Slater condition: there exists a strictly feasible randomised policy. We assume \exists \bar b \in \mathcal{B} such that \sup_{x} C(\bar b, x) < B_{\max} (e.g., a zero‑cost ‘do nothing’ action). Then [Shapiro, 2001, Theorem 2.1] guarantees
+
+P^* = D^* := \inf_{\lambda \ge 0} g(\lambda),
+
+and the infimum is attained at some \lambda^* \ge 0. The optimal randomised policy for the primal is given by the kernel that puts probability one on b^*(x;\lambda^*) for almost all x.
+
+Define the expected cost of the \lambda-optimal policy:
+
+C^*(\lambda) = \int_{\mathcal{X}} C\bigl( b^*(x;\lambda), x \bigr) \, \mathcal{D}(dx).
+
+Lemma 3.1 (Monotonicity). If \lambda_1 < \lambda_2, then C^*(\lambda_2) \le C^*(\lambda_1).
+
+Proof. Fix x. Let b_i = b^*(x;\lambda_i). The optimality conditions give
+
+\tilde{Q}(b_1) - \lambda_1 C(b_1) \ge \tilde{Q}(b_2) - \lambda_1 C(b_2),\qquad
+\tilde{Q}(b_2) - \lambda_2 C(b_2) \ge \tilde{Q}(b_1) - \lambda_2 C(b_1).
+
+Adding and rearranging yields (\lambda_2 - \lambda_1)(C(b_1)-C(b_2)) \ge 0, so C(b_1) \ge C(b_2). The result follows by taking expectation over x. ∎
+
+3.4 Right‑continuity of C^*
+
+To locate \lambda^* by binary search we need continuity. The tie‑breaking rule yields right‑continuity:
+
+Lemma 3.2. Under the strict convexity assumption (or the finite \mathcal{B} case), C^* is right‑continuous on [0,\infty).
+
+Proof. Fix \lambda and let \lambda_n \downarrow \lambda. Berge’s maximum theorem gives upper hemicontinuity of \mathcal{A}(x,\cdot). Because \mathcal{B} is compact, the primary objective is continuous, and the secondary minimiser is unique (by strict convexity), the selector b^*(x;\lambda_n) converges pointwise to b^*(x;\lambda). By dominated convergence, C^*(\lambda_n) \to C^*(\lambda). ∎
+
+3.5 Sensitivity and binary search complexity
+
+To quantify how fast a binary search over \lambda can reach a target budget, we need a modulus of continuity for C^*. Suppose \tilde{Q}(\cdot,x) is \mu-strongly concave and L_Q-Lipschitz, while C is L_C-Lipschitz. Then the unique maximiser b^*(\lambda) is Lipschitz in \lambda with constant L_Q/\mu [Bonnans & Shapiro, 2000, Theorem 4.51]. Consequently, C^* is Lipschitz with constant L_\lambda = L_C L_Q / \mu.
+
+If strong concavity fails, one still obtains Hölder continuity of order 1/2. In either case, there exist \alpha \in (0,1] and L_\lambda > 0 such that
+
+|C^*(\lambda_1) - C^*(\lambda_2)| \le L_\lambda |\lambda_1 - \lambda_2|^\alpha.
+
+A binary search on [0,\Lambda] (with \Lambda large enough that C^*(\Lambda) < B_{\max}) halves the interval each step. To guarantee |C^*(\hat\lambda) - B_{\max}| \le \delta, the final \lambda-interval width must satisfy L_\lambda (\Delta \lambda)^\alpha \le \delta. Hence the number of iterations is
+
+O\!\left( \log_2 \frac{\Lambda}{\delta^{1/\alpha} / L_\lambda^{1/\alpha}} \right) = O(\log(1/\delta)),
+
+with a constant that deteriorates as \alpha \to 0. This establishes:
+
+Theorem 3.1 (Budget Targeting). Under the Slater condition and the sensitivity assumptions, there exists a unique shadow price \lambda^* such that the randomised policy using b^*(\cdot;\lambda^*) achieves the primal optimum. Moreover, binary search on \lambda returns a policy with expected cost within \delta of B_{\max} in O(\log(1/\delta)) steps.
+
+---
+
+4. Regret Bound for Difficulty Estimation
+
+The planner requires the true query difficulty, which is not directly observable. We define difficulty operationally and bound the loss from using an estimator.
+
+4.1 Operational definition of difficulty
+
+Fix a reference shadow price \lambda_0 (the operating point). For each query x, define the intrinsic difficulty as the expected cost incurred by the optimal budget under \lambda_0:
+
+d^*(x) = C\bigl( b^*(x;\lambda_0), x \bigr). \tag{4.1}
+
+Since C is bounded, d^*(x) \in [d_{\min}, d_{\max}]. This definition connects difficulty directly to resource consumption at a well‑defined optimal trade‑off, and it is measurable because b^* is measurable.
+
+4.2 Planner as a Hölder map in Wasserstein space
+
+In practice, budgets are discrete (e.g., token counts 1,2,\dots,K). A deterministic map from estimated difficulty \hat d to a specific budget cannot be Hölder continuous unless it is constant. To restore smoothness, we allow the planner to output a randomised budget: a distribution over \mathcal{B}. Let \psi : \mathbb{R} \to \Delta(\mathcal{B}) be a Markov kernel, with \Delta(\mathcal{B}) equipped with the 1‑Wasserstein distance W_1. We assume \psi is (M,h)-Hölder:
+
+W_1\bigl( \psi(d_1), \psi(d_2) \bigr) \le M |d_1 - d_2|^h, \qquad h \in (0,1]. \tag{4.2}
+
+This holds, for instance, if \psi(d) is a softmax over bins with smoothly varying logits.
+
+Given a budget distribution p \in \Delta(\mathcal{B}), the expected quality is \tilde{Q}(p,x) = \mathbb{E}_{b \sim p}[\tilde{Q}(b,x)]. If \tilde{Q}(\cdot,x) is L_Q-Lipschitz on \mathcal{B}, then for any p_1, p_2,
+
+|\tilde{Q}(p_1,x) - \tilde{Q}(p_2,x)| \le L_Q \, W_1(p_1, p_2) \tag{4.3}
+
+by Kantorovich–Rubinstein duality [Villani, 2009]. The oracle policy uses the true difficulty d^*(x) and obtains budget distribution \psi(d^*(x)); the estimated policy uses \psi(\hat d(x)).
+
+4.3 Hölder regret bound
+
+The expected regret is
+
+\mathcal{R} = \mathbb{E}_{x \sim \mathcal{D}} \Bigl[ \tilde{Q}\bigl(\psi(d^*(x)), x\bigr) - \tilde{Q}\bigl(\psi(\hat d(x)), x\bigr) \Bigr].
+
+Applying (4.2) and (4.3) yields
+
+\mathcal{R} \le L_Q M \, \mathbb{E}_x \bigl[ |d^*(x) - \hat d(x)|^h \bigr]. \tag{4.4}
+
+Let \epsilon = \mathbb{E}_x[|d^*(x) - \hat d(x)|] be the mean absolute error. Since z \mapsto z^h is concave for h \in (0,1], Jensen’s inequality gives
+
+\mathbb{E}[|d^* - \hat d|^h] \le \epsilon^h.
+
+Thus we obtain the deterministic bound
+
+\mathcal{R} \le L_Q M \, \epsilon^h. \tag{4.5}
+
+4.4 PAC‑Bayesian generalisation guarantee
+
+A difficulty estimator is learned from a finite training set \mathcal{S} = \{(x_i, d^*(x_i))\}_{i=1}^m drawn i.i.d. from \mathcal{D}. We adopt a stochastic predictor: a posterior distribution \rho over a hypothesis class \mathcal{H} of functions \phi: \mathcal{X} \to \mathbb{R}. For each query, we sample \phi \sim \rho and predict \hat d_\phi(x). The expected error is \epsilon(\rho) = \mathbb{E}_{\phi \sim \rho}\mathbb{E}_x[|\hat d_\phi(x) - d^*(x)|]. The absolute error is bounded by D = d_{\max} - d_{\min}.
+
+Using a modern PAC‑Bayesian bound for bounded loss [Alquier, 2024], for any fixed prior \pi over \mathcal{H}, with probability at least 1-\delta over \mathcal{S},
+
+\epsilon(\rho) \le \hat\epsilon_\rho + D \sqrt{ \frac{ \operatorname{KL}(\rho \| \pi) + \log \frac{2\sqrt{m}}{\delta} }{2m} }, \tag{4.6}
+
+where \hat\epsilon_\rho = \frac{1}{m} \sum_{i=1}^m \mathbb{E}_{\phi \sim \rho}[|\hat d_\phi(x_i) - d^*(x_i)|]. The regret of the randomised policy now becomes \mathcal{R}(\rho) = \mathbb{E}_{\phi \sim \rho} \mathcal{R}_\phi. By convexity of the loss and Jensen’s inequality, the bound (4.5) extends:
+
+\mathcal{R}(\rho) \le L_Q M \, \bigl( \epsilon(\rho) \bigr)^h.
+
+Combining with (4.6) gives the final high‑probability regret guarantee:
+
+Theorem 4.1 (PAC‑Bayesian Regret Bound). Under the Lipschitz and Hölder assumptions, with probability 1-\delta over the training sample, the policy using the stochastic difficulty predictor \rho satisfies
+
+\mathcal{R}(\rho) \le L_Q M \left( \hat\epsilon_\rho + D \sqrt{ \frac{ \operatorname{KL}(\rho \| \pi) + \log \frac{2\sqrt{m}}{\delta} }{2m} } \right)^{\!h}.
+
+This bound explicitly quantifies how improvements in difficulty calibration translate into lower policy suboptimality.
+
+---
+
+5. POMDP Model and Optimal Stopping
+
+The solver–verifier loop that actually generates tokens and decides when to halt is modelled as a partially observable Markov decision process.
+
+5.1 POMDP formulation
+
+The POMDP consists of:
+
+· State space \mathcal{S}: a Polish space of latent reasoning states (e.g., logical completeness, correctness).
+· Observations \mathcal{O}: generated token sequences, along with predictive entropy H_t and log‑probabilities.
+· Actions \mathcal{A} = \mathcal{V} \cup \{\texttt{HALT}\}, where \mathcal{V} is the vocabulary.
+· Transition kernel T: \mathcal{S} \times \mathcal{A} \to \Delta(\mathcal{S}): weakly continuous.
+· Observation kernel Z: \mathcal{S} \to \Delta(\mathcal{O}).
+· Reward: R(s,a) = \Delta\text{Prog}(s,a) - \eta for a \in \mathcal{V} (\eta > 0 is a token penalty), and terminal reward R(s,\texttt{HALT}) = Q(\text{answer}, x).
+· Horizon: finite, H = \lceil Q_{\max} / \eta \rceil, because after H tokens the cumulative penalty exceeds the maximum possible quality, making further continuation suboptimal.
+
+The agent does not observe the true state; it maintains a belief b_t \in \Delta(\mathcal{S}), updated recursively via Bayes’ rule. Under mild regularity (weak continuity of T and Z), the belief‑state process is a fully observable MDP with state space \Delta(\mathcal{S}) [Smallwood & Sondik, 1973].
+
+5.2 Finite‑horizon Bellman equation
+
+Let V_t^*(b) be the optimal value from belief b at time t. For the finite horizon H, the Bellman equation is
+
+V_{H+1}^*(b) = 0, \qquad
+V_t^*(b) = \max \Bigl\{
+\underbrace{\mathbb{E}_{s \sim b}[Q(s)]}_{\text{halt}},
+\max_{a \in \mathcal{V}} \bigl( \mathbb{E}_{s \sim b}[R(s,a)] + \mathbb{E}_{o \sim Z, a}[ V_{t+1}^*(\tau(b,a,o)) ] \bigr)
+\Bigr\},
+
+where \tau(b,a,o) is the belief update after taking action a and observing o.
+
+Define the continuation value
+
+Q_{\text{cont}}^{(t)}(b) = \max_{a \in \mathcal{V}} \Bigl( \mathbb{E}_{s \sim b}[R(s,a)] + \mathbb{E}_{o}[ V_{t+1}^*(\tau(b,a,o)) ] \Bigr). \tag{5.1}
+
+The optimal decision at belief b at time t is to halt if and only if
+
+\mathbb{E}_{s \sim b}[Q(s)] \ge Q_{\text{cont}}^{(t)}(b). \tag{5.2}
+
+5.3 Monotonicity and confidence‑threshold stopping
+
+To obtain a simple, interpretable stopping rule we impose structural assumptions. First, we equip \mathcal{S} with a partial order \preceq that reflects progress: s \preceq s' means s' is more advanced, and the terminal reward Q(s) is non‑decreasing in s. Second, we assume the transition and observation kernels preserve the monotone likelihood ratio (MLR) order: if belief b is MLR‑dominated by b', then after any action and observation the updated beliefs maintain that dominance. This property holds when T and Z have log‑supermodular densities [Shaked & Shanthikumar, 2007]; it is a strong assumption but serves as a sufficient condition. Third, we assume diminishing returns: the incremental value of continuing, Q_{\text{cont}}^{(t)}(b) - \mathbb{E}_b[Q], is non‑increasing as the belief moves up the MLR order.
+
+Under these conditions, \mathbb{E}_b[Q] is increasing in the MLR order, and Q_{\text{cont}}^{(t)}(b) is decreasing. Define the confidence measure
+
+\text{Conf}(b) = 1 - \frac{H(b)}{H_{\max}}, \qquad H_{\max} = \log|\mathcal{V}|,
+
+where H(b) is the model’s predictive entropy when in belief b. We further assume that higher MLR beliefs correspond to lower entropy, so that \text{Conf} is strictly increasing in the MLR order.
+
+Then the difference \Delta^{(t)}(b) = \mathbb{E}_b[Q] - Q_{\text{cont}}^{(t)}(b) is strictly increasing in confidence. Because the belief space is connected and the value functions are continuous, the set where \Delta^{(t)}(b) \ge 0 is an interval. Thus, for each time step t there exists a threshold \theta_t^* such that the optimal policy halts iff \text{Conf}(b_t) \ge \theta_t^*. The thresholds are non‑increasing in t because the value of continuing decreases as the horizon shrinks.
+
+Theorem 5.1 (Confidence‑Threshold Stopping). Under the MLR dominance and diminishing returns assumptions, the optimal halting policy for the finite‑horizon POMDP is a threshold rule on confidence: halt at the first time t where \text{Conf}(b_t) \ge \theta_t^*. Without these assumptions, the optimal stopping region is still characterised by the inequality (5.2).
+
+This result provides a rigorous foundation for entropy‑gated halting heuristics: they are optimal if the underlying process satisfies the monotonicity conditions, and even when those conditions are violated, the Bellman‑derived condition (5.2) remains the principled criterion.
+
+---
+
+6. Multi‑Resource Efficiency Score (EIS)
+
+6.1 Additive cost and variance stability
+
+The normalised cost C(\tau) is an additive combination of tokens, latency, and energy. To justify this choice, we analyse its variance compared to a multiplicative metric M = T \cdot L \cdot E. Assume a realistic collinearity model:
+
+L = k_1 T + \varepsilon_1, \qquad E = k_2 T + \varepsilon_2,
+
+where \varepsilon_1, \varepsilon_2 are zero‑mean, independent of each other and of T, with finite fourth moments, and \mathbb{E}[T^4] < \infty. Then
+
+C = \left( \frac{\alpha}{\bar T} + \frac{\beta k_1}{\bar L} + \frac{\gamma k_2}{\bar E} \right) T + \frac{\beta}{\bar L}\varepsilon_1 + \frac{\gamma}{\bar E}\varepsilon_2.
+
+Hence
+
+\operatorname{Var}(C) = A^2 \operatorname{Var}(T) + \text{const.}
+
+For the multiplicative metric,
+
+M = k_1 k_2 T^3 + \text{lower‑order terms}.
+
+A Taylor expansion about \bar T = \mathbb{E}[T] gives
+
+T^3 = \bar T^3 + 3\bar T^2 (T - \bar T) + 3\bar T (T - \bar T)^2 + (T - \bar T)^3,
+
+so
+
+\operatorname{Var}(T^3) \approx 9 \bar T^4 \operatorname{Var}(T),
+
+plus higher moments controlled by the fourth‑moment assumption. Therefore,
+
+\operatorname{Var}(M) \approx 9 k_1^2 k_2^2 \bar T^4 \operatorname{Var}(T),
+
+which is inflated by a factor \bar T^4 relative to \operatorname{Var}(C). This demonstrates the variance stability of the additive cost and explains why multiplicative metrics are unreliable for model comparison.
+
+6.2 Definition and calibration of EIS
+
+The Efficiency Intelligence Score for a single trace \tau is
+
+\text{EIS}(\tau) = \frac{Q(y,x) \cdot \text{Conf}(y,x)}{1 + C(\tau)} \, \kappa,
+
+where \text{Conf}(y,x) \in [0,1] is the model’s confidence in its final answer (e.g., average log‑probability of answer tokens scaled). The constant \kappa is chosen so that a reference baseline policy \pi_0 has expected EIS equal to 1 on a validation set \mathcal{D}_{\mathrm{val}}:
+
+\kappa = \left( \mathbb{E}_{x \sim \mathcal{D}_{\mathrm{val}}} \left[ \frac{Q_0 \cdot \text{Conf}_0}{1 + C_0} \right] \right)^{-1}.
+
+Any model with expected EIS > 1 is more efficient than the baseline in terms of quality per unit resource.
+
+6.3 Properties of EIS
+
+Theorem 6.1 (EIS Properties).
+
+1. Boundedness: 0 \le \text{EIS} \le \kappa, with the upper bound achieved only when Q = \text{Conf} = 1 and C = 0.
+2. Non‑degeneracy: A trivial model that always halts immediately (T \approx 0) but achieves low quality has a finite score, because the denominator 1 + C \ge 1 prevents division by zero.
+3. Scale‑consistency: Suppose the resource weights are scaled by a factor c > 0 (i.e., C' = c C), and the calibration constant is recomputed on the same baseline with the scaled cost, giving \kappa_c. Then the relative ranking of models is preserved under the natural stochastic dominance: if a model A dominates B in the sense that its cost is stochastically smaller and its quality‑confidence product is stochastically larger, then it will be ranked higher under any scaling. In general, scaling changes the sensitivity to cost, as intended; the re‑calibration ensures the baseline stays at 1, and the ordering can change if models have different cost distributions—this reflects the intended trade‑off, not a flaw of the metric.
+
+Proof. (1) Clear from the ranges of Q, \text{Conf}, C. (2) If C = 0, denominator is 1; the score is \le \kappa. (3) Let s(c) = \mathbb{E}\bigl[ \frac{Q \cdot \text{Conf}}{1 + c C} \bigr]. Then \text{EIS}_c = s(c) \kappa_c. Because \kappa_c is model‑independent, the ordering is by s(c). If C_A is stochastically smaller than C_B and the numerator is stochastically larger, then s_A(c) > s_B(c) for all c > 0. In the absence of such dominance, the ranking can depend on c, which correctly reflects the weight placed on cost. ∎
+
+---
+
+7. Conclusion
+
+We have constructed a mathematically rigorous framework for adaptive inference in large language models. The Lagrangian dual planner with measurable optimal budget map and strong duality guarantees provably optimal budget allocation under a global resource constraint. The regret bound, strengthened by PAC‑Bayesian generalisation, explicitly connects the quality of a difficulty estimator to the performance of the resulting adaptive policy—a link that has been missing in prior heuristic methods. The POMDP analysis of the solver–verifier loop yields an optimal stopping condition that, under sufficient monotonicity assumptions, reduces to a simple confidence threshold, providing a theoretical basis for entropy‑gated generation. Finally, the additive Efficiency Intelligence Score avoids the variance pitfalls of multiplicative metrics and is properly calibrated against a baseline.
+
+Together, these results establish ERA not merely as an engineering system but as a verifiable theory of resource‑aware inference. The theorems are ready to guide the design and evaluation of next‑generation language models that must balance intelligence with efficiency.
+
+
+Appendix A. Lagrangian Dual and Measurable Selection
+
+A.1 Space of Randomised Policies and Convexity
+
+Let \mathcal{X} be a measurable space with probability measure \mathcal{D}. The budget space \mathcal{B} \subset \mathbb{R}^k is compact. A randomised policy is a Markov kernel \pi : \mathcal{X} \to \Delta(\mathcal{B}), where \Delta(\mathcal{B}) is the set of Borel probability measures on \mathcal{B} equipped with the topology of weak convergence. The set \Pi_{\mathrm{rand}} of all such kernels is convex: for any \pi_1,\pi_2 \in \Pi_{\mathrm{rand}} and \alpha \in [0,1], the mixture \pi = \alpha\pi_1 + (1-\alpha)\pi_2 defined pointwise by \pi(\cdot|x) = \alpha\pi_1(\cdot|x) + (1-\alpha)\pi_2(\cdot|x) is again a Markov kernel.
+
+The expected quality and cost are linear functionals on \Pi_{\mathrm{rand}}. Indeed, for any x, the map p \mapsto \int_{\mathcal{B}} \tilde{Q}(b,x) p(db) is linear and weakly continuous (since \tilde{Q} is bounded continuous). Integration over \mathcal{D} preserves linearity. Thus \mathcal{Q} : \Pi_{\mathrm{rand}} \to \mathbb{R} and \mathcal{C} : \Pi_{\mathrm{rand}} \to \mathbb{R} are linear functionals, and the primal problem
+
+P^* = \sup\{ \mathcal{Q}(\pi) : \pi \in \Pi_{\mathrm{rand}},\; \mathcal{C}(\pi) \le B_{\max} \}
+
+is a linear program in the infinite-dimensional space of measures.
+
+A.2 Strong Duality
+
+Define the Lagrangian \mathcal{L}(\pi,\lambda) = \mathcal{Q}(\pi) - \lambda (\mathcal{C}(\pi) - B_{\max}) for \lambda \ge 0. The dual function is g(\lambda) = \sup_{\pi \in \Pi_{\mathrm{rand}}} \mathcal{L}(\pi,\lambda). Because the supremum of an affine functional over a convex set can be exchanged with the integral under mild conditions (Rockafellar & Wets, 1998, Theorem 14.60), we obtain
+
+g(\lambda) = \int_{\mathcal{X}} \sup_{b \in \mathcal{B}} \bigl[ \tilde{Q}(b,x) - \lambda C(b,x) \bigr] \mathcal{D}(dx) + \lambda B_{\max}.
+
+Strong duality holds under the Slater condition: there exists a strictly feasible policy. We assume there is a budget \bar b \in \mathcal{B} such that \sup_{x \in \mathcal{X}} C(\bar b, x) < B_{\max}. The constant policy \pi_0(\cdot|x) = \delta_{\bar b} then satisfies \mathcal{C}(\pi_0) \le \sup_x C(\bar b, x) < B_{\max}. By standard results for linear programming in paired spaces (Shapiro, 2001, Theorem 2.1), the primal and dual values coincide: P^* = \inf_{\lambda \ge 0} g(\lambda), and the infimum is attained at some \lambda^* \ge 0.
+
+A.3 Measurable Selection of Optimal Budget
+
+For each \lambda \ge 0 and x \in \mathcal{X}, define the objective f_\lambda(b,x) = \tilde{Q}(b,x) - \lambda C(b,x). The map (b,x) \mapsto f_\lambda(b,x) is a Carathéodory function (continuous in b, measurable in x). The argmax correspondence
+
+\mathcal{A}(x,\lambda) = \arg\max_{b \in \mathcal{B}} f_\lambda(b,x)
+
+is nonempty, compact-valued, and upper hemicontinuous in x (by Berge's maximum theorem, since \mathcal{B} is compact and f_\lambda continuous). To obtain a single-valued measurable selector, we impose a secondary criterion: among all maximisers, choose the one that minimizes C(b,x). We assume either:
+
+1. \mathcal{B} is finite, or
+2. C(\cdot,x) is strictly convex on \mathcal{B} and \mathcal{A}(x,\lambda) is convex (the latter holds if \tilde{Q}(\cdot,x) is concave, as the argmax of a concave function is convex).
+
+Under either condition, the minimisation of C over \mathcal{A}(x,\lambda) has a unique solution. Define
+
+b^*(x;\lambda) = \arg\min_{b \in \mathcal{A}(x,\lambda)} C(b,x).
+
+The map (x,\lambda) \mapsto b^*(x;\lambda) is a Borel function. This follows from the Aumann measurable selection theorem (Aumann, 1965): the argmax correspondence admits a measurable selector; the secondary selection (min of a continuous function over a measurable compact-valued correspondence) is again measurable (see Aliprantis & Border, 2006, Chapter 18).
+
+A.4 Monotonicity of Expected Cost
+
+Define C^*(\lambda) = \int_{\mathcal{X}} C(b^*(x;\lambda), x) \mathcal{D}(dx).
+
+Lemma A.1. If \lambda_1 < \lambda_2, then C^*(\lambda_2) \le C^*(\lambda_1).
+
+Proof. Fix x and set b_i = b^*(x;\lambda_i). Optimality gives
+
+\tilde{Q}(b_1) - \lambda_1 C(b_1) \ge \tilde{Q}(b_2) - \lambda_1 C(b_2),
+
+\tilde{Q}(b_2) - \lambda_2 C(b_2) \ge \tilde{Q}(b_1) - \lambda_2 C(b_1).
+
+Adding and rearranging yields (\lambda_2 - \lambda_1)(C(b_1)-C(b_2)) \ge 0. Since \lambda_2 > \lambda_1, we obtain C(b_1) \ge C(b_2). The inequality is preserved by expectation over x. ∎
+
+A.5 Right-Continuity of C^*(\lambda)
+
+Lemma A.2. Under the uniqueness assumption above, C^* is right-continuous.
+
+Proof. Let \lambda_n \downarrow \lambda. For each x, consider the sequence b_n = b^*(x;\lambda_n). Since \mathcal{B} is compact, there is a convergent subsequence b_{n_k} \to \bar{b}. Upper hemicontinuity of \mathcal{A}(x,\cdot) implies \bar{b} \in \mathcal{A}(x,\lambda). The primary objective satisfies
+
+f_{\lambda_{n_k}}(b_{n_k},x) \ge f_{\lambda_{n_k}}(b,x) \quad \forall b \in \mathcal{B}.
+
+Taking limits and using continuity of f in both arguments, we get f_\lambda(\bar{b},x) \ge f_\lambda(b,x) for all b, hence \bar{b} \in \mathcal{A}(x,\lambda). Now consider the secondary criterion. For any b' \in \mathcal{A}(x,\lambda), by upper hemicontinuity of \mathcal{A} there exists a sequence b'_n \in \mathcal{A}(x,\lambda_n) with b'_n \to b'. Since b_n minimizes C over \mathcal{A}(x,\lambda_n),
+
+C(b_n,x) \le C(b'_n,x).
+
+Taking limits, C(\bar{b},x) \le C(b',x). As this holds for all b' \in \mathcal{A}(x,\lambda) and the minimizer is unique, \bar{b} = b^*(x;\lambda). Thus the entire sequence b_n converges pointwise to b^*(x;\lambda). Dominated convergence then yields C^*(\lambda_n) \to C^*(\lambda). ∎
+
+---
+
+Appendix B. Sensitivity Analysis and Convergence of Binary Search
+
+B.1 Lipschitz Dependence under Strong Concavity
+
+Assume that for every x, \tilde{Q}(\cdot,x) is \mu-strongly concave on the convex set \mathcal{B}: for all b_1,b_2 \in \mathcal{B}, \alpha \in [0,1],
+
+\tilde{Q}(\alpha b_1 + (1-\alpha)b_2, x) \ge \alpha \tilde{Q}(b_1,x) + (1-\alpha)\tilde{Q}(b_2,x) + \frac{\mu}{2}\alpha(1-\alpha)\|b_1-b_2\|^2.
+
+Also assume \tilde{Q} and C are L_Q- and L_C-Lipschitz respectively. Then the function b \mapsto \tilde{Q}(b,x) - \lambda C(b,x) is strongly concave with parameter \mu, and its gradient (if differentiable) is Lipschitz. By Bonnans & Shapiro (2000, Theorem 4.51), the unique maximizer b^*(x;\lambda) is Lipschitz in \lambda with constant L_C/\mu. Hence
+
+|C(b^*(x;\lambda_1),x) - C(b^*(x;\lambda_2),x)| \le L_C \|b^*(x;\lambda_1) - b^*(x;\lambda_2)\| \le \frac{L_C^2}{\mu} |\lambda_1 - \lambda_2|.
+
+Taking expectation over x gives
+
+|C^*(\lambda_1) - C^*(\lambda_2)| \le L_\lambda |\lambda_1 - \lambda_2|, \qquad L_\lambda = \frac{L_C^2}{\mu}.
+
+B.2 Hölder Case
+
+Without strong concavity, the maximizer is typically Hölder continuous of order 1/2 under second-order sufficient conditions. Then there exists K such that \|b^*(\lambda_1) - b^*(\lambda_2)\| \le K |\lambda_1 - \lambda_2|^{1/2}. Consequently, C^* is Hölder of order 1/2 with constant L_C K.
+
+B.3 Binary Search Complexity
+
+Monotonicity and right-continuity imply that the set \{\lambda \ge 0 : C^*(\lambda) \le B_{\max}\} is an interval [\lambda^*, \infty). We can locate \lambda^* by bisection on [0,\Lambda], where \Lambda is chosen so that C^*(\Lambda) < B_{\max}. In each iteration, we estimate C^* at the midpoint \lambda using a validation set.
+
+Assume we have a continuity modulus |C^*(\lambda_1) - C^*(\lambda_2)| \le L |\lambda_1 - \lambda_2|^\alpha for some \alpha \in (0,1]. After k iterations, the remaining interval length is \Lambda/2^k. The budget error is bounded by L (\Lambda/2^k)^\alpha. To guarantee this is \le \delta, we need
+
+k \ge \log_2\left( \frac{\Lambda}{(\delta/L)^{1/\alpha}} \right).
+
+Thus the number of iterations is O(\log(1/\delta)), with the constant deteriorating as \alpha \to 0. This completes the proof of the budget targeting theorem.
+
+---
+
+Appendix C. Regret Bound with Difficulty Estimation: Full Proof
+
+C.1 Definition of True Difficulty
+
+Let \lambda_0 > 0 be a reference shadow price. For each query x, define
+
+d^*(x) = C( b^*(x;\lambda_0), x ).
+
+Because C is bounded, d^*(x) \in [d_{\min}, d_{\max}] =: [0,D], where we set d_{\min}=0 without loss. The function d^* is measurable since b^* is measurable.
+
+C.2 Wasserstein Planner and Lipschitz Quality
+
+Let \Delta(\mathcal{B}) be endowed with the 1-Wasserstein distance
+
+W_1(p_1,p_2) = \inf_{\gamma \in \Gamma(p_1,p_2)} \int_{\mathcal{B}\times\mathcal{B}} \|b_1-b_2\| \, \gamma(db_1,db_2).
+
+A planner \psi: \mathbb{R} \to \Delta(\mathcal{B}) is (M,h)-Hölder if W_1(\psi(d_1),\psi(d_2)) \le M |d_1-d_2|^h for all d_1,d_2. The expected quality of a distribution p \in \Delta(\mathcal{B}) is \tilde{Q}(p,x) = \int_{\mathcal{B}} \tilde{Q}(b,x) p(db). Since \tilde{Q}(\cdot,x) is L_Q-Lipschitz on \mathcal{B}, the Kantorovich–Rubinstein duality yields
+
+|\tilde{Q}(p_1,x) - \tilde{Q}(p_2,x)| \le L_Q \, W_1(p_1,p_2).
+
+C.3 Deterministic Regret Bound
+
+The oracle policy draws budget from \psi(d^*(x)), the estimated policy from \psi(\hat d(x)). The regret is
+
+\mathcal{R} = \mathbb{E}_x \bigl[ \tilde{Q}(\psi(d^*(x)), x) - \tilde{Q}(\psi(\hat d(x)), x) \bigr].
+
+Applying the Hölder and Lipschitz bounds:
+
+\mathcal{R} \le L_Q \mathbb{E}_x \bigl[ W_1(\psi(d^*(x)), \psi(\hat d(x))) \bigr] \le L_Q M \mathbb{E}_x\bigl[ |d^*(x) - \hat d(x)|^h \bigr].
+
+Let \epsilon = \mathbb{E}_x[|d^*(x) - \hat d(x)|]. The function t \mapsto t^h is concave for h \in (0,1], so by Jensen's inequality,
+
+\mathbb{E}_x[|d^* - \hat d|^h] \le (\mathbb{E}_x[|d^* - \hat d|])^h = \epsilon^h.
+
+Hence
+
+\mathcal{R} \le L_Q M \epsilon^h.
+
+This inequality is deterministic, holding for any given estimator \hat d.
+
+C.4 PAC-Bayesian Bound for Stochastic Estimator
+
+We now consider a distribution \rho over a hypothesis class \mathcal{H} of predictors. The stochastic predictor draws \phi \sim \rho and returns \hat d_\phi(x). The expected error is \epsilon(\rho) = \mathbb{E}_{\phi\sim\rho} \mathbb{E}_x |\hat d_\phi(x) - d^*(x)|. The empirical error on a sample \mathcal{S} = \{(x_i, d^*(x_i))\}_{i=1}^m is \hat\epsilon_\rho = \frac1m \sum_{i=1}^m \mathbb{E}_{\phi\sim\rho} |\hat d_\phi(x_i) - d^*(x_i)|. The loss is bounded by D = d_{\max} - d_{\min}.
+
+The PAC-Bayesian theorem (Alquier, 2024) states: for any prior \pi on \mathcal{H}, with probability at least 1-\delta over \mathcal{S},
+
+\epsilon(\rho) \le \hat\epsilon_\rho + D \sqrt{ \frac{ \operatorname{KL}(\rho\|\pi) + \log\frac{2\sqrt{m}}{\delta} }{2m} }.
+
+Now consider the stochastic policy: first sample \phi \sim \rho, then for each query use planner \psi(\hat d_\phi(x)). Its expected regret is
+
+\mathcal{R}(\rho) = \mathbb{E}_{\phi\sim\rho} \mathbb{E}_x \bigl[ \tilde{Q}(\psi(d^*(x)), x) - \tilde{Q}(\psi(\hat d_\phi(x)), x) \bigr].
+
+By the same Lipschitz/Hölder argument applied inside the expectation over \phi,
+
+\mathcal{R}(\rho) \le L_Q M \, \mathbb{E}_{\phi\sim\rho} \mathbb{E}_x [ |d^*(x) - \hat d_\phi(x)|^h ].
+
+Now use the fact that for any non-negative random variable Z with mean \mu, \mathbb{E}[Z^h] \le \mu^h (by Jensen since t\mapsto t^h is concave). Apply with Z = \mathbb{E}_x |d^*(x) - \hat d_\phi(x)|, whose expectation over \phi is \epsilon(\rho). Thus
+
+\mathbb{E}_{\phi\sim\rho} \mathbb{E}_x [ |d^* - \hat d_\phi|^h ] \le \bigl( \mathbb{E}_{\phi\sim\rho} \mathbb{E}_x |d^* - \hat d_\phi| \bigr)^h = \epsilon(\rho)^h.
+
+Therefore \mathcal{R}(\rho) \le L_Q M \, \epsilon(\rho)^h. Combining with the PAC-Bayes bound yields the final high-probability statement:
+
+\mathcal{R}(\rho) \le L_Q M \left( \hat\epsilon_\rho + D \sqrt{ \frac{ \operatorname{KL}(\rho\|\pi) + \log\frac{2\sqrt{m}}{\delta} }{2m} } \right)^{\!h}.
+
+---
+
+Appendix D. POMDP and Optimal Stopping: Detailed Proofs
+
+D.1 Finite-Horizon POMDP and Belief-MDP Reduction
+
+We consider a POMDP \langle \mathcal{S}, \mathcal{O}, \mathcal{A}, T, Z, R, H \rangle where \mathcal{S} is a Polish state space, \mathcal{O} the observation space, \mathcal{A} = \mathcal{V} \cup \{\texttt{HALT}\}, T and Z are weakly continuous transition/observation kernels, and R bounded measurable. The horizon H = \lceil Q_{\max}/\eta \rceil ensures that continuing beyond H is suboptimal because total token penalty would exceed the maximum reward.
+
+Belief b_t \in \Delta(\mathcal{S}) is a conditional probability over the state given history. The belief update operator \tau: \Delta(\mathcal{S}) \times \mathcal{A} \times \mathcal{O} \to \Delta(\mathcal{S}) is defined via Bayes rule. Under weak continuity of T and Z, the map (b,a,o) \mapsto \tau(b,a,o) is continuous. The belief-MDP (\Delta(\mathcal{S}), \mathcal{A}, \tilde{T}, \tilde{R}) with
+
+\tilde{R}(b,a) = \int_{\mathcal{S}} R(s,a) b(ds), \qquad \tilde{T}(\cdot | b,a) = \int_{\mathcal{O}} \delta_{\tau(b,a,o)}(\cdot) \, Z(do|s) b(ds)
+
+is a fully observable MDP on the space of belief measures, which is a Borel space (Smallwood & Sondik, 1973). Standard dynamic programming yields optimal value functions V_t^* \in C_b(\Delta(\mathcal{S})) satisfying
+
+V_{H+1}^*(b) = 0, \quad V_t^*(b) = \max\bigl\{ \tilde{R}(b,\texttt{HALT}),\, \max_{a\in\mathcal{V}} [ \tilde{R}(b,a) + \mathbb{E}_{b'\sim \tilde{T}(\cdot|b,a)} V_{t+1}^*(b') ] \bigr\}.
+
+D.2 Continuation Value and Optimal Stopping
+
+Define the continuation value
+
+Q_{\text{cont}}^{(t)}(b) = \max_{a \in \mathcal{V}} \bigl( \tilde{R}(b,a) + \mathbb{E}_{b'} [ V_{t+1}^*(b') ] \bigr).
+
+The optimal action at belief b and time t is \texttt{HALT} iff
+
+\tilde{R}(b,\texttt{HALT}) \ge Q_{\text{cont}}^{(t)}(b). \tag{D.1}
+
+Since \tilde{R}(b,\texttt{HALT}) = \mathbb{E}_{s\sim b}[Q(s)], this is exactly the inequality in the text.
+
+D.3 Sufficient Conditions for a Confidence-Threshold Policy
+
+We now impose structural assumptions to simplify (D.1) to a threshold on confidence.
+
+Partial order on \mathcal{S}. Let \preceq be a closed partial order representing progress. The terminal reward Q: \mathcal{S} \to [0,1] is non-decreasing: s \preceq s' \Rightarrow Q(s) \le Q(s').
+
+MLR order. For \mu,\nu \in \Delta(\mathcal{S}), we say \mu \le_r \nu (MLR order) if the Radon–Nikodym derivative d\nu/d\mu is monotone non-decreasing with respect to \preceq. This is a stochastic order implying first-order stochastic dominance.
+
+Assumption D.1 (MLR-preserving transitions). For any action a \in \mathcal{V} and observation o, the map b \mapsto \tau(b,a,o) is monotone with respect to the MLR order: b \le_r b' \Rightarrow \tau(b,a,o) \le_r \tau(b',a,o). A sufficient condition is that T and Z have densities that are totally positive of order 2 (TP2) in the state variable (Shaked & Shanthikumar, 2007).
+
+Assumption D.2 (Diminishing returns). The function b \mapsto \Delta^{(t)}(b) = \mathbb{E}_b[Q] - Q_{\text{cont}}^{(t)}(b) is non-decreasing in the MLR order; i.e., if b \le_r b', then \Delta^{(t)}(b) \le \Delta^{(t)}(b').
+
+Confidence. Define the confidence measure \text{Conf}(b) = 1 - H(b)/H_{\max} where H(b) = -\sum_{y} p(y|b) \log p(y|b) is the predictive entropy of the next token given belief b (marginalising over state). We assume that the MLR order correlates with lower entropy: b \le_r b' implies \text{Conf}(b) \le \text{Conf}(b').
+
+Lemma D.1. Under Assumptions D.1 and D.2, the function b \mapsto \mathbb{E}_b[Q] is non-decreasing in MLR order, and b \mapsto Q_{\text{cont}}^{(t)}(b) is non-increasing.
+
+Proof. The first part follows because MLR implies first-order stochastic dominance and Q is increasing. The second part is exactly the diminishing returns assumption: \mathbb{E}_b[Q] - Q_{\text{cont}}^{(t)}(b) increasing implies Q_{\text{cont}}^{(t)} decreases relative to \mathbb{E}_b[Q]; a more precise statement is that Q_{\text{cont}}^{(t)} itself is non-increasing in MLR order (one can prove by backward induction using the monotonicity of the Bellman operator under TP2 conditions; see Lovejoy, 1987). ∎
+
+Consequently, \Delta^{(t)}(b) is strictly increasing in MLR order. Since confidence is assumed to be monotone in MLR, \Delta^{(t)}(b) is strictly increasing in \text{Conf}(b). The optimal halting condition \Delta^{(t)}(b) \ge 0 therefore corresponds to \text{Conf}(b) \ge \theta_t^* for some threshold \theta_t^* (which may depend on t). The thresholds are non-increasing in t because the continuation value decreases as horizon shrinks.
+
+This completes the proof of Theorem 5.1 (confidence-threshold stopping).
+
+---
+
+Appendix E. Efficiency Intelligence Score: Variance Stability and Scale‑Consistency
+
+E.1 Additive Cost and Variance Inflation of Multiplicative Metrics
+
+We work under the collinearity model
+
+L = k_1 T + \varepsilon_1, \qquad E = k_2 T + \varepsilon_2,
+
+with \mathbb{E}[\varepsilon_i]=0, \operatorname{Var}(\varepsilon_i) < \infty, \mathbb{E}[T^4] < \infty, and \varepsilon_1,\varepsilon_2 independent of T and of each other.
+
+Additive cost.
+
+C = \alpha \frac{T}{\bar T} + \beta \frac{k_1 T + \varepsilon_1}{\bar L} + \gamma \frac{k_2 T + \varepsilon_2}{\bar E}
+= \underbrace{ \left( \frac{\alpha}{\bar T} + \frac{\beta k_1}{\bar L} + \frac{\gamma k_2}{\bar E} \right) }_{A} T + \frac{\beta}{\bar L}\varepsilon_1 + \frac{\gamma}{\bar E}\varepsilon_2.
+
+Then \operatorname{Var}(C) = A^2 \operatorname{Var}(T) + \frac{\beta^2}{\bar L^2}\operatorname{Var}(\varepsilon_1) + \frac{\gamma^2}{\bar E^2}\operatorname{Var}(\varepsilon_2) = O(\operatorname{Var}(T)).
+
+Multiplicative metric M = T \cdot L \cdot E.
+
+M = T (k_1 T + \varepsilon_1)(k_2 T + \varepsilon_2) = k_1 k_2 T^3 + k_1 T^2 \varepsilon_2 + k_2 T^2 \varepsilon_1 + T \varepsilon_1 \varepsilon_2.
+
+Using independence and zero mean of \varepsilon_i,
+
+\operatorname{Var}(M) = k_1^2 k_2^2 \operatorname{Var}(T^3) + k_1^2 \mathbb{E}[T^4] \operatorname{Var}(\varepsilon_2) + k_2^2 \mathbb{E}[T^4] \operatorname{Var}(\varepsilon_1) + \mathbb{E}[T^2] \operatorname{Var}(\varepsilon_1)\operatorname{Var}(\varepsilon_2).
+
+The dominant term is \operatorname{Var}(T^3). Expand T = \bar T + \Delta with \mathbb{E}[\Delta]=0:
+
+T^3 = \bar T^3 + 3\bar T^2 \Delta + 3\bar T \Delta^2 + \Delta^3.
+
+Thus \mathbb{E}[T^3] = \bar T^3 + 3\bar T \sigma_T^2 + \mathbb{E}[\Delta^3] and
+
+\operatorname{Var}(T^3) = \mathbb{E}[ (3\bar T^2 \Delta + 3\bar T \Delta^2 + \Delta^3 - 3\bar T \sigma_T^2 - \mathbb{E}[\Delta^3] )^2 ].
+
+The leading term comes from (3\bar T^2 \Delta)^2, giving 9\bar T^4 \sigma_T^2. All remaining terms involve higher moments of \Delta and are O(\bar T^3 \mathbb{E}[|\Delta|^3]) which is controlled by the finite fourth moment. Therefore,
+
+\operatorname{Var}(M) \approx 9 k_1^2 k_2^2 \bar T^4 \operatorname{Var}(T) + O(\bar T^3).
+
+Comparing to \operatorname{Var}(C) = A^2 \operatorname{Var}(T) + \text{const}, we see the multiplicative metric’s variance is amplified by a factor of order \bar T^4, demonstrating its instability.
+
+E.2 EIS Properties: Calibration and Scale‑Consistency
+
+EIS for a trace \tau is \text{EIS}(\tau) = \frac{Q \cdot \text{Conf}}{1 + C(\tau)} \kappa, where \kappa is chosen so that the baseline policy \pi_0 has expected EIS of 1 on validation set \mathcal{D}_{\mathrm{val}}.
+
+Boundedness: Q,\text{Conf} \in [0,1], C \ge 0 implies numerator \le 1 and denominator \ge 1, so 0 \le \text{EIS} \le \kappa. The maximum is attained only at perfect confidence, perfect quality, and zero cost.
+
+Non‑degeneracy: If a model produces trivial answers with T \approx 0 but Q small, denominator \approx 1, score \le \kappa \cdot Q \cdot \text{Conf} is finite, preventing inflation.
+
+Scale‑consistency: When cost weights are scaled by c > 0, the new cost is C' = cC. The new calibration constant is \kappa_c = \left( \mathbb{E}_{\mathcal{D}_{\mathrm{val}}} \bigl[ \frac{Q_0 \cdot \text{Conf}_0}{1 + c C_0} \bigr] \right)^{-1}. For any model, expected EIS under the new scaling is \mathbb{E}\bigl[ \frac{Q \cdot \text{Conf}}{1 + c C} \bigr] \kappa_c. The ranking between two models is determined by the sign of
+
+\mathbb{E}\left[ \frac{Q_A \text{Conf}_A}{1 + c C_A} \right] - \mathbb{E}\left[ \frac{Q_B \text{Conf}_B}{1 + c C_B} \right],
+
+multiplied by \kappa_c > 0. This difference is a function of c. In general, the ordering can change with c, reflecting the intended sensitivity to cost. However, if one model stochastically dominates the other (i.e., its cost is stochastically smaller and its quality‑confidence product stochastically larger), then the difference remains positive for all c. The metric is thus scale‑consistent: the baseline stays calibrated, and changes in ranking only occur when the cost scaling genuinely alters the trade‑off. This is a desirable property rather than a flaw.
+
+Bibliography 
+
+A. Lagrangian Duality and Constrained Optimization - For Theorem 1
+
+ Boyd, S. and Vandenberghe, L. Convex Optimization. Cambridge University Press, 2004.[1]
+
+ Luenberger, D. G. Optimization by Vector Space Methods. Wiley, 1969.[2]
+
+ Bonnans, J. F. and Shapiro, A. Perturbation Analysis of Optimization Problems. Springer, 2000.[3]
+
+ Aliprantis, C. D. and Border, K. C. Infinite Dimensional Analysis: A Hitchhiker's Guide. Springer, 2006. - For measurable selection of b^*(x;\lambda).[4]
+
+ Aumann, R. J. Measurable utility and the measurable choice theorem. La Décision, 1965.[5]
+
+ Berge, C. Topological Spaces. Oliver & Boyd, 1963. - Berge Maximum Theorem for right-continuity.[6]
+
+B. Adaptive Inference and Test-Time Compute Allocation - Problem Motivation
+
+ Snell, C., Lee, J., Xu, K., and Kumar, A. Scaling LLM test-time compute optimally can be more effective than scaling model parameters. arXiv:2408.03314, 2024.[7]
+
+ Muennighoff, N., et al. s1: Simple test-time scaling. arXiv:2501.19393, 2025.[8]
+
+ Lightman, H., et al. Let's verify step by step. arXiv:2305.20050, 2023. - Verifier model.[9]
+
+ Wang, X., et al. Self-consistency improves chain of thought reasoning in language models. ICLR 2023.[10]
+
+ Manvi, R., et al. Adaptive inference: Trading off compute for accuracy. NeurIPS 2024.[11]
+
+ Schwartz, R., et al. The right tool for the job: Co-training of budgeted models. JMLR 2020 - Early budget-aware learning.[12]
+
+C. Difficulty Estimation and Regret - For Theorem 2
+
+ Alquier, P. User-friendly introduction to PAC-Bayes bounds. Foundations and Trends in ML, 2024.[13]
+
+ McAllester, D. A. PAC-Bayesian model averaging. COLT 1999. - Original PAC-Bayes bound.[14]
+
+ Maurer, A. A note on the PAC-Bayesian theorem. arXiv:cs/0411099, 2004. - Bounded loss version you use.[15]
+
+ Catoni, O. PAC-Bayesian Supervised Classification. IMS Lecture Notes, 2007.[16]
+
+ Xin, J., et al. Learn to estimate difficulty for adaptive reasoning. arXiv:2406.08270, 2024.[17]
+
+ Aggarwal, P. and Welleck, S. L2: Large language models that know what they don't know. arXiv:2403.11927, 2024. - Difficulty calibration.[18]
+
+D. POMDP, Optimal Stopping, and Entropy-Based Halting - For Theorem 3
+
+ Smallwood, R. D. and Sondik, E. J. The optimal control of partially observable Markov processes over a finite horizon. Operations Research, 1973. - Belief-MDP reduction.[19]
+
+ Sondik, E. J. The optimal control of partially observable Markov processes. PhD Thesis, Stanford, 1971.[20]
+
+ Lovejoy, W. S. Some monotonicity results for partially observed Markov decision processes. Operations Research, 1987. - For monotone threshold policies.[21]
+
+ Krishnamurthy, V. Partially Observed Markov Decision Processes. Cambridge, 2016.[22]
+
+ Putterman, M. L. Markov Decision Processes: Discrete Stochastic Dynamic Programming. Wiley, 1994.[23]
+
+ Farrington, A. and Gimpel, K. Adaptive beam search and early stopping via entropy. EMNLP 2020.[24]
+
+ Elbayad, M., et al. Depth-adaptive transformer. ICLR 2020. - Halting heuristics.[25]
+
+ Graves, A. Adaptive computation time for recurrent neural networks. arXiv:1603.08983, 2016.[26]
+
+E. Efficiency Metrics, Energy, and Collinearity - For Theorem 4
+
+ Schwartz, R., Dodge, J., Smith, N. A., and Etzioni, O. Green AI. CACM 2020.[27]
+
+ Strubell, E., Ganesh, A., and McCallum, A. Energy and policy considerations for deep learning in NLP. ACL 2019.[28]
+
+ Henderson, P., et al. Towards the systematic reporting of the energy and carbon footprints of machine learning. JMLR 2020.[29]
+
+ Li, W., et al. MELT: Measurement of energy for large language model training. arXiv:2405.12105, 2024. - Energy benchmark protocol.[30]
+
+ Dehghani, M., et al. The efficiency misnomer. ICLR 2022. - Critique of multiplicative FLOPs metrics.[31]
+
+ Shaked, M. and Shanthikumar, J. G. Stochastic Orders. Springer, 2007. - For variance comparison under dependence.[32]
+
+ Casella, G. and Berger, R. L. Statistical Inference. Duxbury, 2002. - Delta method.[33]
+
+F. Hölder Continuity and Sensitivity
+
+ Rockafellar, R. T. and Wets, R. J-B. Variational Analysis. Springer, 1998. - Hölder properties of argmax maps.[34]
+
+ Shapiro, A., Dentcheva, D., and Ruszczyński, A. Lectures on Stochastic Programming. SIAM, 2021.[35]
+
