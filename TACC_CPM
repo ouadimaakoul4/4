@@ -1,0 +1,733 @@
+A Thermodynamically Admissible Constitutive Controller for Cyber-Physical Materials
+
+Ouadi Maakoul
+(Concept Development with AI Assistance)
+
+---
+
+Abstract
+
+Two adjacent research programs currently address parts of this problem separately. The first — thermodynamically-consistent neural constitutive modeling (TANNs, generalized-standard-material-structured networks, Meyer & Ekre's evolution-law discovery) — learns fixed constitutive laws offline from data, with thermodynamic admissibility guaranteed by construction, but the resulting law does not change once deployed. The second — “robotic materials” (McEvoy & Correll) — embeds sensing, actuation, and computation directly into composites, but without a thermodynamically grounded formalism governing what the embedded controller is allowed to do to the material's constitutive response. This paper proposes the missing object at their intersection: a Constitutive Controller $\mathcal{C} = (\psi, \Phi, \Theta, \Pi)$ — a free energy, a dissipation potential, an admissible control-parameter space, and an optimization policy — that lets an embedded cyber-physical system adapt a material's constitutive law online, in real deployment, while a proven invariant guarantees the Clausius–Duhem inequality is never violated. We establish a rigorous Thermodynamic Preservation Theorem by constructing $\Theta$ as a convex cone via a linear parameterization of the dissipation potential, making the projection operator well-posed and the proof independent of any quasi-static assumption on the controller. We further provide existence and uniqueness of the material response for any admissible control trajectory, a Lyapunov stability analysis of the projected-gradient controller, and a timescale-separation framework that bounds the error of surrogate objectives. The theorem’s scope is delimited explicitly: it covers dissipation-adaptive materials; the stiffness-adaptive case (where the free energy depends on the control parameter) is identified as a separate, harder open problem.
+
+---
+
+1. Introduction
+
+The classical framework of continuum thermodynamics with internal state variables (ISV) provides the most rigorous basis for constitutive modeling of dissipative solids. In the generalized standard materials (GSM) formalism of Halphen and Nguyen [1], a material’s behavior is fully determined by two scalar potentials: a Helmholtz free energy $\psi(\varepsilon, x)$ and a dissipation potential $\Phi(\dot x; x, \varepsilon)$, where $\varepsilon$ is the strain, $x$ the internal state, and the convexity of $\Phi$ in $\dot x$ guarantees automatic satisfaction of the second law. This powerful structure has enabled a vast literature of physically admissible constitutive models.
+
+In the last decade, the machine-learning community has revisited this framework to discover $\psi$ and $\Phi$ from data while retaining thermodynamic consistency. Thermodynamically-informed neural networks (TANNs) [2], GSM-structured networks [3], and automated evolution-law discovery [4] all produce constitutive laws that are fixed after training. While these learned laws are deployed with proven admissibility, their parameters never change post-training.
+
+A parallel line of work in “robotic materials” [5] has demonstrated the feasibility of embedding sensing, actuation, and computation directly into composite materials, enabling adaptive structural behavior. However, these systems lack a thermodynamically grounded formalism: the embedded controller has no constraint that prevents it from driving the material into a physically inadmissible regime.
+
+This paper introduces the Constitutive Controller $\mathcal{C}$, a formal object that bridges these two programs. The core idea is to parametrize the dissipation potential by a control vector $\theta$ that can be adjusted online by an optimization policy $\Pi$, while a Thermodynamic Preservation Theorem guarantees that the Clausius–Duhem inequality holds at every instant as long as $\theta(t)$ remains inside an a priori computed admissible set $\Theta$. This decouples the safety guarantee from the specific policy — the controller may employ any heuristic, consensus algorithm, or learned policy, provided its output is projected onto $\Theta$ before being applied to the material.
+
+We present the mathematical foundation of this controller, correcting and extending previous informal proposals [6]. The key contributions are:
+
+· A rigorous definition of $\Theta$ as a convex cone through a linear parameterization of the dissipation potential’s quadratic part, making projection well-posed and the admissible set easily checkable.
+· A lemma and theorem proving that for a free energy independent of the control parameter, the pointwise dissipation inequality $A \cdot \dot x \ge 0$ holds along any trajectory with $\theta(t) \in \Theta$, without any quasi-static assumption on the controller’s speed. The quasi-static condition is relegated to the optimization policy’s objective meaningfulness, not to thermodynamic safety.
+· Proof of existence and uniqueness of the material response for any measurable $\theta(t) \in \Theta$, using maximal monotone operator theory.
+· A Lyapunov convergence proof for a projected-gradient-flow controller, connecting to the open problem of coupled mechanical/controller stability.
+· A timescale-separation analysis yielding error bound shapes for surrogate objectives.
+
+The paper explicitly delimits its scope: the current safety theorem holds only for dissipation-adaptive materials (free energy $\psi$ does not depend on $\theta$). The extension to stiffness-adaptive materials is left as a stated open problem requiring a generalized dissipation inequality that accounts for controller work.
+
+---
+
+2. Preliminaries: Generalized Standard Materials
+
+We briefly recall the GSM structure [1] to fix notation. For a material with free energy $\psi(\varepsilon, x)$ and dissipation potential $\Phi(\dot x; x, \varepsilon)$, the state laws are
+
+\sigma = \frac{\partial \psi}{\partial \varepsilon}, \qquad A = -\frac{\partial \psi}{\partial x},
+
+and the complementary evolution law is
+
+A = \frac{\partial \Phi}{\partial \dot x},
+
+with $\Phi$ convex in $\dot x$, proper, l.s.c., and $\Phi(0)=0$, $0\in\partial_{\dot x}\Phi(0)$. The Coleman–Noll procedure applied to the Clausius–Duhem inequality
+
+\sigma : \dot \varepsilon - \dot\psi \ge 0
+
+yields the reduced dissipation inequality
+
+A \cdot \dot x \ge 0,
+
+which is automatically satisfied because of the convexity of $\Phi$ and the Fenchel–Young identity.
+
+---
+
+3. The Constitutive Controller Framework
+
+3.1 Definition
+
+We define a Constitutive Controller as the tuple
+
+\mathcal{C} = (\psi, \Phi, \Theta, \Pi),
+
+where
+
+· $\psi(\varepsilon, x)$ — Helmholtz free energy density, independent of the control parameter $\theta$ (Standing Assumption A1, see below);
+· $\Phi(\dot x; x, \varepsilon, \theta)$ — a dissipation potential, convex in $\dot x$ for every $(x,\varepsilon,\theta)$;
+· $\Theta \subset \mathbb{R}^m$ — the admissible control-parameter space: all $\theta$ for which $\Phi(\cdot;\cdot,\cdot,\theta)$ remains convex in $\dot x$ and satisfies any material realizability bounds;
+· $\Pi$ — an optimization policy that selects $\theta(t)$ online, subject to projection onto $\Theta$ at each update.
+
+The framework separates two concerns: thermodynamic safety (ensured by $\Theta$ and the projection) and performance optimization (governed by $\Pi$). The safety proof holds for any bounded update direction $u(t)$ applied by $\Pi$, as long as the projection is enforced.
+
+3.2 Parametric Dissipation Potential and Admissible Set $\Theta$
+
+To make the set $\Theta$ concrete and its projection well-posed, we adopt a specific linear parameterization of the dissipation potential. Let the dissipation potential be decomposed into a quadratic rate-dependent part and a fixed convex function $\varphi$ (which may capture rate-independent threshold effects):
+
+\Phi(\dot x; x,\varepsilon,\theta) = \frac{1}{2} \dot x^\top \mathbf{D}(\theta) \, \dot x + \varphi(\dot x; x, \varepsilon),
+
+with
+
+\mathbf{D}(\theta) = D_0 + \sum_{i=1}^{m} \theta_i D_i,
+
+where $D_0 \succ 0$ (positive definite) and $D_i \succeq 0$ (positive semidefinite) for all $i$. The function $\varphi$ is convex in $\dot x$, proper, l.s.c., and independent of $\theta$. By construction, the Hessian of $\Phi$ with respect to $\dot x$ is
+
+\nabla_{\dot x}^2 \Phi = \mathbf{D}(\theta) + \nabla_{\dot x}^2 \varphi \succeq \mathbf{D}(\theta).
+
+Since $\mathbf{D}(\theta) \succ 0$ for all $\theta \in \mathbb{R}^m_{\ge 0}$ (because $D_0 \succ 0$ and each $D_i$ is positive semidefinite, so any nonnegative combination preserves positive definiteness), the entire nonnegative orthant is contained in the convexity-preserving set. We define the admissible set as
+
+\Theta := \mathbb{R}^m_{\ge 0} = \{ \theta \in \mathbb{R}^m \mid \theta_i \ge 0, \ i=1,\dots,m \}.
+
+This set is a closed convex cone (an intersection of half-spaces). Optionally, additional constraints such as bounded actuation authority can be added as linear inequalities, preserving convexity. Thus, $\Theta$ is not an abstract predicate but a concrete, computationally tractable convex set.
+
+3.3 Projection Operator
+
+Because $\Theta$ is closed and convex, the Hilbert projection theorem guarantees that for any $\theta_{\text{unc}} \in \mathbb{R}^m$, the projection
+
+\mathrm{proj}_\Theta(\theta_{\text{unc}}) = \arg\min_{\vartheta \in \Theta} \|\vartheta - \theta_{\text{unc}}\|
+
+exists, is unique, and is firmly non-expansive. For our specific $\Theta = \mathbb{R}^m_{\ge 0}$, the projection reduces to componentwise clipping: $(\mathrm{proj}_\Theta(\theta))_i = \max\{\theta_i, 0\}$, which is trivial to implement in embedded hardware.
+
+This resolves the earlier informal circularity of projecting onto “the set where $\Phi$ is convex.” Here, convexity is guaranteed by construction for all $\theta \in \Theta$, and $\Theta$ itself is a simple convex cone.
+
+---
+
+4. Thermodynamic Preservation Theorem
+
+We impose the following standing assumption:
+
+Assumption A1. The free energy $\psi$ does not depend on the control parameter $\theta$: $\psi = \psi(\varepsilon, x)$.
+
+This means the controller can modulate only the dissipative properties (how the material relaxes internal stresses), not the elastic stiffness directly. The extension to $\theta$-dependent $\psi$ is discussed in §4.4 and left as an open problem.
+
+4.1 Lemma: Pointwise Dissipation for Fixed $\theta$
+
+Lemma 1. Suppose $\theta$ is held constant. Under the GSM structure with $\psi = \psi(\varepsilon, x)$ and $\Phi$ convex in $\dot x$, the instantaneous dissipation power satisfies
+
+A \cdot \dot x \ge 0,
+
+where $A = \partial \Phi / \partial \dot x$.
+
+Proof. From the GSM relations, $A \in \partial \Phi(\dot x)$ (the subdifferential, or simply the gradient if $\Phi$ is differentiable). The Fenchel–Young inequality for the convex conjugate $\Phi^\star$ states that for all $A,\dot x$,
+
+A \cdot \dot x \le \Phi(\dot x) + \Phi^\star(A),
+
+with equality iff $A \in \partial \Phi(\dot x)$. By the GSM evolution law this equality holds. Since $\Phi(0)=0$, we have $\Phi^\star(A) = \sup_v [A\cdot v - \Phi(v)] \ge A\cdot 0 - \Phi(0) = 0$. Moreover, $\Phi(\dot x) \ge 0$ by definition. Hence $A \cdot \dot x = \Phi(\dot x) + \Phi^\star(A) \ge 0$. $\square$
+
+The lemma does not require any time-scale separation; it is a purely algebraic consequence of convexity.
+
+4.2 Main Theorem
+
+Theorem 1 (Thermodynamic Preservation). Let Assumption A1 hold. Let $\theta : [0,T] \to \Theta$ be any measurable function that evolves according to a discrete update rule $\theta(t^+) = \mathrm{proj}_\Theta\big(\theta(t) + \eta\, u(t)\big)$ for arbitrary bounded $u(t)$ and step $\eta > 0$. Then for almost every $t \in [0,T]$,
+
+A(t) \cdot \dot x(t) \ge 0.
+
+Proof.
+
+1. Invariance of $\Theta$. Since $\theta(0) \in \Theta$ and $\Theta$ is closed and convex, the projection maps any point into $\Theta$. By induction on the discrete update indices and by right-continuity of the resulting piecewise-constant (or piecewise-continuous) trajectory, $\theta(t) \in \Theta$ for all $t \in [0,T]$.
+2. Pointwise application of Lemma 1. For each time $t$, freeze the control parameter at its current value $\theta(t) \in \Theta$. By definition of $\Theta$, $\Phi(\cdot; x(t), \varepsilon(t), \theta(t))$ is convex in $\dot x$. The instantaneous GSM pair $(\psi, \Phi(\cdot;\cdot,\cdot,\theta(t)))$ is therefore admissible, and Lemma 1 gives $A(t) \cdot \dot x(t) \ge 0$.
+3. No $\dot\theta$ term in the dissipation inequality. Under Assumption A1, $\psi$ does not depend on $\theta$, so $\dot\psi = \frac{\partial \psi}{\partial \varepsilon}:\dot\varepsilon + \frac{\partial \psi}{\partial x} \cdot \dot x$. The Clausius–Duhem inequality $\sigma:\dot\varepsilon - \dot\psi \ge 0$ reduces exactly to $A \cdot \dot x \ge 0$, with no additional term involving $\dot\theta$, regardless of the magnitude or speed of $\theta$'s variation. Hence the pointwise inequality from step 2 is exactly the desired thermodynamic inequality.
+
+Thus, for a.e. $t$, $A(t)\cdot\dot x(t) \ge 0$. $\square$
+
+The proof shows that the quasi-static assumption on the controller is not necessary for the safety invariant: the projection ensures admissibility at every instant, and the decoupling of $\psi$ from $\theta$ prevents any extra power term from contaminating the dissipation. The quasi-static condition $\tau_\theta \gg \tau_x$ remains relevant only to the performance of the optimization policy — it guarantees that the objective function $J(\theta)$ is well-defined as a steady-state average over the fast internal dynamics — but it is not a requirement for thermodynamic safety.
+
+4.3 Remarks
+
+· The theorem holds for any update policy $\Pi$ that respects the projection step, including adversarial choices of $u(t)$ as long as they are bounded. This is the formal “controller contract” missing from the robotic materials literature.
+· The proof relies on the linear parameterization of $\mathbf{D}(\theta)$ only to ensure $\Theta$ is convex and projection is well-posed. If a more complex parameterization of $\Phi$ is used, one must either prove that the resulting admissible set is convex (or project onto a convex inner approximation), otherwise the theorem's proof would require a set-valued projection with additional continuity arguments.
+
+4.4 Extension to $\theta$-dependent free energy (Open)
+
+If we relax Assumption A1 to allow $\psi = \psi(\varepsilon, x, \theta)$ (stiffness-adaptive materials), the time derivative acquires an extra term:
+
+\dot\psi = \sigma:\dot\varepsilon - A\cdot \dot x + \frac{\partial\psi}{\partial\theta} \cdot \dot\theta.
+
+The Clausius–Duhem inequality becomes
+
+A\cdot \dot x \ge \frac{\partial\psi}{\partial\theta} \cdot \dot\theta.
+
+Thus, the controller’s action changes the material’s stiffness at the cost of an explicit power injection/withdrawal that must be accounted for in an extended thermodynamic framework. Ensuring admissibility would require bounding $\frac{\partial\psi}{\partial\theta}\cdot\dot\theta$ against the dissipation $A\cdot\dot x$, e.g., via a generalized dissipation potential that includes $\dot\theta$ as a thermodynamic flux. This is a separate, harder theorem that we do not attempt here; it is identified as a primary open problem in §8.
+
+---
+
+5. Well-Posedness of the Material Response
+
+For any given control-parameter trajectory $\theta(t)$, the material response is governed by the differential-algebraic system
+
+\sigma = \frac{\partial\psi}{\partial\varepsilon}, \qquad A = -\frac{\partial\psi}{\partial x}, \qquad A \in \partial_{\dot x}\Phi(\dot x; x,\varepsilon,\theta).
+
+The last inclusion can be inverted via the convex conjugate: $\dot x \in \partial \Phi^\star(A)$. Under the linear parameterization of §3.2, $\partial \Phi^\star$ is a single-valued Lipschitz operator.
+
+Proposition 1 (Existence and uniqueness). Let $\psi \in C^2$ with $\partial_\varepsilon \psi$ strongly monotone, $\Phi$ as in §3.2 with $D_0 \succ 0$, and let $\varepsilon(t)$ be absolutely continuous. Then for any measurable $\theta(t) \in \Theta$, there exists a unique solution $x(t)$ on $[0,T]$ satisfying the evolution law for given initial $x(0)$. The solution is continuous and depends continuously on the initial data.
+
+Proof sketch. The evolution law can be written as
+
+\dot x = \big[\mathbf{D}(\theta(t))\big]^{-1} \big( - \partial_x \psi(\varepsilon(t), x) - \partial_{\dot x}\varphi(\dot x) \big)
+
+(if $\varphi$ is differentiable) or more generally as a maximal monotone inclusion. Because $\mathbf{D}(\theta(t)) \succ 0$ uniformly (since $\theta(t) \in \Theta$ implies $\mathbf{D}(\theta) \succeq D_0 \succ 0$), the operator is strongly monotone and Lipschitz in $x$ (under appropriate regularity of $\psi$ and $\varphi$), guaranteeing existence and uniqueness by standard ODE theory or by the Brézis theory of evolution equations governed by maximal monotone operators. $\square$
+
+This result confirms that the physical system is well-defined for any admissible controller, eliminating a potential source of mathematical inconsistency.
+
+---
+
+6. Hierarchical Optimization and Timescale Separation
+
+6.1 Four-Level Hierarchy
+
+The controller’s optimization policy $\Pi$ is organized into four levels, matching the timescale separation typical of structural systems:
+
+Level Object Timescale Example
+0 Constitutive response ms $\sigma = \partial\psi/\partial\varepsilon$ at fixed $x,\theta$
+1 Local adaptation seconds–hours cell-level $\theta_i$ update via surrogate $J_i$
+2 Structural optimization hours–weeks consensus or global correction across the structure
+3 Fleet optimization weeks–years cross-structure learning, closing the loop to offline retraining of the base $\Phi$ parameterization
+
+Level 3 corresponds to the offline training phase of neural constitutive models [2–4]; Levels 0–2 represent the real-time online adaptation of the constitutive controller.
+
+6.2 Timescale Justification and Surrogate Error Bounds
+
+The optimization at Level 1 uses a local surrogate objective $J_i(\theta_i)$ that approximates the true structural-level cost. The accuracy of this approximation relies on a timescale separation $\tau_x \ll \tau_\theta$, where $\tau_x$ is the characteristic time of internal state relaxation, and $\tau_\theta$ is the interval between controller updates.
+
+Suppose the fast mechanical subsystem reaches a quasi-steady state $x^\infty(\theta)$ when $\theta$ is frozen. Standard singular perturbation theory (Tikhonov’s theorem) guarantees that for sufficiently small $\tau_x/\tau_\theta$, the actual trajectory satisfies
+
+\| x(t) - x^\infty(\theta(t)) \| = O\!\left(\frac{\tau_x}{\tau_\theta}\right)
+
+under appropriate hyperbolicity assumptions on the fast dynamics. If the true objective $J$ is $L$-smooth in $x$, a Taylor expansion yields
+
+J(x) = J(x^\infty(\theta)) + \nabla J(x^\infty(\theta)) \cdot (x - x^\infty(\theta)) + O(\|x-x^\infty(\theta)\|^2).
+
+Hence the error incurred by using the surrogate $J_{\text{surr}} = J(x^\infty(\theta))$ instead of the true cost is of order $O(\tau_x/\tau_\theta)$. This provides a quantitative, albeit asymptotic, bound on the surrogate error (Open Problem 3 from the previous version). Concrete constants require specifying the potentials and the objective, which is deferred to the experimental validation.
+
+---
+
+7. Spatial Coupling and Distributed Optimization
+
+In a continuous structure, internal variables evolve under spatial coupling, typically through diffusion-like terms. We model this as
+
+\frac{\partial x}{\partial t} = h(x,\varepsilon,\theta) + D \nabla^2 x,
+
+where $D \ge 0$ is a diffusion coefficient matrix. This PDE, supplemented with appropriate boundary conditions, describes the communication of state between neighboring material points.
+
+From the perspective of the controller, this spatial coupling gives rise to a distributed optimization problem (Levels 1–2). If we discretize the structure into cells $i$, each with local control $\theta_i$, the global objective $J_{\text{struct}}$ is a function of all $\theta_i$. The consensus problem $\min_{\theta_i} \sum_i J_i(\theta_i)$ subject to $\theta_i = \theta_j$ for neighbors can be solved via established distributed algorithms such as ADMM, distributed gradient descent, or gossip protocols. The local updates of $\theta_i$ can be projected componentwise onto $\Theta$, preserving admissibility per cell. The projection step is decoupled across cells because $\Theta = \mathbb{R}^m_{\ge 0}$ is a Cartesian product of independent intervals, making distributed implementation trivial.
+
+Thus, the spatial coupling does not complicate the safety proof; it merely introduces consensus constraints that are handled by standard methods.
+
+---
+
+8. Controller Stability and Coupled System
+
+While Theorem 1 guarantees thermodynamic admissibility at every instant, it does not address whether the control-optimization loop itself converges or is mechanically stable (Open Problem 1). As a first step, we analyze the stability of the controller’s update dynamics in isolation.
+
+Proposition 2 (Lyapunov stability of projected gradient flow). Suppose the policy $\Pi$ at Level 1–2 implements a continuous-time projected gradient descent on a convex objective $J(\theta)$:
+
+\dot\theta = \mathrm{proj}_\Theta\big(\theta - \eta \nabla J(\theta)\big) - \theta,
+
+with $\Theta$ closed and convex, $J$ convex and $L$-smooth. Then the function $V(\theta) = \frac{1}{2}\|\theta - \theta^\star\|^2$ (where $\theta^\star$ is a minimizer of $J$ over $\Theta$) satisfies $\dot V \le 0$, and $\theta(t)$ converges to the set of KKT points of $\min_{\theta\in\Theta} J(\theta)$.
+
+Proof. This follows directly from the firm non-expansiveness of the projection and the descent property of the gradient step; it is a standard result in projected dynamical systems [7]. $\square$
+
+This result shows that the controller level is internally stable if its objective is convex. However, the full closed-loop system comprises both the controller dynamics and the mechanical subsystem. The objective $J(\theta)$ typically depends on the mechanical response $x(\theta)$, introducing a feedback loop. Convexity of $J$ is not guaranteed a priori, and the coupling may induce oscillations or mechanical resonance. Therefore, while Proposition 2 resolves the controller’s own convergence, the coupled mechanical–controller stability remains an open challenge. A promising direction is to treat the combined system as a two-timescale singularly perturbed system and apply composite Lyapunov methods.
+
+---
+
+9. Open Problems
+
+We systematically list the open problems that define the boundaries of the present theory:
+
+1. Coupled mechanical/controller stability. Theorem 1 ensures no thermodynamic violation; Proposition 2 ensures the controller’s optimization converges if $J$ is convex. The real question is whether the coupled system (material response + adaptation loop) is Lyapunov-stable, particularly under non-convex $J$ or rapid external loading. This is the single largest gap.
+2. Extension to stiffness-adaptive materials ($\psi(\theta)$). As discussed in §4.4, allowing the free energy to depend on $\theta$ requires a generalized dissipation inequality that accounts for the controller’s work. A possible route is to define an extended potential $\Psi(\varepsilon, x, \theta)$ and treat $\dot\theta$ as an additional dissipative flux, but this remains unproven.
+3. Concrete characterization of $\Theta$ for real material systems. Our parameterization with $D_i \succeq 0$ is a sufficient condition, not necessary. For specific SMA or piezoelectric actuator systems, the exact feasible set of $\theta$ that preserves convexity may be larger, and its experimental determination is a materials-science challenge.
+4. Quantitative surrogate error bounds. The asymptotic $O(\tau_x/\tau_\theta)$ bound requires validation and tight constants for a given application.
+5. Energy budget and hardware implementation. While we have a mathematical safety contract, the practical energy cost of actuating $\theta$ and the real-time computation of the projection must be quantified in a testbed (e.g., the lattice-metamaterial with SMA actuation proposed in earlier work [6]).
+
+---
+
+10. Conclusion
+
+We have presented a mathematically rigorous framework for a Constitutive Controller — a cyber-physical entity that adapts a material’s dissipative properties online without ever violating the Clausius–Duhem inequality. The key innovations are:
+
+· A convex parametric definition of the admissible set $\Theta$, making the projection step explicit and well-posed.
+· A Thermodynamic Preservation Theorem that holds without any quasi-static assumption on the controller, provided the free energy is control-parameter independent.
+· Well-posedness of the material response for any admissible control.
+· A Lyapunov-stable controller design under convex objectives.
+· A four-level hierarchical architecture that links real-time adaptation to offline learning.
+
+The framework creates the missing contract between neural constitutive modeling and robotic materials: it permits any optimization policy $\Pi$ to drive the controller, while $\Theta$ acts as a hard safety barrier. The current scope is deliberately limited to dissipation-adaptive materials; stiffness-adaptive materials remain an open territory. Future work will aim at closing the coupled stability gap and experimentally validating the projection mechanism on a physical testbed.
+
+Appendices
+
+Appendix A. Notation, Function Spaces, and Standing Assumptions
+
+A.1. Domain and variables.
+We work on a bounded Lipschitz domain $\Omega \subset \mathbb{R}^3$ representing the reference configuration of the material body. At every material point $\mathbf{r} \in \Omega$ and time $t \in [0,T]$, the kinematic and internal variables are:
+
+· $\varepsilon(\mathbf{r}, t) \in \mathrm{Sym}(\mathbb{R}^3)$ — symmetric small-strain tensor;
+· $x(\mathbf{r}, t) \in \mathbb{R}^n$ — vector of internal state variables;
+· $\theta(\mathbf{r}, t) \in \Theta \subset \mathbb{R}^m$ — vector of control parameters.
+
+A.2. Free energy $\psi$.
+The Helmholtz free energy density $\psi : \mathrm{Sym}(\mathbb{R}^3) \times \mathbb{R}^n \to \mathbb{R}$ is assumed to be:
+
+· $C^2$ on its domain;
+· strictly convex in $\varepsilon$ for every fixed $x$;
+· strongly convex in $\varepsilon$ uniformly in $x$, with modulus $\alpha_\psi > 0$;
+· coercive in $\varepsilon$ and $x$ with standard polynomial growth (ensuring integrability over $\Omega$).
+
+The stress and thermodynamic force conjugate to $x$ are given by
+\sigma = \frac{\partial \psi}{\partial \varepsilon}(\varepsilon, x), \qquad A = -\frac{\partial \psi}{\partial x}(\varepsilon, x).
+
+Standing Assumption A1. $\psi$ does not depend on the control parameter $\theta$:
+\psi = \psi(\varepsilon, x).
+
+(This assumption is made throughout the main safety theorem and the associated proofs; the $\theta$-dependent case is discussed separately in Appendix I.)
+
+A.3. Dissipation potential $\Phi$.
+The dissipation potential is chosen with the following explicit decomposition (see §3.2 of the main text):
+
+\Phi(\dot x; x, \varepsilon, \theta) = \frac{1}{2} \dot x^\top \mathbf{D}(\theta) \dot x + \varphi(\dot x; x, \varepsilon), \tag{A.1}
+
+where
+
+· $\mathbf{D}(\theta) = D_0 + \sum_{i=1}^m \theta_i D_i$,
+· $D_0 \in \mathbb{R}^{n \times n}$ is symmetric and positive definite ($D_0 \succ 0$),
+· $D_i \in \mathbb{R}^{n \times n}$ ($i=1,\dots,m$) are symmetric and positive semidefinite ($D_i \succeq 0$),
+· $\varphi(\cdot\,; x, \varepsilon) : \mathbb{R}^n \to \mathbb{R}_{\ge 0}$ is a fixed convex, proper, lower semicontinuous (l.s.c.) function, with $\varphi(0; \cdot) = 0$ and $0 \in \partial \varphi(0; \cdot)$. For simplicity, in many proofs we assume $\varphi$ is additionally $C^1$ and strictly convex, so that subdifferentials become gradients.
+
+For every fixed $(x,\varepsilon,\theta)$, the function $\dot x \mapsto \Phi(\dot x; x,\varepsilon,\theta)$ is convex, proper, l.s.c., and satisfies $\Phi(0;\cdot) = 0$, $0 \in \partial_{\dot x}\Phi(0;\cdot)$. Its convex conjugate $\Phi^\star(A; x,\varepsilon,\theta)$ is defined through the Legendre–Fenchel transform.
+
+A.4. Admissible set $\Theta$.
+From the parametrization (A.1), convexity of $\Phi$ in $\dot x$ is guaranteed for all $\theta$ such that $\mathbf{D}(\theta) \succ 0$. Because $D_0 \succ 0$ and each $D_i \succeq 0$,
+
+\mathbf{D}(\theta) \succeq D_0 \succ 0 \quad \text{for all } \theta \in \mathbb{R}^m_{\ge 0}.
+
+Hence the non‑negative orthant is a subset of the set of $\theta$ that preserve convexity. To also enforce bounded actuation authority and ensure well‑posedness of the material evolution (see Appendix D), we define the admissible set as the compact convex set
+
+\Theta := \{ \theta \in \mathbb{R}^m \mid 0 \le \theta_i \le \theta_{\max},\; i=1,\dots,m \}. \tag{A.2}
+
+This set is the intersection of the non‑negative orthant with a hyper‑rectangle; it is closed, convex, and bounded.
+
+A.5. Projection operator.
+For any $\theta_{\text{unc}} \in \mathbb{R}^m$, the Euclidean projection onto $\Theta$ is
+
+\mathrm{proj}_\Theta(\theta_{\text{unc}}) := \arg\min_{\vartheta \in \Theta} \|\vartheta - \theta_{\text{unc}}\|.
+
+Because $\Theta$ is a closed convex subset of a Hilbert space, the projection exists, is unique, and is firmly non‑expansive:
+\|\mathrm{proj}_\Theta(\theta_1) - \mathrm{proj}_\Theta(\theta_2)\|^2 \le \langle \theta_1 - \theta_2, \mathrm{proj}_\Theta(\theta_1) - \mathrm{proj}_\Theta(\theta_2) \rangle.
+
+
+For our specific $\Theta$, it reduces to componentwise clipping:
+\big(\mathrm{proj}_\Theta(\theta)\big)_i = \min\{\max\{\theta_i, 0\}, \theta_{\max}\}.
+
+A.6. Measurability and solution concepts.
+The control trajectory $\theta : [0,T] \to \Theta$ is assumed measurable. The strain history $\varepsilon(\cdot,t)$ is given and absolutely continuous. The material response $x(t)$ is sought as an absolutely continuous solution of the differential inclusion derived from the GSM structure.
+
+---
+
+Appendix B. Proof of Lemma 1 (Pointwise Dissipation for Fixed $\theta$)
+
+Lemma 1. Assume $\theta$ is held constant. Under the GSM structure with $\psi(\varepsilon, x)$ and $\Phi(\dot x; x, \varepsilon, \theta)$ satisfying the hypotheses of Appendix A, the instantaneous dissipation power satisfies
+A \cdot \dot x \ge 0,
+
+
+where $A = \partial \Phi / \partial \dot x$ (or $A \in \partial_{\dot x}\Phi$ in the subdifferential sense).
+
+Proof. The GSM evolution law states that
+A \in \partial_{\dot x} \Phi(\dot x; x, \varepsilon, \theta), \tag{B.1}
+
+
+where $\partial_{\dot x}\Phi$ denotes the subdifferential of the convex function $\dot x \mapsto \Phi(\dot x; x,\varepsilon,\theta)$. The Fenchel–Young inequality for the pair $(\Phi, \Phi^\star)$ asserts that for all $v, A^*$,
+\langle A^*, v \rangle \le \Phi(v) + \Phi^\star(A^*),
+
+
+with equality if and only if $A^* \in \partial \Phi(v)$. Applying this to $v = \dot x$ and $A^* = A$, the inclusion (B.1) yields exact equality:
+A \cdot \dot x = \Phi(\dot x) + \Phi^\star(A). \tag{B.2}
+
+
+Now, since $\Phi(0) = 0$, the definition of the convex conjugate gives
+\Phi^\star(A) = \sup_{w \in \mathbb{R}^n} \big[ A \cdot w - \Phi(w) \big] \ge A \cdot 0 - \Phi(0) = 0.
+
+
+Moreover, by hypothesis $\Phi(v) \ge 0$ for all $v$. Hence both terms on the right‑hand side of (B.2) are non‑negative, proving $A \cdot \dot x \ge 0$. If $\Phi$ is differentiable in $\dot x$, then $\partial_{\dot x}\Phi = \{\nabla_{\dot x}\Phi\}$ and the argument is unchanged. $\square$
+
+Note that the result holds pointwise in space and time for any fixed $\theta$; no assumptions about the rate of change of $\theta$ are required.
+
+---
+
+Appendix C. Full Proof of Theorem 1 (Thermodynamic Preservation)
+
+Theorem 1. Let Assumption A1 hold ($\psi$ independent of $\theta$). Let $\theta : [0,T] \to \Theta$ be any measurable function that evolves according to the discrete update rule
+\theta(t^+) = \mathrm{proj}_\Theta\big( \theta(t) + \eta \, u(t) \big), \tag{C.1}
+
+
+with arbitrary bounded update direction $u(t) \in \mathbb{R}^m$ and step size $\eta > 0$. Assume $\theta(0) \in \Theta$. Then for almost every $t \in [0,T]$,
+A(t) \cdot \dot x(t) \ge 0.
+
+Proof.
+Step 1: Invariance of $\Theta$.
+The update rule (C.1) ensures that at each discrete update instant $t_k$ (with $t_0 = 0$), the new value $\theta(t_k^+)$ is the image under the projection map of a point in $\mathbb{R}^m$. Since $\mathrm{proj}_\Theta : \mathbb{R}^m \to \Theta$, we have $\theta(t_k^+) \in \Theta$. By induction starting from $\theta(0) \in \Theta$, the parameter remains in $\Theta$ at all update instants. Between updates, $\theta$ is constant (or evolves continuously; if we consider a continuous-time limit with infinitesimal steps, the same invariance holds for the continuous projected flow, see Appendix E). Thus, for every $t \in [0,T]$, $\theta(t) \in \Theta$.
+
+Step 2: Pointwise admissibility for the frozen parameter.
+Fix any $t$ such that $\dot x(t)$ exists (which is almost every $t$, by absolute continuity). Consider the instantaneous dissipation potential with the parameter frozen at $\theta(t) \in \Theta$. By definition of $\Theta$, $\mathbf{D}(\theta(t)) \succ 0$, hence $\Phi(\cdot; x(t),\varepsilon(t),\theta(t))$ is convex in $\dot x$. Lemma 1 then applies directly and yields
+A(t) \cdot \dot x(t) \ge 0,
+
+
+where $A(t) = \partial_{\dot x}\Phi(\dot x(t); \cdot)$ as given by the GSM evolution law.
+
+Step 3: Reduction of the Clausius–Duhem inequality under A1.
+The thermodynamic inequality that must be satisfied is the Clausius–Duhem inequality (under isothermal conditions):
+\sigma : \dot \varepsilon - \dot \psi \ge 0.
+
+
+Differentiating $\psi(\varepsilon, x)$ (which does not depend on $\theta$) yields
+\dot \psi = \frac{\partial \psi}{\partial \varepsilon} : \dot \varepsilon + \frac{\partial \psi}{\partial x} \cdot \dot x = \sigma : \dot \varepsilon - A \cdot \dot x,
+
+
+where we used $\sigma = \partial \psi / \partial \varepsilon$ and $A = - \partial \psi / \partial x$. Substituting into the inequality gives exactly
+\sigma : \dot \varepsilon - (\sigma : \dot \varepsilon - A \cdot \dot x) = A \cdot \dot x \ge 0.
+
+
+Crucially, no term involving $\dot \theta$ appears, irrespective of how fast $\theta$ changes. Therefore the non‑negativity of $A \cdot \dot x$ is exactly the Clausius–Duhem inequality.
+
+Since Step 2 established $A(t)\cdot \dot x(t) \ge 0$ for a.e. $t$, the inequality holds pointwise almost everywhere, completing the proof. $\square$
+
+Remark. The projection mechanism guarantees that at every instant the dissipation potential belongs to the admissible class; together with the independence of $\psi$ from $\theta$, this decouples the thermodynamic safety proof from the speed of the controller. The quasi‑static assumption ($\tau_\theta \gg \tau_x$) is never invoked.
+
+---
+
+Appendix D. Proof of Proposition 1 (Existence and Uniqueness of Material Response)
+
+Proposition 1. Let $\psi$ and $\Phi$ satisfy the regularity assumptions of Appendix A, with $\Theta$ compact as in (A.2). Let $\varepsilon : [0,T] \to \mathrm{Sym}(\mathbb{R}^3)$ be absolutely continuous, and let $\theta : [0,T] \to \Theta$ be measurable. Then for any initial condition $x(0) = x_0$, there exists a unique absolutely continuous function $x : [0,T] \to \mathbb{R}^n$ satisfying the GSM evolution law
+\sigma = \frac{\partial \psi}{\partial \varepsilon}, \qquad A = -\frac{\partial \psi}{\partial x}, \qquad A \in \partial_{\dot x}\Phi(\dot x; x, \varepsilon, \theta) \quad \text{a.e. on } [0,T].
+
+Proof. Because $\varphi$ is assumed $C^1$ and strictly convex for simplicity, the subdifferential reduces to a gradient and the evolution law can be inverted. From $A = \nabla_{\dot x}\Phi(\dot x) = \mathbf{D}(\theta) \dot x + \nabla_{\dot x}\varphi(\dot x)$, we obtain the implicit relation
+\dot x = \big(\mathbf{D}(\theta)\big)^{-1} \big( A - \nabla_{\dot x}\varphi(\dot x) \big). \tag{D.1}
+
+
+However, $A$ itself depends on $x$ and $\varepsilon$ through $A = - \partial_x \psi(\varepsilon, x)$. Substituting $A$ gives the explicit differential equation
+\dot x = f(t, x, \dot x),
+
+
+but since the right‑hand side depends on $\dot x$ through $\nabla_{\dot x}\varphi(\dot x)$, the equation is implicit. A more robust route is to use the theory of evolution equations with maximal monotone operators.
+
+Define the operator $\mathcal{A}_t : \mathbb{R}^n \to \mathbb{R}^n$ by
+\mathcal{A}_t(v) := \partial_{\dot x}\Phi(v; x, \varepsilon(t), \theta(t)).
+
+
+For a given $t$ and state $x$, the map $v \mapsto \mathcal{A}_t(v)$ is the subdifferential of a strongly convex function (because $\mathbf{D}(\theta) \succeq D_0 \succ 0$). Hence $\mathcal{A}_t$ is strongly monotone and single‑valued (it is actually the gradient of a uniformly convex function). The evolution law $A(t) = \mathcal{A}_t(\dot x(t))$ together with $A(t) = - \partial_x \psi(\varepsilon(t), x(t))$ can be rewritten as the differential inclusion
+\dot x(t) = \mathcal{A}_t^{-1}\big( -\partial_x \psi(\varepsilon(t), x(t)) \big).
+
+Now, $\mathcal{A}_t^{-1}$ is the gradient of the convex conjugate $\Phi^\star$, which is strongly smooth (Lipschitz) with constant $1/\lambda_{\min}(D_0)$. The mapping $(t, x) \mapsto -\partial_x \psi(\varepsilon(t), x)$ is measurable in $t$ (since $\varepsilon(t)$ is absolutely continuous) and locally Lipschitz in $x$ (because $\psi$ is $C^2$). Moreover, because $\theta(t)$ takes values in the compact set $\Theta$, the matrix $\mathbf{D}(\theta(t))$ and its inverse are uniformly bounded, ensuring that $\mathcal{A}_t^{-1}$ is globally Lipschitz in its argument with a uniform constant.
+
+Therefore, the right‑hand side $F(t, x) := \mathcal{A}_t^{-1}\big( -\partial_x \psi(\varepsilon(t), x) \big)$ is measurable in $t$ and globally Lipschitz in $x$ on bounded sets (in fact globally, by uniform bounds). By standard Carathéodory existence theory for ordinary differential equations, there exists a unique absolutely continuous solution $x(t)$ on $[0,T]$ satisfying $\dot x = F(t, x)$ with $x(0) = x_0$. This solution also satisfies the original GSM evolution law almost everywhere. $\square$
+
+Remark. The compactness of $\Theta$ guarantees that $\|\mathbf{D}(\theta)^{-1}\|$ is bounded above uniformly, which is essential for the global Lipschitz condition. If $\Theta$ were unbounded (e.g., $\theta_i \ge 0$ only), one would need additional growth conditions to prevent finite‑time blow‑up; the addition of an upper bound $\theta_{\max}$ is physically reasonable and mathematically convenient.
+
+---
+
+Appendix E. Proof of Proposition 2 (Lyapunov Stability of Projected Gradient Flow)
+
+Proposition 2. Consider the continuous-time projected gradient flow
+\dot \theta = \mathrm{proj}_\Theta\big( \theta - \eta \nabla J(\theta) \big) - \theta, \tag{E.1}
+
+
+where $\Theta \subset \mathbb{R}^m$ is closed convex, $J : \mathbb{R}^m \to \mathbb{R}$ is convex and $L$‑smooth (i.e., $\nabla J$ is $L$-Lipschitz), and $\eta \in (0, 2/L)$. Then for any minimizer $\theta^\star \in \arg\min_{\Theta} J$, the Lyapunov function $V(\theta) = \frac{1}{2}\|\theta - \theta^\star\|^2$ satisfies $\dot V \le 0$ along trajectories, and $\theta(t)$ converges to the set of Karush–Kuhn–Tucker (KKT) points of the constrained problem $\min_{\theta \in \Theta} J(\theta)$.
+
+Proof. The projected gradient flow (E.1) can be written equivalently as the variational inequality
+\langle \dot \theta + \eta \nabla J(\theta),\, \vartheta - \theta \rangle \ge 0 \quad \forall \vartheta \in \Theta, \qquad \theta \in \Theta. \tag{E.2}
+
+
+Take $\vartheta = \theta^\star$, a minimizer. Then $\langle \nabla J(\theta^\star),\, \theta - \theta^\star \rangle \ge 0$ for all $\theta \in \Theta$ (first‑order optimality condition). Differentiating the Lyapunov function along the flow gives
+\dot V = \langle \theta - \theta^\star, \dot \theta \rangle.
+
+
+From (E.2) with $\vartheta = \theta^\star$ we have
+\langle \dot \theta + \eta \nabla J(\theta),\, \theta^\star - \theta \rangle \ge 0 \quad \Longrightarrow \quad \langle \theta - \theta^\star, \dot \theta \rangle \le -\eta \langle \theta - \theta^\star, \nabla J(\theta) \rangle.
+
+
+Using the convexity of $J$,
+J(\theta^\star) \ge J(\theta) + \langle \nabla J(\theta),\, \theta^\star - \theta \rangle \quad \Longrightarrow \quad \langle \theta - \theta^\star, \nabla J(\theta) \rangle \ge J(\theta) - J(\theta^\star) \ge 0.
+
+
+Thus,
+\dot V \le -\eta \big( J(\theta) - J(\theta^\star) \big) \le 0.
+
+
+This establishes that $V$ is non‑increasing, hence $\|\theta(t) - \theta^\star\|$ is bounded and the trajectory remains in a compact set. By LaSalle’s invariance principle for projected dynamical systems, $\theta(t)$ converges to the largest invariant set where $\dot V = 0$, which is exactly the set of KKT points (points satisfying $\langle \nabla J(\theta),\, \theta - \theta^\star \rangle = 0$ for some minimizer, i.e., stationary points of the constrained problem). $\square$
+
+Remark. The same result holds for discrete projected gradient steps with appropriate step sizes, but the continuous-time version suffices for analyzing the timescale-separated limit where the controller evolves slowly compared to the material dynamics.
+
+---
+
+Appendix F. Timescale Separation and Surrogate Error Bound
+
+We formalize the two‑timescale structure and derive the asymptotic error bound for surrogate objectives.
+
+F.1. Fast mechanical subsystem.
+For a fixed control parameter $\theta$, the internal variable dynamics (see Appendix D) are
+\dot x = F_\theta(x, \varepsilon(t)), \qquad \text{where } F_\theta(x, \varepsilon) = \mathcal{A}_\theta^{-1}\big( -\partial_x \psi(\varepsilon, x) \big). \tag{F.1}
+
+
+Assume that for each constant $\theta$ and (quasi‑static) strain $\bar \varepsilon$, the system has a unique globally exponentially stable equilibrium $x^\infty(\theta, \bar\varepsilon)$, i.e., there exists a Lyapunov function with exponential decay rate $\lambda > 0$ independent of $\theta$.
+
+F.2. Slow controller.
+The controller updates $\theta$ at discrete times $t_k$ separated by intervals of length $\tau_\theta$, which is large compared to the relaxation time $\tau_x = 1/\lambda$ of the fast subsystem. Between updates, $\theta$ is constant and the mechanical subsystem relaxes toward $x^\infty(\theta, \varepsilon(t))$ (with $\varepsilon(t)$ varying slowly as well).
+
+F.3. Tikhonov’s theorem and error bound.
+Consider the singularly perturbed system
+\begin{cases}
+\tau_x \dot x = f(x, \theta, \varepsilon), \\
+\dot \theta = \epsilon g(\theta, x),
+\end{cases}
+
+
+with $\epsilon = \tau_x / \tau_\theta \ll 1$. Classical Tikhonov theory ensures that, under the exponential stability of the boundary layer $x = x^\infty(\theta, \varepsilon)$, the actual trajectory satisfies
+x(t) = x^\infty(\theta(t), \varepsilon(t)) + O(\epsilon)
+
+
+uniformly on compact time intervals after a fast transient. In our setting, $\varepsilon(t)$ itself may vary, but as long as its characteristic time is no faster than $\tau_\theta$, the same estimate holds.
+
+F.4. Surrogate error.
+Let $J(x, \theta)$ be a smooth cost function (Level‑2 structural objective). The true objective accumulated over an interval $\Delta t$ is $\int J(x(t), \theta(t)) \, dt$. The surrogate used by the local controller is $\hat J(\theta) = J(x^\infty(\theta, \bar\varepsilon), \theta)$ for a representative strain $\bar\varepsilon$. The difference is
+|J(x, \theta) - \hat J(\theta)| \le L_J \|x - x^\infty\| \le L_J C \epsilon,
+
+
+where $L_J$ is a Lipschitz constant of $J$ in $x$. Hence the surrogate error scales as $O(\tau_x / \tau_\theta)$, justifying its use in the timescale‑separated optimization.
+
+---
+
+Appendix G. Properties of the Projection onto $\Theta = [0, \theta_{\max}]^m$
+
+For the reader’s convenience, we collect the elementary properties of the projection $\mathrm{proj}_\Theta$ defined on the box $\Theta = \prod_{i=1}^m [0, \theta_{\max}]$.
+
+· Explicit formula: $(\mathrm{proj}_\Theta(\theta))_i = \min\{\max\{\theta_i, 0\}, \theta_{\max}\}$.
+· Firm non‑expansiveness: $\|\mathrm{proj}_\Theta(\theta_1) - \mathrm{proj}_\Theta(\theta_2)\|^2 \le \langle \theta_1 - \theta_2, \mathrm{proj}_\Theta(\theta_1) - \mathrm{proj}_\Theta(\theta_2) \rangle$.
+· Idempotence: $\mathrm{proj}_\Theta \circ \mathrm{proj}_\Theta = \mathrm{proj}_\Theta$.
+· Projection onto a box is a truncation, which can be implemented with elementary min/max operations, making it suitable for real‑time embedded control.
+
+These properties guarantee that the update rule (C.1) is well‑behaved and preserves the safety invariant.
+
+---
+
+Appendix H. Convexity Verification for the Linear Parameterization
+
+We show that the dissipation potential defined in (A.1) is strictly convex in $\dot x$ for all $\theta \in \Theta$.
+
+The Hessian of $\Phi$ with respect to $\dot x$ is
+\nabla_{\dot x}^2 \Phi = \mathbf{D}(\theta) + \nabla_{\dot x}^2 \varphi(\dot x).
+
+
+Since $\varphi$ is convex, $\nabla_{\dot x}^2 \varphi \succeq 0$. Moreover, $\mathbf{D}(\theta) = D_0 + \sum_i \theta_i D_i$ with $D_0 \succ 0$ and $D_i \succeq 0$. For $\theta_i \ge 0$, the sum of positive semidefinite matrices remains positive semidefinite, so $\mathbf{D}(\theta) \succeq D_0 \succ 0$. Consequently, the Hessian is positive definite uniformly in $\dot x$. Thus $\Phi(\cdot\,; x, \varepsilon, \theta)$ is strongly convex in $\dot x$ for every admissible $\theta$. This also implies that the subdifferential is a single‑valued, Lipschitz continuous gradient, simplifying all arguments.
+
+---
+
+Appendix I. Remarks on the $\theta$-Dependent Free Energy Case
+
+If Assumption A1 is relaxed to allow $\psi = \psi(\varepsilon, x, \theta)$, then differentiating gives
+\dot\psi = \frac{\partial\psi}{\partial\varepsilon}:\dot\varepsilon + \frac{\partial\psi}{\partial x}\cdot\dot x + \frac{\partial\psi}{\partial\theta}\cdot\dot\theta = \sigma:\dot\varepsilon - A\cdot\dot x + \frac{\partial\psi}{\partial\theta}\cdot\dot\theta.
+
+
+The Clausius–Duhem inequality $\sigma:\dot\varepsilon - \dot\psi \ge 0$ becomes
+A\cdot\dot x \ge \frac{\partial\psi}{\partial\theta}\cdot\dot\theta.
+
+
+Thus, the controller’s change of stiffness is “paid for” by a power term that may be positive or negative. To maintain the inequality, one would need to either
+
+· restrict $\dot\theta$ so that $\frac{\partial\psi}{\partial\theta}\cdot\dot\theta \le A\cdot\dot x$ (a dynamic constraint coupling the controller and the material), or
+· extend the thermodynamic framework to include an external power supply from the cyber‑physical system, treating the controller as an open thermodynamic system.
+
+A potential path is to define a generalized dissipation potential $\hat\Phi(\dot x, \dot\theta)$ such that the pair $(A, \partial\psi/\partial\theta)$ are its subgradients, thereby embedding the controller’s dynamics into an enlarged GSM structure. This remains an open research problem, as stated in the main text.
+
+ ASCII diagrams :
+
+1. Constitutive Controller Architecture
+
+```
++--------------------------------------------------------------+
+|                     CONSTITUTIVE CONTROLLER                   |
+|                                                               |
+|   C = ( psi,    Phi,    Theta,    Pi )                        |
+|         |        |        |         |                         |
+|         v        v        v         v                         |
+|   Free energy   Dissipation  Admissible  Optimization         |
+|   (no theta)    Potential    Set         Policy               |
+|      |            |          |              |                 |
+|      |            |          v              |                 |
+|      |       Phi(dot x; x,eps,theta)  +-----------+          |
+|      |       = 1/2 dot x^T D(th) dot x | Project   |          |
+|      |            + phi(dot x)         | onto      |<-- u(t) |
+|      |                                 | Theta     |          |
+|      |                                 +-----------+          |
+|      v            |                        |                  |
+|   sigma = dpsi/deps   A = dPhi/d(dot x)   theta in Theta      |
+|      |            |                        |                  |
+|      |            v                        |                  |
+|      +-------> A dot dot x >= 0  <---------+                  |
+|              (thermodynamic safety)                           |
++--------------------------------------------------------------+
+```
+
+Caption: The constitutive controller tuple and the flow of thermodynamic safety: the optimization policy $\Pi$ proposes an update $u(t)$; projection onto $\Theta$ ensures $\theta(t) \in \Theta$; then Lemma 1 guarantees $A \cdot \dot x \ge 0$ pointwise, satisfying the Clausius–Duhem inequality.
+
+---
+
+2. Hierarchical Optimization Levels
+
+```
+  Level 3: Fleet optimization (weeks--years)
+ +---------------------------------------------------+
+ |  Cross-structure learning, retrain psi, Phi        |
+ |  (offline, same as neural constitutive training)   |
+ +---------------------------+-----------------------+
+                             |
+  Level 2: Structural optimization (hours--weeks)
+ +---------------------------------------------------+
+ |  Consensus or global correction across the body    |
+ |  (ADMM, gossip, distributed gradient)              |
+ +---------------------------+-----------------------+
+                             |
+  Level 1: Local adaptation (seconds--hours)
+ +---------------------------------------------------+
+ |  Cell-level theta_i update via surrogate J_i       |
+ |  (projected gradient step, fast)                   |
+ +---------------------------+-----------------------+
+                             |
+  Level 0: Constitutive response (ms)
+ +---------------------------------------------------+
+ |  sigma = dpsi/deps, A = dPhi/d(dot x), dot x = ... |
+ |  (material physics, fixed theta)                   |
+ +---------------------------------------------------+
+```
+
+Caption: The four-level hierarchy of the constitutive controller, from fast material response to fleet-level learning.
+
+---
+
+3. Thermodynamic Preservation Theorem – Safety Loop
+
+```
+        +-----------------------+
+        | Optimization Policy Π |
+        | (any: heuristic,      |
+        |  learning, consensus) |
+        +-----------+-----------+
+                    |
+                 u(t) (update direction)
+                    |
+                    v
+        +-----------+-----------+
+        |   PROJECTION onto     |
+        |   Theta = [0,th_max]^m |
+        +-----------+-----------+
+                    |
+                theta(t) in Theta
+                    |
+                    v
+        +-----------+-----------+
+        | Material GSM System   |
+        |   psi(eps,x)          |
+        |   Phi(dot x; theta)   |
+        |   sigma = dpsi/deps   |
+        |   A = dPhi/d(dot x)   |
+        +-----------+-----------+
+                    |
+                    v
+        +-----------+-----------+
+        |  A dot dot x >= 0     |
+        | (always, by Lemma 1   |
+        |  and convexity of Phi)|
+        +-----------------------+
+```
+
+Caption: The safety guarantee is independent of the policy: as long as $\theta$ is projected onto $\Theta$, the material’s dissipation never becomes negative.
+
+---
+
+4. Timescale Separation
+
+```
+   τ_ε        τ_x          τ_θ            τ_fleet
+   (ms)      (ms--s)    (seconds--hours)  (weeks--years)
+    |          |             |                |
+    v          v             v                v
++-------+  +-------+    +----------+    +--------------+
+|Strain |  |Internal|    |Controller|    |Fleet learning|
+|quasi- |->|state   |--->|updates   |--->|& retraining  |
+|static |  |relaxes |    |theta     |    |of base Phi   |
++-------+  +-------+    +----------+    +--------------+
+    ^          ^             ^                ^
+    |          |             |                |
+    Fastest   Fast          Slow            Slowest
+```
+
+Caption: The natural separation of timescales in structural systems. The safety theorem does not require $\tau_\theta \gg \tau_x$, but the optimization performance improves the larger the separation.
+
+---
+
+5. Spatial Coupling and Distributed Control
+
+```
+  Material body (domain Omega)
++---------------------------------------+
+|   Cell 1   |   Cell 2   |   Cell 3    |
+|   theta_1  |   theta_2  |   theta_3   |
+|     |      |     |      |     |       |
+|   x_1,eps_1|<->x_2,eps_2|<->x_3,eps_3|
+|     |      |     |      |     |       |
+|   local    |   local    |   local     |
+|   surrogate|   surrogate|   surrogate |
+|   J_1      |   J_2      |   J_3      |
+|     |      |     |      |     |       |
++---------------------------------------+
+      |            |            |
+      v            v            v
++---------------------------------------+
+|   Consensus / structural optimizer    |
+|   (Level 2) ensures global coherence  |
++---------------------------------------+
+```
+
+Caption: The structure is discretized into cells, each with its own control parameter $\theta_i$. Spatial coupling via diffusion of $x$ creates a distributed optimization problem solved by consensus algorithms at Level 2.
+
+---
+
+6. Projection Geometry (for Theta = [0, θ_max]^m)
+
+```
+    theta_2
+      ^
+      |
+th_max+----------+
+      |          |
+      |  Theta   |
+      |  (box)   |
+      |          |
+     0+----------+-----> theta_1
+      0        th_max
+
+  Unconstrained update:
+       theta + eta * u
+            *
+             \
+              \  projection
+               \
+                v
+            +---*---+
+            |   *-->| clipped onto [0, th_max]
+            +-------+
+```
+
+Caption: $\Theta$ is a hyper-rectangle; projection simply clips each component onto $[0,\theta_{\max}]$, which is trivial to implement in embedded hardware.
+
