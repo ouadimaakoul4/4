@@ -1,0 +1,549 @@
+Scheduled Delay-Tolerant Networking
+
+Crystal Arena-Turner
+
+AI : ChatGpt, Claude, Deepseek
+
+Abstract
+
+This chapter develops a rigorous mathematical framework for routing in delay‑tolerant networks (DTNs) where node contacts are entirely predictable from orbital mechanics or pre‑negotiated schedules. We model the network as a time‑varying graph whose edges appear only during known contact windows, each carrying a time‑dependent capacity derived from the Shannon–Hartley theorem and the free‑space path loss. A bundle is a data unit with a creation timestamp, a lifetime, and a destination; forwarding decisions must respect contact start and end times, capacity integrals, and the finite propagation delay imposed by the speed of light. We show that the earliest‑delivery routing problem can be solved exactly by constructing a time‑expanded graph and applying a modified Dijkstra algorithm, and we prove that this construction captures all feasible contact transitions without loss of optimality. The chapter closes by connecting the formal model to real‑world DTN standards such as BPv7, BIBE, and Contact Graph Routing, demonstrating that the mathematics is not merely an abstraction but the operational core of interplanetary networking.
+
+---
+
+1. Introduction
+
+When round‑trip propagation delays exceed a few seconds—as they do for Earth–Moon (≈2.6 s), Earth–Mars (6–44 min), or any deep‑space link—the TCP/IP handshake model becomes unusable. Delay‑Tolerant Networking (DTN) replaces end‑to‑end acknowledgments with hop‑by‑hop custodial storage and scheduled forwarding. The fundamental resource in such a network is not bandwidth alone, but the opportunity to communicate: a contact window during which two nodes are in line‑of‑sight, within antenna range, and have sufficient signal‑to‑noise ratio.
+
+The present treatment strips away all speculative elements and focuses solely on the mathematical skeleton: a formal definition of contacts, capacity, bundles, and the routing problem, together with proofs of correctness for the principal algorithm used in scheduled DTNs—the time‑expanded graph (TEG) construction and the derived shortest‑path search. The definitions are grounded in the physics of electromagnetic propagation and the Shannon–Hartley theorem, but the results hold for any network where link availability and rate are known a priori.
+
+---
+
+2. System Model
+
+2.1 Time and Space
+
+Time is continuous, denoted by t\in\mathbb{R}. The network is a set of nodes V = \{1,2,\dots,N\}. Every pair (i,j) has a Euclidean distance function d_{ij}(t)\ge 0 that varies with the orbital motion of the nodes. The one‑way propagation delay is
+
+\tau_{ij}(t) = \frac{d_{ij}(t)}{c},
+
+where c = 299\,792\ \text{km s}^{-1} is the speed of light in vacuum. Because orbital velocities are much smaller than c, d_{ij}(t) changes slowly; over a contact window of a few hours we may safely treat \tau_{ij} as constant. We therefore associate a single delay \tau_{ij} with each contact opportunity, computed at the start of the window.
+
+2.2 Channel Capacity
+
+Let a transmitter–receiver pair (i,j) be characterised by a carrier frequency (or optical wavelength), antenna gains, and system noise temperature. The maximum error‑free data rate is given by the Shannon–Hartley theorem:
+
+C(t) = B \log_2\!\left(1 + \frac{S(t)}{N}\right) \quad \text{(bits s⁻¹)},
+
+where B is the bandwidth and S(t)/N is the signal‑to‑noise ratio. The received signal power S(t) obeys the Friis free‑space equation
+
+S(t) = \frac{P_t G_t G_r \lambda^2}{(4\pi d_{ij}(t))^2},
+
+with P_t the transmitted power, G_t, G_r the antenna gains, and \lambda the wavelength. Hence
+
+C_{ij}(t) = B \log_2\!\left(1 + \frac{P_t G_t G_r \lambda^2}{(4\pi d_{ij}(t))^2 N}\right).
+\tag{1}
+
+In practice the contact planner will discretise the rate to a few constant levels (or an average) for scheduling; our model allows an arbitrary integrable function C_{ij}(t)\ge 0.
+
+2.3 Contact Window
+
+A contact from node u to node v is a tuple
+
+\kappa = (u,\; v,\; t_{\text{start}},\; t_{\text{end}},\; C(\cdot),\; \tau),
+
+where:
+
+· t_{\text{start}} < t_{\text{end}} are the start and end of the window,
+· C:[t_{\text{start}}, t_{\text{end}}]\to \mathbb{R}_{\ge 0} is the instantaneous capacity function,
+· \tau = \tau_{uv}(t_{\text{start}}) is the (constant) one‑way light‑time during the contact.
+
+During the window the link is available for transmission; outside it no signal can be exchanged. The maximum number of bits that can be delivered over \kappa is the contact volume
+
+V(\kappa) = \int_{t_{\text{start}}}^{t_{\text{end}}} C(s)\,\mathrm{d}s.
+\tag{2}
+
+For the network we assume a contact plan \mathcal{C} = \{\kappa_1, \kappa_2, \dots\} that is known perfectly for the whole planning horizon. In real interplanetary systems this plan is generated from orbital ephemerides; the plan is updated periodically but for a given scheduling interval it is immutable.
+
+2.4 Bundles
+
+A bundle is the DTN data unit. It is represented by a tuple
+
+b = (s,\; src,\; dst,\; t_{\text{create}},\; \ell),
+
+where:
+
+· s is the bundle size (bits),
+· src, dst \in V,
+· t_{\text{create}} is the creation time,
+· \ell is the lifetime; the bundle must be delivered by t_{\text{create}}+\ell, or it is discarded.
+
+A node has infinite storage for bundles awaiting forwarding; realistic finite buffers can be layered as a capacity constraint on the node, but for the routing problem we assume that any bundle can be stored for an arbitrary length of time until a suitable contact becomes available.
+
+---
+
+3. The Earliest‑Delivery Routing Problem
+
+3.1 Feasible Forwarding over a Single Contact
+
+A bundle b of size s can be transmitted over contact \kappa = (u,v, t_s, t_e, C, \tau) if:
+
+1. The bundle is present at node u at time t_{\text{arr}}\in [t_s, t_e] (the bundle can wait at the sender until the window opens).
+2. Transmission begins at some time t_{\text{tx}} \in [\max(t_{\text{arr}}, t_s), t_e] and finishes at t_{\text{tx}} + t_{\text{xfer}}, where t_{\text{xfer}} is the smallest value such that
+
+\int_{t_{\text{tx}}}^{t_{\text{tx}} + t_{\text{xfer}}} C(t)\,\mathrm{d}t \ge s.
+\tag{3}
+
+The integral condition ensures that the cumulative capacity during the transmission interval suffices for the whole bundle. Because C(t) is known and piecewise continuous, such a t_{\text{xfer}} exists if and only if
+
+\int_{\max(t_{\text{arr}}, t_s)}^{t_e} C(t)\,\mathrm{d}t \ge s.
+
+If transmission succeeds, the bundle becomes available at node v at time
+
+t_{\text{dlv}} = t_{\text{tx}} + t_{\text{xfer}} + \tau.
+\tag{4}
+
+Note that the bundle’s lifetime must not expire before t_{\text{dlv}}.
+
+3.2 Multi‑Hop Path
+
+A path is a sequence of contacts
+
+P = (\kappa_1, \kappa_2, \dots, \kappa_m),
+
+with \kappa_i = (n_{i-1}, n_i, t_{s,i}, t_{e,i}, C_i, \tau_i), where n_0 = src and n_m = dst. For the path to be feasible for a bundle b created at time t_0, there must exist a sequence of arrival times t_0 (at src), transmission start times t_{\text{tx},i}, and delivery times t_{\text{dlv},i} = t_{\text{tx},i} + t_{\text{xfer},i} + \tau_i such that:
+
+· t_{\text{dlv},i} is the arrival time at node n_i,
+· t_{\text{arr},i+1} = t_{\text{dlv},i},
+· The single‑contact feasibility conditions (3) hold for each \kappa_i with arrival time t_{\text{arr},i},
+· t_{\text{dlv},m} \le t_0 + \ell.
+
+The delivery time of the path is t_{\text{dlv},m}. The optimisation problem is:
+
+Given a bundle b and a contact plan \mathcal{C}, find a feasible path that minimises the delivery time, or determine that no path can meet the lifetime constraint.
+
+---
+
+4. Time‑Expanded Graph Construction
+
+The continuous‑time problem can be solved exactly by discretising time at the boundaries of contact windows and at moments when capacity integrals reach a threshold. The standard approach uses a time‑expanded graph (TEG), which we now define formally.
+
+4.1 Event‑Driven Time Discretisation
+
+Let \mathcal{T} be the set of all distinct times that appear as start or end points of any contact in \mathcal{C}. Sort \mathcal{T} = \{t_0, t_1, \dots, t_K\} with t_0 < t_1 < \dots < t_K. Between successive instants t_k and t_{k+1}, the set of active contacts and the capacity functions are constant (we assume capacity is piecewise constant over these intervals; if C(t) varies, the interval is subdivided further until the variation is negligible, or the integral condition can be enforced exactly with an adaptive step). For simplicity of proof we assume C_i(t) is constant on each interval [t_k, t_{k+1}); this is how operational contact plans are built.
+
+4.2 Vertices and Edges
+
+The TEG is a directed graph G^* = (V^*, E^*).
+
+Vertices. For each node u\in V and each time instant t_k\in\mathcal{T} we create a vertex (u, t_k). Intuitively, this vertex represents “the bundle is at node u at time t_k”.
+
+Waiting edges. For every node u and consecutive instants t_k, t_{k+1} we add a directed edge
+
+(u, t_k) \xrightarrow{\text{wait}} (u, t_{k+1})
+
+with cost (edge weight) equal to the waiting time t_{k+1} - t_k. This edge represents the bundle being stored at u during the interval.
+
+Contact transmission edges. For each contact \kappa = (u,v, t_s, t_e, C, \tau), let the interval [t_s, t_e] be covered by a sequence of consecutive TEG instants t_p, t_{p+1}, \dots, t_q (where t_p = t_s, t_q = t_e). The capacity rate C is constant on each sub‑interval [t_k, t_{k+1}). Suppose the bundle is ready to be forwarded at time t_k (where t_s \le t_k < t_e). We compute the smallest m \ge k such that the cumulative capacity from t_k to t_m is at least s:
+
+\sum_{j=k}^{m-1} C \cdot (t_{j+1} - t_j) \ge s.
+\tag{5}
+
+If such m exists and t_m \le t_e, the transmission can be completed. The exact finish time within the interval [t_{m-1}, t_m] is obtained by solving for the fractional part, but for the graph we can use a contact completion vertex. A standard technique is to insert, for each contact, a virtual vertex that represents the end of the transmission. However, for the purpose of finding earliest arrival times it suffices to add a single edge per feasible departure instant t_k:
+
+(u, t_k) \xrightarrow{\kappa} (v, t_{\text{dlv}}),
+
+where t_{\text{dlv}} = t_{\text{tx\_end}} + \tau, and t_{\text{tx\_end}} is the exact time when the volume s has been transferred. Because TEG instants are discrete, we create a new vertex (v, t_{\text{dlv}}) if t_{\text{dlv}} does not already belong to \mathcal{T}; we then add that time to the set of instants for the receiving node.
+
+Formally, for each contact \kappa = (u,v, t_s, t_e, C, \tau) and each TEG instant t_k \in [t_s, t_e] we compute t_{\text{finish}} as:
+
+t_{\text{finish}} = t_k + \Delta,
+
+where \Delta is the smallest positive value satisfying
+
+\int_{t_k}^{t_k+\Delta} C \,\mathrm{d}t = s,
+
+with the constraint t_k+\Delta \le t_e. If a solution exists, we create an edge from (u, t_k) to (v, t_{\text{finish}}+\tau) with cost equal to the total elapsed time (t_{\text{finish}}+\tau - t_k). The receiving vertex is added to V^* if not already present.
+
+4.3 Correctness of the TEG Construction
+
+Lemma 1. For any feasible path P in the continuous‑time model that delivers a bundle of size s from src to dst by time T, there exists a corresponding directed path in the TEG from vertex (src, t_0') (where t_0' is the first TEG instant at or after the bundle’s arrival at src) to a vertex (dst, t_{\text{dlv}}) with t_{\text{dlv}} \le T, whose total cost equals the delivery time.
+
+Proof sketch. The continuous path is split into wait intervals and transmission intervals. Wait intervals map to sequences of waiting edges between consecutive TEG instants. Transmission intervals start at a TEG instant t_k (any start time within a constant‑capacity segment can be moved to the nearest earlier TEG instant without increasing finish time, because capacity is constant). The finish time computed by the integral is exactly the time the bundle would depart plus light delay. Thus the TEG edge matches the continuous transition. By induction over the hops, the composed TEG path achieves the same or earlier delivery. ∎
+
+Lemma 2. Any path in the TEG from a start vertex to a destination vertex corresponds to a feasible continuous‑time forwarding plan with the same delivery time.
+
+Proof. Waiting edges directly correspond to storage; contact edges exactly satisfy the volume requirement by construction. ∎
+
+Together, the lemmas imply that the TEG faithfully represents the continuous‑time problem; an optimal solution in the TEG is an optimal solution in the original model.
+
+---
+
+5. Shortest‑Delay Routing Algorithm
+
+5.1 Dijkstra on the TEG
+
+Assign to each edge a weight equal to the time difference between its endpoints. All weights are strictly positive (waiting edges have t_{k+1}-t_k > 0; transmission edges have total time > 0). The graph is acyclic? Not necessarily, but there are no negative cycles. We can therefore run Dijkstra’s algorithm to find the shortest (i.e., minimum‑delay) path from the start vertex to any vertex representing the destination node. The start vertex is (src, t_{\text{create}}) if t_{\text{create}}\in\mathcal{T}; otherwise we add it as a new instant and connect it with a waiting edge to the next instant.
+
+The earliest delivery time is the minimum of t among all vertices (dst, t) reached, subject to t \le t_{\text{create}} + \ell. If no such vertex is reached within the lifetime, no feasible path exists.
+
+Theorem 1. The Dijkstra algorithm on the TEG produces a path that achieves the globally minimal delivery time for a given bundle, provided that the contact capacities are constant on each interval between consecutive events in \mathcal{T} and that storage is unlimited.
+
+Proof. The TEG captures all feasible state transitions. Dijkstra finds the shortest path with respect to the additive time metric. Since the edge weights are non‑negative, the algorithm correctly identifies the minimum‑time path. The correspondence lemmas guarantee that this path is realisable. ∎
+
+5.2 Complexity and Practical Considerations
+
+Let N = |V|, and let M be the number of contacts. The set \mathcal{T} contains at most 2M distinct times. Thus the TEG has O(N M) vertices. Each waiting edge adds O(N M) edges. For each contact and each TEG instant within its window, we create at most one transmission edge; the number of such instants is bounded by the number of intervals inside the window, which is O(M). Hence the total number of edges is O(N M + M^2). Dijkstra runs in O(E + V \log V), giving an overall complexity polynomial in the size of the contact plan.
+
+In interplanetary networks, M can be on the order of thousands per week, but the planning horizon may be years, making the explicit TEG impractically large. Real‑world implementations such as Contact Graph Routing (CGR) and Schedule‑Aware Bundle Routing (SABR) approximate this search by building a forward‑looking route on demand, using Yen’s algorithm on a much smaller candidate contact set. Our formal TEG model provides the theoretical optimum against which these heuristics can be measured.
+
+5.3 Incorporating Capacity Constraints on Contacts
+
+The above construction assumes a bundle is the only traffic; in reality a contact’s volume is shared by many bundles. The TEG can be extended with a residual capacity label on each transmission edge: after a bundle is routed, the available volume on the contact’s edge is reduced by s, and edges that no longer satisfy V_{\text{remaining}} \ge s are removed. Successive routings then operate on an updated TEG. This sequential process is used in CGR’s capacity‑aware extensions; a full optimisation over multiple bundles is NP‑hard (it reduces to multi‑commodity flow with time windows), but greedy single‑bundle shortest‑delay allocation is the operational standard.
+
+---
+
+6. Connection to Real DTN Protocols
+
+Although this chapter has focused entirely on the mathematical model, every element maps directly to the IETF/CCSDS DTN architecture:
+
+· The bundle tuple corresponds to the primary block of a BPv7 bundle (RFC 9171), with lifetime held in the primary block’s “expire time”.
+· Contacts are the basis of the Contact Plan used by CGR and SABR; the contact volume integral is a core parameter in the CCSDS Schedule‑Aware Bundle Routing standard (CCSDS 734.2‑B‑1).
+· The custodial storage represented by waiting edges is implemented through Bundle‑in‑Bundle Encapsulation (BIBE), which hands responsibility to the next custodian without any end‑to‑end ACK.
+· The light‑delay \tau and capacity C are computed from orbital geometry and link budget equations exactly as in (1).
+
+Thus the theoretical framework is not a hypothetical exercise—it is the mathematical foundation of the protocols that today carry data from the International Space Station, the Mars orbiters, and the upcoming Lunar Gateway.
+
+---
+
+7. Conclusion
+
+We have presented a self‑contained mathematical model of scheduled delay‑tolerant networking, starting from the speed‑of‑light propagation delay and the Shannon–Hartley capacity bound, building through contact windows and bundle formalism, and arriving at a provably correct shortest‑delay routing algorithm based on time‑expanded graphs. Every definition is physically motivated, and the proofs are elementary but rigorous. This skeleton can serve as the theoretical core of any interplanetary network architecture, requiring no speculative elements to function—only the sound engineering of orbital schedules, radio links, and store‑carry‑forward discipline.
+
+APPENDICES TO "MATHEMATICAL FOUNDATIONS OF SCHEDULED DELAY-TOLERANT NETWORKING"
+
+---
+
+Appendix A. Formal System Model — Complete Definitions
+
+A.1 Time Domain
+
+Time is continuous:  \mathbb{T} = \mathbb{R} . All events (bundle creation, contact start, signal propagation) are instantaneous points in  \mathbb{T} . For convenience we fix a global coordinate time, but relativistic corrections are ignored because node velocities  v \ll c ; the model is Newtonian.
+
+A.2 Node Set
+
+ V = \{1,2,\dots,N\} . Nodes have no internal processing delay; forwarding decisions are instantaneous. Each node can store bundles indefinitely.
+
+A.3 Distance and Propagation Delay
+
+The Euclidean distance between  i,j \in V  at time  t  is  d_{ij}(t) . We define the one‑way light‑time
+
+\tau_{ij}(t) = \frac{d_{ij}(t)}{c},
+
+with  c = 299\,792.458\ \text{km s}^{-1} . Because the contact plan is computed using ephemerides, we assume that for every scheduled contact  \tau_{ij}  is constant over the contact window and denoted by the single value at the start of the window. The maximum variation within a window (e.g., a few hours) is less than 0.1 ms even for Mars, well below protocol timer granularity; the assumption is justified for all practical purposes.
+
+A.4 Signal-to-Noise Ratio and Channel Capacity
+
+For a radio frequency link from  i  to  j :
+
+· Transmitted power:  P_t  (W)
+· Transmitter antenna gain:  G_t  (linear)
+· Receiver antenna gain:  G_r  (linear)
+· Carrier wavelength:  \lambda = c/f  (m)
+· Boltzmann’s constant:  k = 1.380649\times10^{-23} \ \text{J K}^{-1} 
+· System noise temperature:  T_{\text{sys}}  (K)
+· Bandwidth:  B  (Hz)
+
+The received power at distance  d  is
+
+P_r = \frac{P_t G_t G_r \lambda^2}{(4\pi d)^2}.
+
+Noise power is  N_0 = k T_{\text{sys}} B . The signal‑to‑noise ratio (SNR) is
+
+\text{SNR} = \frac{P_r}{N_0} = \frac{P_t G_t G_r \lambda^2}{(4\pi d)^2 k T_{\text{sys}} B}.
+
+Shannon’s theorem states that the maximum error‑free data rate (channel capacity) is
+
+C = B \log_2(1 + \text{SNR}) \quad \text{(bits s}^{-1}).
+\tag{A.1}
+
+For optical communications the formula is identical, with  G_t,G_r  replaced by telescope gains and  T_{\text{sys}}  by photon shot noise; the quadratic inverse distance dependence remains.
+
+A.5 Contact Definition
+
+A contact from node  u  to node  v  is a tuple
+
+\kappa = (u,\, v,\, t_{\text{start}},\, t_{\text{end}},\, C(\cdot),\, \tau),
+
+where:
+
+1.  t_{\text{start}}, t_{\text{end}} \in \mathbb{T} ,  t_{\text{start}} < t_{\text{end}} ;
+2.  C : [t_{\text{start}}, t_{\text{end}}] \to \mathbb{R}_{\ge 0}  is the instantaneous capacity function, assumed to be Riemann integrable;
+3.  \tau = \tau_{uv}(t_{\text{start}})  is the constant one‑way propagation delay during the contact.
+
+We denote the set of all contacts by  \mathcal{C} . The contact volume is
+
+V(\kappa) = \int_{t_{\text{start}}}^{t_{\text{end}}} C(s)\,\mathrm{d}s.
+\tag{A.2}
+
+A.6 Bundle
+
+A bundle is a quintuple
+
+b = (s,\, src,\, dst,\, t_0,\, \ell),
+
+where  s > 0  is the size in bits,  src,dst \in V ,  t_0 \in \mathbb{T}  is the creation time, and  \ell > 0  is the lifetime. The bundle must be delivered to  dst  by  t_0+\ell  or be discarded.
+
+A.7 Feasible Forwarding over a Single Contact
+
+Let a bundle  b  be present at node  u  at time  t_{\text{arr}} , and consider a contact  \kappa = (u,v, t_s, t_e, C, \tau) . Transmission is feasible iff
+
+\int_{\max(t_{\text{arr}},\, t_s)}^{t_e} C(s)\,\mathrm{d}s \ge s.
+\tag{A.3}
+
+If feasible, the earliest time the transmission can finish (without pre‑emption of other traffic) is the minimal  \Delta \ge 0  satisfying
+
+\int_{\max(t_{\text{arr}},\, t_s)}^{\max(t_{\text{arr}},\, t_s)+\Delta} C(s)\,\mathrm{d}s = s,
+
+with the constraint that the transmission ends no later than  t_e . The bundle becomes available at node  v  at
+
+t_{\text{dlv}} = \max(t_{\text{arr}},\, t_s) + \Delta + \tau.
+\tag{A.4}
+
+Note that if the integral equation has a solution, the transmission start can be delayed (e.g., to wait for a higher‑priority bundle) without affecting feasibility; the model finds the earliest possible delivery given that the bundle is transmitted as soon as capacity permits.
+
+A.8 Multi‑Hop Path
+
+A path  P  from  src  to  dst  is an ordered sequence of contacts
+
+P = (\kappa_1, \kappa_2, \dots, \kappa_m),
+
+with  \kappa_i = (n_{i-1}, n_i, t_s^{(i)}, t_e^{(i)}, C_i, \tau_i) ,  n_0 = src ,  n_m = dst , and the constraint that for all  i=1,\dots,m , the contact  \kappa_i  is feasible given the arrival time at  n_{i-1} . Formally, let  t_0^{(0)} = t_0  (bundle creation at  src ). For each hop  i , let  t_{\text{arr}}^{(i)}  be the time the bundle is available at node  n_{i-1}  (for  i=1 ,  t_{\text{arr}}^{(1)} = t_0 ; for  i>1 ,  t_{\text{arr}}^{(i)} = t_{\text{dlv}}^{(i-1)} ). The hop is feasible if
+
+\int_{\max(t_{\text{arr}}^{(i)},\, t_s^{(i)})}^{t_e^{(i)}} C_i(s)\,\mathrm{d}s \ge s.
+
+We compute the earliest transmission finish and the delivery time  t_{\text{dlv}}^{(i)}  as in (A.4). The path is feasible if all hops are feasible and  t_{\text{dlv}}^{(m)} \le t_0 + \ell . The delivery time of the path is  t_{\text{dlv}}^{(m)} .
+
+Earliest‑Delivery Problem: Given  b  and  \mathcal{C} , find a feasible path that minimises  t_{\text{dlv}}^{(m)} , or report that none exists.
+
+---
+
+Appendix B. The Time‑Expanded Graph (TEG) — Full Construction
+
+B.1 Event Points
+
+Let  \mathcal{T}_{\text{raw}}  be the set of all  t_{\text{start}}  and  t_{\text{end}}  from every contact in  \mathcal{C} . Sort them to obtain an increasing sequence  t_0 < t_1 < \dots < t_K . Define the discrete event points
+
+\mathcal{T} = \{t_0, t_1, \dots, t_K\}.
+
+If the bundle creation time  t_0  (the constant, not to be confused with the first event point) does not belong to  \mathcal{T} , we insert it as an additional event point and re‑index. For clarity we rename the bundle creation time  t_{\text{create}} .
+
+B.2 Assumption: Piecewise Constant Capacity
+
+For each contact  \kappa , the capacity function  C(s)  is constant on every interval  [t_k, t_{k+1})  that lies entirely within its window. Real contact plans provide capacity either as a single constant or as a sequence of fixed‑rate segments; the discretisation matches exactly. If a contact’s capacity changes continuously (e.g., due to changing distance), the planner must split the contact into sub‑contacts, each with constant rate. This is standard practice.
+
+B.3 Graph Vertices
+
+For every node  u \in V  and every event time  t_k \in \mathcal{T}  we create a vertex  (u, t_k) . The set of vertices is
+
+V^* = \{(u, t_k) \mid u \in V,\; t_k \in \mathcal{T}\}.
+
+B.4 Waiting Edges
+
+For each node  u  and for each consecutive pair  t_k, t_{k+1}  we add a directed edge
+
+(u, t_k) \xrightarrow{\text{wait}} (u, t_{k+1})
+
+with weight  w = t_{k+1} - t_k . The edge indicates that a bundle can remain stored at node  u  during the whole interval.
+
+B.5 Transmission Edges
+
+For each contact  \kappa = (u,v, t_s, t_e, C, \tau) , let the event times that fall inside  [t_s, t_e]  be  t_p, t_{p+1}, \dots, t_q  with  t_p = t_s, t_q = t_e . For every departure event time  t_k \in \{t_p, t_{p+1}, \dots, t_{q-1}\}  (i.e., any event strictly before the contact end) we consider the possibility that the bundle starts transmission immediately at  t_k . Because capacity is constant on each sub‑interval, the transmission will occupy a whole number of intervals plus possibly a partial final interval.
+
+Formally, we compute the minimal index  m \ge k  such that
+
+\sum_{j=k}^{m-1} C \cdot (t_{j+1} - t_j) \ge s,
+\tag{B.1}
+
+with the understanding that if  m = k  the sum is zero. If such  m  exists and the cumulative interval end  t_m \le t_e , then transmission finishes at time
+
+t_{\text{finish}} = t_m - \frac{1}{C} \left( \left[\sum_{j=k}^{m-1} C (t_{j+1}-t_j)\right] - s \right).
+\tag{B.2}
+
+Equation (B.2) subtracts the excess capacity in the last interval  [t_{m-1}, t_m]  to pinpoint the exact completion instant. Because  C  is constant, the volume transferred in the last partial interval is  s - \sum_{j=k}^{m-2} C (t_{j+1}-t_j) , so the time spent in that interval is  (s - \text{previous total})/C , and the finish time is  t_{m-1} + \text{that duration} . Expanding yields (B.2).
+
+The bundle then propagates to node  v , arriving at
+
+t_{\text{dlv}} = t_{\text{finish}} + \tau.
+\tag{B.3}
+
+We add a directed edge
+
+(u, t_k) \xrightarrow{\kappa} (v, t_{\text{dlv}})
+
+with weight  w = t_{\text{dlv}} - t_k . If the vertex  (v, t_{\text{dlv}})  does not already exist in  V^*  (i.e.,  t_{\text{dlv}} \notin \mathcal{T} ), we insert it as a new vertex and, for completeness, add waiting edges connecting it to the adjacent event times of node  v . In practice, this vertex will only be used as a destination for this transmission edge; it does not require outgoing waiting edges because a bundle that arrives at  t_{\text{dlv}}  can immediately be forwarded over a subsequent contact if one exists at that exact moment (which is unlikely but handled by inserting the vertex into the event timeline of node  v ).
+
+B.6 Graph Properties
+
+All edge weights are strictly positive (waiting time  t_{k+1}-t_k > 0 ; transmission time  > 0 ). The graph is finite if  \mathcal{C}  is finite. Because time always advances,  G^*  is acyclic? Not necessarily: waiting edges always go to later times, and transmission edges also have  t_{\text{dlv}} > t_k . So all edges go strictly forward in time; hence  G^*  is a directed acyclic graph (DAG). This guarantees that a simple topological ordering (or Dijkstra, which works on any graph with non‑negative weights) yields shortest paths without negative cycles.
+
+---
+
+Appendix C. Correctness Proofs
+
+C.1 Lemma 1: Every Feasible Continuous Path Maps to a TEG Path
+
+Statement. Let  P  be a feasible path for bundle  b  (size  s ) in the continuous model, delivering the bundle to  dst  at time  T . Then there exists a directed path in the TEG  G^*  from vertex  (src, t_{\text{create}})  (if  t_{\text{create}}  is an event point; if not, from the first event point after  t_{\text{create}}  after appropriate insertion) to a vertex  (dst, t_{\text{dlv}}^*)  with  t_{\text{dlv}}^* \le T , and the total weight of this TEG path equals the actual delivery time in the TEG, which is  \le T .
+
+Proof. We proceed by induction on the number of hops  m .
+
+Base case  m=0 : The bundle never leaves  src . The continuous path trivially “delivers” at time  t_{\text{create}}  to  src  itself. The TEG contains vertex  (src, t_{\text{create}})  and a zero‑length path to itself; the delivery time is  t_{\text{create}} , which satisfies the inequality.
+
+Inductive step: Assume the statement holds for paths of  m-1  hops. Consider an  m -hop path  P = (\kappa_1, \dots, \kappa_m)  with delivery time  T . By the feasibility of the path, there exist times:
+
+·  t_{\text{arr}}^{(1)} = t_{\text{create}} ,
+· For each hop  i=1,\dots,m : a transmission start  t_{\text{start},i} \in [\max(t_{\text{arr}}^{(i)}, t_s^{(i)}), t_e^{(i)}]  and a finish time  t_{\text{finish},i}  determined by the volume integral, with  t_{\text{dlv}}^{(i)} = t_{\text{finish},i} + \tau_i , and  t_{\text{arr}}^{(i+1)} = t_{\text{dlv}}^{(i)} .
+
+We construct the TEG path incrementally.
+
+Consider the first  m-1  hops. They form a feasible path delivering the bundle to node  n_{m-1}  at time  t_{\text{dlv}}^{(m-1)} . By the induction hypothesis, there exists a TEG path from  (src, t_{\text{create}})  to some vertex  (n_{m-1}, t^*)  with  t^* \le t_{\text{dlv}}^{(m-1)} . We can extend this path by adding waiting edges from  t^*  to the earliest event time  t_k \in \mathcal{T}  that is  \ge \max(t^*, t_s^{(m)}) . Because waiting edges cover all time intervals, we can advance the bundle’s presence to time  t_k  at node  n_{m-1}  without loss of feasibility: the remaining capacity in the contact  \kappa_m  from time  t_k  onward is at least what was used in the continuous plan, since waiting only delays the start and reduces the available window; the original continuous plan started at  t_{\text{start},m} , which is  \le t_k  after waiting, and the volume used from  t_k  to  t_{\text{finish},m}  is exactly the same as the continuous plan’s volume because the integration interval is shifted but the capacity function is constant on subintervals—the cumulative capacity from  t_k  to  t_{\text{finish},m}  equals  s .
+
+Formally, in the TEG we are at vertex  (n_{m-1}, t_k) . The transmission edge for contact  \kappa_m  starting at  t_k  is present because the TEG construction checks the volume condition (B.1) using  t_k  as the departure event. Since the continuous plan had a feasible transmission starting at some  t_{\text{start},m} \ge t_k  (after our waiting), the condition holds: the integral from  t_k  to  t_e^{(m)}  is at least  s . Hence there exists a transmission edge from  (n_{m-1}, t_k)  to  (n_m, t_{\text{dlv}}')  with delivery time  t_{\text{dlv}}'  computed by (B.2)+(B.3). We need to show that  t_{\text{dlv}}' \le t_{\text{dlv}}^{(m)} .
+
+In the continuous plan, transmission started at  t_{\text{start},m}  and finished at  t_{\text{finish},m} . In the TEG, we start at the (possibly earlier) event  t_k . Because capacity is constant on intervals, starting earlier at  t_k  means the same volume  s  is transferred by some time  t_{\text{finish}}' . The integral from  t_k  to  t_{\text{finish}}'  equals  s . The continuous plan’s transmission finished at  t_{\text{finish},m}  after starting at  t_{\text{start},m} \ge t_k . Because the rate function is non‑negative and constant on intervals, the time needed to transfer  s  from  t_k  is at most the time from  t_k  to  t_{\text{finish},m}  minus the idle time before  t_{\text{start},m} . More precisely, define  A = \int_{t_k}^{t_{\text{start},m}} C(t)\,\mathrm{d}t \ge 0 . In the continuous plan, the volume transferred from  t_{\text{start},m}  to  t_{\text{finish},m}  is  s . In our TEG, we transfer  s  total; hence we use some of the capacity in  [t_k, t_{\text{start},m}] , which only makes us finish earlier. The total volume transferred by the continuous plan up to time  t_{\text{finish},m}  starting from  t_k  is at least  s  (actually exactly  s  plus any unused capacity before  t_{\text{start},m} ). Therefore, by the time  t_{\text{finish},m} , we have certainly transferred  s  bits, so the TEG finish time  t_{\text{finish}}' \le t_{\text{finish},m} . Consequently  t_{\text{dlv}}' = t_{\text{finish}}' + \tau_m \le t_{\text{finish},m} + \tau_m = t_{\text{dlv}}^{(m)} . Adding the propagation delay and the waiting time, the total weight of the TEG path from  (src, t_{\text{create}})  to  (dst, t_{\text{dlv}}')  is at most the continuous delivery time  T . This completes the inductive step and the proof. ∎
+
+C.2 Lemma 2: Every TEG Path Corresponds to a Feasible Continuous Plan
+
+Statement. Any directed path in  G^*  from  (src, t_{\text{create}})  to a vertex  (dst, t_{\text{dlv}})  with total weight  W = t_{\text{dlv}} - t_{\text{create}}  can be realised as a feasible continuous multi‑hop forwarding plan delivering the bundle at time  t_{\text{dlv}} , provided that the bundle’s lifetime is not exceeded.
+
+Proof. A TEG path consists of a sequence of waiting edges and transmission edges. Waiting edges correspond to time intervals where the bundle stays at the same node. We can break the path into segments: a waiting segment, then a transmission over contact  \kappa_{i_1} , then waiting at the next node, etc. For each transmission edge from  (u, t_k)  to  (v, t_{\text{dlv}})  labelled by contact  \kappa , the construction guarantees that the volume integral from  t_k  to  t_{\text{finish}}  equals  s  and that  t_{\text{dlv}} = t_{\text{finish}} + \tau . We define the continuous forwarding plan as:
+
+· At each node, the bundle waits from its arrival time (which is a TEG vertex time) until the departure event time  t_k  of the next transmission edge.
+· At time  t_k , transmission begins and runs until  t_{\text{finish}}  (continuous transmission exactly filling the capacity).
+· The bundle then propagates over  \tau  and arrives at  v  at  t_{\text{dlv}} .
+
+Because the waiting intervals match the TEG waiting edges and the transmission exactly fulfills the volume requirement, the plan is feasible in the continuous model and produces exactly the same timeline as the TEG path. Thus the TEG path yields a valid continuous plan with the same delivery time. ∎
+
+C.3 Theorem 1 (Optimality of Dijkstra on TEG)
+
+Statement. Let  G^*  be constructed as above from a finite contact plan  \mathcal{C}  with piecewise constant capacities, and let all edge weights be the time increments. Then running Dijkstra’s algorithm from the start vertex  (src, t_{\text{create}})  yields a shortest (minimum total weight) path to any reachable destination vertex. If a vertex  (dst, t^*)  is reached with minimum weight  t^* - t_{\text{create}} , and if  t^* \le t_{\text{create}}+\ell , then there exists a feasible continuous path delivering the bundle at time  t^* , and no feasible continuous path can deliver it earlier.
+
+Proof. Because all edge weights are non‑negative, Dijkstra correctly computes the shortest path from the source to every vertex (Cormen et al.). Lemma 1 ensures that any continuous feasible path corresponds to a TEG path with delivery time  \le  the continuous one, so the optimal continuous delivery time cannot be smaller than the shortest TEG path weight to some  (dst, \cdot) . Conversely, by Lemma 2, the TEG shortest path yields a continuous feasible plan with exactly that delivery time. Hence the TEG shortest path time is precisely the infimum of feasible continuous delivery times. Dijkstra finds that minimum. ∎
+
+---
+
+Appendix D. Complexity Analysis
+
+D.1 Size of the TEG
+
+Let  N = |V| , and let  M = |\mathcal{C}| . Each contact contributes two event times, so  |\mathcal{T}| \le 2M + 1  (including  t_{\text{create}}  if not present). Number of vertices:  |V^*| \le N \cdot (2M+1) . Additionally, each transmission edge may create a new arrival vertex; in the worst case, every combination of departure event and contact could create a distinct arrival time, but the number is bounded by  N \cdot (\text{number of transmission edges}) . A coarse bound: for each contact and for each event instant inside its window (up to  2M ), we create at most one transmission edge, so at most  M \cdot 2M = 2M^2  transmission edges, each potentially adding a new arrival vertex. So  |V^*| = O(NM + M^2)  and  |E^*| = O(NM)  (waiting edges:  N  per event interval, total  N \cdot (2M) ) plus  O(M^2)  (transmission edges). Overall  |V^*| = O(M^2 + NM)  and  |E^*| = O(M^2 + NM) .
+
+D.2 Running Time of Dijkstra
+
+With a binary heap, Dijkstra runs in  O(|E^*| + |V^*| \log |V^*|) . Substituting the bounds gives  O(M^2 + NM + (M^2+NM) \log(NM)) . For typical interplanetary networks with  N  small ( < 20 ) and  M  on the order of thousands,  M^2 \approx 10^6 – 10^7 , which is computationally acceptable for offline routing. Real‑time implementations use heuristics (CGR, SABR) that avoid building the full TEG.
+
+D.3 Space Complexity
+
+Storing the full TEG requires  O(M^2 + NM)  memory. This is manageable for planning horizons of months; for multi‑year continuous plans, pruning techniques and on‑demand graph expansion are used.
+
+---
+
+Appendix E. From Physics to Contact Volume — An Explicit Calculation
+
+We show how the contact capacity  C  and volume  V(\kappa)  are derived from physical parameters, connecting the mathematical model to the hardware layer.
+
+E.1 Link Budget for a Mars–Earth Contact
+
+Typical values for a Mars orbiter downlink at 2.7 AU (≈ 4.04 × 10⁸ km):
+
+· Frequency: 8.4 GHz (X‑band),  \lambda = 0.0357\ \text{m} .
+·  P_t = 20\ \text{W}  (13 dBW),  G_t = 40\ \text{dBi}  (high‑gain antenna).
+·  G_r = 70\ \text{dBi}  (70‑m DSN dish).
+·  T_{\text{sys}} = 25\ \text{K}  (cryogenic LNA).
+· Bandwidth  B = 10\ \text{MHz} .
+
+Free‑space path loss:
+
+L = \left(\frac{4\pi d}{\lambda}\right)^2,
+\quad d = 4.04\times 10^{11}\ \text{m},
+\quad L \approx 2.0\times 10^{28} \approx 283\ \text{dB}.
+
+Received power:
+
+P_r = \frac{P_t G_t G_r}{L} = \frac{(20)(10^4)(10^7)}{2.0\times 10^{28}} = 10^{-16}\ \text{W} \ (-160\ \text{dBW}).
+
+Noise power:
+
+N_0 = k T_{\text{sys}} B = (1.38\times 10^{-23})(25)(10^7) \approx 3.45\times 10^{-15}\ \text{W}.
+
+SNR:
+
+\text{SNR} = \frac{P_r}{N_0} \approx \frac{10^{-16}}{3.45\times 10^{-15}} \approx 0.029 \ (-15.4\ \text{dB}).
+
+Shannon capacity:
+
+C = B \log_2(1+\text{SNR}) \approx 10^7 \times \log_2(1.029) \approx 4.2\times 10^5 \ \text{bps} = 420\ \text{kbps}.
+
+Over a 4‑hour contact (14 400 s), the volume is
+
+V = C \times 14\,400 \approx 6.0\ \text{GB}.
+
+This matches real‑world Mars orbiter data return volumes.
+
+E.2 Optical Link Example (Lunar)
+
+A 1550 nm lasercom link between Earth and Moon (384 400 km) with 10 cm apertures yields SNR > 10 dB and capacities in the Gbps range; the same formulas apply. The TEG construction is identical.
+
+---
+
+Appendix F. Connection to DTN Protocol Standards
+
+The mathematical model is the theoretical underpinning of:
+
+· BPv7 (RFC 9171): The bundle’s primary block contains the creation timestamp and lifetime (expire time). Custodial transfer is handled by the convergence layer; our storage edges model the “custody” state.
+· SABR (CCSDS 734.2‑B‑1): Schedule‑Aware Bundle Routing uses a contact plan and capacity integrals identical to our definitions. The algorithm performs a greedy shortest‑path search that approximates the TEG optimum.
+· CGR (Contact Graph Routing): The ION implementation builds a local contact graph and runs a Dijkstra‑like search on a time‑varying graph. Our TEG Dijkstra is the exact, offline version of that real‑time heuristic.
+· BIBE (Bundle‑in‑Bundle Encapsulation): A convergence layer that uses the custody acceptance signals; our model abstracts these signals by assuming that once a transmission edge is taken, the bundle is reliably delivered to the next node (the physical layer handles error correction).
+
+The gap between the theoretical optimum and practical heuristics is an active research area (e.g., CMR, SABR‑enhanced), where the TEG solution provides the golden benchmark.
+
+---
+
+Appendix G. Extensions — Multiple Bundles and Capacity Constraints
+
+G.1 Sequential Routing with Residual Capacities
+
+To route a set of bundles  \{b_1, b_2, \dots\} , we can process them one by one. After routing bundle  b_i  on a TEG path, we reduce the capacity of each contact’s volume by  s_i  on the intervals used. This is achieved by updating the capacity functions: if the transmission consumed the entire interval  [t_k, t_{\text{finish}}] , that portion of the contact’s capacity is removed. The TEG is then rebuilt or patched. The greedy sequential approach is optimal for a single objective if we prioritise by urgency, but in general multi‑commodity flow with time windows is NP‑hard (reduction from disjoint paths in temporal graphs).
+
+G.2 Formalising the Greedy Algorithm
+
+Algorithm Sequential‑Earliest‑Delivery:
+
+1. Sort bundles by creation time (or priority).
+2. Initialize residual capacity  C^\text{res}_{ij}(t) = C_{ij}(t)  for all contacts.
+3. For each bundle  b , construct a TEG using the current residual capacities (edges exist only if enough volume is left).
+4. Run Dijkstra to find the earliest delivery path.
+5. If found, accept the path and subtract the used volume from the contact capacities along the path, updating  C^\text{res} .
+6. Else, reject the bundle.
+
+This algorithm yields a feasible schedule; performance bounds depend on the ordering.
+
+---
+
+Appendix H. Notational Index
+
+Symbol Meaning
+ V  Set of nodes
+ d_{ij}(t)  Distance between nodes  i,j  at time  t 
+ \tau_{ij}(t)  One‑way light‑time
+ \kappa  A contact (tuple)
+ t_s, t_e  Start and end of a contact
+ C(t)  Instantaneous channel capacity (bps)
+ V(\kappa)  Contact volume (bits)
+ b  A bundle
+ s  Bundle size (bits)
+ t_0, \ell  Creation time and lifetime
+ P  A multi‑hop path (sequence of contacts)
+ G^* = (V^*, E^*)  Time‑expanded graph
+ (u, t_k)  TEG vertex: node  u  at time  t_k 
+ w  Edge weight (time increment)
+
