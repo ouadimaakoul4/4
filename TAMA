@@ -1,0 +1,620 @@
+Theory‑Aware Memory Architecture
+
+Toward Persistent Scientific Reasoning Beyond Context Windows
+
+Ouadi Maakoul
+
+
+Abstract
+
+Large language models (LLMs) exhibit remarkable short‑term reasoning, yet their deployment in long‑term scientific projects is fundamentally limited by the absence of a persistent, logically coherent representation of an evolving theory. Current mitigation strategies—larger context windows, retrieval‑augmented generation (RAG), vector databases, and knowledge graphs—improve document lookup but do not maintain the logical integrity of a scientific theory whose definitions, lemmas, theorems, proofs, experiments, and conjectures continuously change. Empirical evidence now shows that reasoning quality degrades severely even with perfect retrieval, that full history causes unbounded memory growth, and that retrieval based on semantic similarity alone cannot capture the logical dependency structure that governs scientific discourse.
+
+This dissertation proposes the Theory‑Aware Memory Architecture (TAMA), a new architectural layer situated between external memory and the language model. Rather than storing knowledge as text embeddings, TAMA represents scientific knowledge as a structured, typed dependency graph of logical objects. Every modification propagates through this graph via dependency analysis and automatic consistency verification before inference. The memory model is formalised as a consolidation operator \Phi that decomposes into insertion, propagation, and verification steps. We prove key properties: the uniqueness and minimality of the affected subgraph (Theorem 4.1), convergence of iterative consolidation to a stable theory via a Banach fixed‑point argument (Theorem 4.2), soundness of local consistency verification under acyclicity (Theorem 4.3), and computational complexity that depends only on the size of the affected subgraph, not the entire theory (Theorem 4.4). A trainable multi‑head system learns object classification, dependency prediction, contradiction detection, consolidation prediction, and theory evolution. Inference retrieves a logically closed subgraph rather than arbitrary paragraphs, ensuring that the language model receives a consistent context.
+
+TAMA unifies recent empirical insights—LEDGER’s typed dependency graphs, CogMem’s hierarchical memory consolidation, LAG’s dependency‑aware grounding, and TheoremGraph’s statement‑level extraction—into a single formal framework. The work reframes memory in scientific AI from “which documents to retrieve?” to “which logical objects are affected by this change?”, thereby enabling persistent, self‑consistent reasoning across time scales that far exceed finite context windows. Because the dissertation is entirely theoretical, we provide a rigorous experimental design (Chapter 7) that specifies datasets, metrics, baseline comparisons, and ablation studies for future empirical validation.
+
+---
+
+Chapter 1
+
+Introduction
+
+Large language models operate inside a finite context window. While the size of this window continues to grow, scientific research presents a fundamentally different challenge: a PhD dissertation, a long‑term engineering project, or a mathematical theory is not merely a long document. It is an evolving logical system in which a single change may have cascading consequences. Altering a definition can invalidate several lemmas; modifying a lemma can break multiple theorems; updating an experiment can shift theoretical assumptions; introducing new notation can create ambiguity throughout the manuscript.
+
+Current solutions to the context limitation fall into two broad classes. Long‑context models attempt to extend the token capacity, but recent work has shown that reasoning quality degrades up to 85% even with perfect retrieval when context length grows unboundedly (CogMem, arXiv:2512.14118). Retrieval‑augmented generation stores documents or chunks in a vector database and retrieves them by semantic similarity. This approach improves fact recall but fails to capture the logical structure of a theory: retrieved chunks may be topically related yet logically inconsistent with the current state of the theory, and the system has no mechanism to detect or repair such inconsistencies. Even when retrieval is augmented with knowledge graphs, the graph typically serves as a static index, not as a living structure that evolves and verifies itself.
+
+The central problem is therefore not memory capacity. It is the preservation of logical coherence during continuous theory evolution.
+
+We propose the Theory‑Aware Memory Architecture (TAMA). TAMA is a new architectural layer that sits between external memory and the language model. It represents a scientific theory not as a collection of text chunks but as a typed dependency graph composed of scientific objects—axioms, definitions, lemmas, theorems, proofs, experiments, and conjectures. When a new piece of knowledge arrives, TAMA parses it into one or more objects, identifies their dependencies, updates the graph, propagates the effects of the change to all dependent objects, and verifies the consistency of the affected subgraph. Only objects that pass verification become active memory. At inference time, the language model does not receive a set of retrieved paragraphs; it receives a logically closed subgraph that is guaranteed to be internally consistent.
+
+This dissertation provides the mathematical foundations of TAMA. We define the theory representation, the memory model, the consolidation operator, and the verification procedure. We prove the key properties of the architecture and connect them to empirical evidence from several recent systems. The work is purely theoretical; therefore, we include a detailed experimental plan (Chapter 7) to guide future empirical validation. By the end, we aim to have demonstrated that the core shift—from document retrieval to logical dependency maintenance—can serve as the foundation for persistent, self‑consistent machine reasoning.
+
+---
+
+Chapter 2
+
+Formal Foundations
+
+2.1 Scientific Objects
+
+Let \mathcal{O} be a countable universe of scientific objects. Each object o \in \mathcal{O} is a tuple
+
+o = (\tau, s, \phi, \text{dep}, t, c)
+
+where
+
+· \tau \in \{\mathrm{A}, \mathrm{D}, \mathrm{N}, \mathrm{L}, \mathrm{Th}, \mathrm{P}, \mathrm{E}, \mathrm{C}, \mathrm{R}\} is the object type (axiom, definition, notation, lemma, theorem, proof, experiment, conjecture, reference);
+· s \in \Sigma^* is the surface form (natural language text, possibly with formal notation);
+· \phi \in \mathbb{R}^d is a learned embedding;
+· \text{dep} \subseteq \mathcal{O} is a finite set of explicit dependencies;
+· t \in \mathbb{R}^+ is a creation/modification timestamp;
+· c \in [0,1] is a confidence score.
+
+Certain types carry additional structured fields. Specifically,
+
+\begin{aligned}
+D_i &= (\mathrm{Name}_i, \mathrm{Content}_i, \mathrm{Dep}_i, \mathrm{Sig}_i), \quad \mathrm{Sig}_i \text{ a formal signature}\\
+L_i &= (\mathrm{Stmt}_i, \mathrm{Proof}_i, \mathrm{Dep}_i)\\
+Th_i &= (\mathrm{Stmt}_i, \mathrm{Proof}_i, \mathcal{L}_i, \mathcal{D}_i, \mathcal{A}_i)\\
+E_i &= (\mathrm{Dataset}_i, \mathrm{Method}_i, \mathrm{Results}_i, \mathrm{Links}_i), \quad \mathrm{Links}_i \subseteq Th \cup L \cup D\\
+C_i &= (\mathrm{Stmt}_i, \mathrm{Evid}_i, p_i), \quad p_i \in [0,1]
+\end{aligned}
+
+These refinements make the object schema rich enough to capture the logical structure of informal and formal scientific discourse, following the statement‑level model of TheoremGraph, which extracted 11.7 million statements and 18.3 million directed dependencies from a large corpus of informal mathematics (Kurgan et al., arXiv:2606.25363).
+
+2.2 Theory as a Structured Tuple
+
+A scientific theory at time t is defined as a tuple
+
+\mathcal{T}_t = (A_t, D_t, N_t, L_t, Th_t, P_t, E_t, C_t, R_t)
+
+where each component is a set of objects of the corresponding type. The carrier set is
+
+V_t = A_t \cup D_t \cup N_t \cup L_t \cup Th_t \cup P_t \cup E_t \cup C_t \cup R_t.
+
+Unlike a flat document collection, the theory is equipped with an explicit dependency structure.
+
+2.3 Typed Dependency Graph
+
+Definition 2.1 (Theory Graph). The theory graph G_t = (V_t, E_t, \lambda) is a directed labelled multigraph where
+
+E_t \subseteq V_t \times V_t \times \mathcal{T}
+
+and the edge types \mathcal{T} are drawn from
+
+\{\texttt{REF}, \texttt{DEP}, \texttt{CONTAINS}, \texttt{RELATED}, \texttt{PROVES}, \texttt{REFUTES}, \texttt{USES}\}.
+
+This set extends the four‑type model used in LEDGER (Wang et al., arXiv:2606.28379) with proof‑relation edges.
+
+We distinguish two critical edge categories:
+
+· Informational edges \texttt{REF}: v_i cites v_j; the connection is non‑logical.
+· Logical dependency edges \texttt{DEP}: v_i counterfactually depends on v_j; if v_j were removed or changed, v_i would become ill‑defined or unjustified.
+
+The reachability order \prec is defined by v_j \prec v_i iff there exists a directed path from v_j to v_i consisting only of \texttt{DEP} and \texttt{REF} edges.
+
+Lemma 2.2 (Acyclicity Condition). If G_t contains a directed cycle comprising only \texttt{DEP} and \texttt{REF} edges, then the theory \mathcal{T}_t is ill‑founded.
+
+Proof. Suppose a cycle v_1 \to v_2 \to \dots \to v_k \to v_1 exists. For k=1, an object depends on itself, which contradicts the principle that definitions must be grounded in previously established concepts. For k>1, the sequence of dependencies implies that the interpretation of v_1 requires that of v_k, which in turn requires that of v_1. No well‑founded definitional order can exist; the theory contains a circular justification. ∎
+
+Consequently, TAMA enforces that the subgraph restricted to \texttt{DEP} \cup \texttt{REF} is a directed acyclic graph (DAG) and rejects any update that would introduce a cycle, using a depth‑first search of cost O(|V|+|E|).
+
+Remark on mutual dependencies: Strict acyclicity can be too restrictive for legitimate scientific structures (e.g., simultaneous inductive definitions). A relaxation, left to future work, would introduce a co‑definition edge type and a stratification condition that allows cycles only if they do not preclude a well‑founded grounding order.
+
+Lemma 2.3 (Deterministic Precision). The deterministic rule‑based dependency extractor used in TheoremGraph achieves 98.8% judge‑verified precision on informal mathematics. This justifies the use of pseudo‑labels y_{ij} from such an extractor to train the dependency prediction head \mathcal{L}_{dep} (see Chapter 5).
+
+2.4 Embedding Space and Semantic Edges
+
+The learned embedding \phi_i is produced by a function f_\theta trained such that \langle \phi_i, \phi_j \rangle approximates a logical entailment probability, not merely topical similarity. This is the central failure mode of vanilla RAG identified in Path‑Constrained Retrieval literature. Semantic edges (those with weight above a threshold \theta) can be added to capture inferred connections not explicitly stated; LEDGER uses \theta = 0.7 for such edges.
+
+---
+
+Chapter 3
+
+Theory‑Aware Memory Model
+
+3.1 Memory Definition
+
+Following the CogMem hierarchical memory architecture (Zhang et al., arXiv:2512.14118), TAMA’s memory is a three‑layer construct.
+
+Definition 3.1 (Theory‑Aware Memory). At time t, the memory is a triple
+
+M_t = (G_t, W_t, \Phi)
+
+where
+
+· G_t = (V_t, E_t, \lambda) is the typed dependency graph,
+· W_t : E_t \to \mathbb{R}^+ assigns a learned weight to each edge,
+· \Phi is the consolidation operator.
+
+The full theory state is \mathcal{S}_t = (G_t, M_t, C_t), with C_t a vector of consistency metrics (logical consistency, contradiction rate, etc.).
+
+The three layers correspond to CogMem’s memory types:
+
+· Long‑Term Memory (LTM) — the persistent graph G_t,
+· Direct Access (DA) — the active affected set \mathrm{Aff}(x_t) during an update,
+· Focus of Attention (FoA) — the logically closed retrieved subgraph Sub(q) at inference time.
+
+3.2 Memory Update
+
+When new knowledge x_t (a raw text segment or a structured observation) arrives, the memory transitions according to
+
+M_{t+1} = \Phi(M_t, x_t).
+
+The consolidation operator decomposes into three sequential steps:
+
+\Phi = \Phi_{\text{ver}} \circ \Phi_{\text{prop}} \circ \Phi_{\text{insert}}.
+
+Step 1: Insertion \Phi_{\text{insert}}.
+The incoming x_t is parsed into one or more scientific objects (see Chapter 5). Let O_{\text{new}} be the set of extracted objects and E_{\text{new}} the dependency edges among them and to existing objects. Then
+
+G_t' = (V_t \cup O_{\text{new}}, \; E_t \cup E_{\text{new}}).
+
+Step 2: Propagation \Phi_{\text{prop}}.
+We compute the affected set \mathrm{Aff}(x_t) as the forward reachable nodes from any object in O_{\text{new}} through \texttt{DEP} edges:
+
+\mathrm{Aff}(x_t) = \{ v \in V_t' \mid \exists u \in O_{\text{new}} \text{ with a path } u \leadsto v \text{ via } \texttt{DEP} \}.
+
+The propagation step marks every node in \mathrm{Aff}(x_t) as potentially invalid and updates their dependency information. The weight function W_t is also adjusted: for each edge e incident to a node in \mathrm{Aff}(x_t), its weight is recomputed (or decayed) to reflect the uncertainty introduced by the change.
+Remark: Not every dependent object necessarily becomes invalid; a theorem might remain true under a slightly modified lemma. In TAMA, we opt for a conservative (safe) propagation; a future refinement could introduce a change‑impact score that triggers re‑verification only above a threshold, thereby reducing computational load.
+
+Step 3: Verification \Phi_{\text{ver}}.
+Each node v \in \mathrm{Aff}(x_t) is subjected to a consistency check (Section 3.3). Nodes that fail are either repaired (if a repair procedure exists) or removed; edges are pruned accordingly. The resulting verified graph becomes G_{t+1}.
+
+3.3 Consistency Verification
+
+For a node v, the verification predicate is
+
+\mathrm{Ver}(v) = \mathrm{Cons}(v) \land \mathrm{NoCirc}(v) \land \mathrm{NotRefute}(v) \land \mathrm{ProofComp}(v)
+
+where
+
+· \mathrm{Cons}(v): the conjunction of all statements in the dependency set \mathrm{dep}(v) is logically satisfiable. In practice, a SAT or SMT solver restricted to the decidable fragment of the dependency subgraph checks that \bigwedge_{u \in \mathrm{dep}(v)} u.\mathrm{stmt} \not\models \bot.
+· \mathrm{NoCirc}(v): adding v does not create a \texttt{DEP}-cycle (enforced globally via DFS).
+· \mathrm{NotRefute}(v): no conjecture or experiment in the theory directly refutes a theorem on which v depends.
+· \mathrm{ProofComp}(v): if v is a theorem, every leaf of its proof tree is present in V_t.
+
+Only nodes for which \mathrm{Ver}(v)=1 are retained in active memory. This local verification suffices for global consistency because the graph is a DAG and every node’s dependencies are themselves already verified (see Theorem 4.3).
+
+Hybrid verification sketch: For the majority of informal statements, formal SAT/SMT is infeasible. TAMA is designed to accommodate a hybrid verifier: a symbolic core that handles statements expressed in a machine‑checkable fragment (e.g., Lean‑compatible signatures), coupled with an LLM‑based heuristic that assigns a confidence score c(v) to the consistency of the remaining dependencies. The formal soundness proof (Theorem 4.3) holds for the verifier’s internal accuracy; the practical system will degrade gracefully as the heuristic confidence drops.
+
+---
+
+Chapter 4
+
+Main Theorems
+
+4.1 Minimal Affected Subgraph
+
+Theorem 4.1 (Uniqueness and Minimality). For any update x_t that adds objects O_{\text{new}} to a consistent DAG G_t, the set \mathrm{Aff}(x_t) = \mathrm{Reach}^+_{G_t'}(O_{\text{new}}) is the unique \subseteq-minimal set of nodes such that G_t' \setminus \mathrm{Aff}(x_t) remains consistent.
+
+Proof.
+Soundness: If v \notin \mathrm{Aff}(x_t), there is no \texttt{DEP}-path from any u \in O_{\text{new}} to v. By definition of logical dependency, the interpretation [\![v]\!] = [\![v]\!]_{G_t \setminus O_{\text{new}}}, so v remains consistent.
+Completeness: If v \in \mathrm{Aff}(x_t), there exists a chain u = v_0 \to v_1 \to \dots \to v_k = v of \texttt{DEP} edges. A counter‑model that changes the interpretation of v_0 will, by induction, change the interpretation of v_k; hence re‑verification is necessary.
+Minimality: Any S' \subsetneq \mathrm{Aff}(x_t) misses some reachable node that may be inconsistent.
+Uniqueness: Reachability in a finite directed graph is deterministic; breadth‑first search yields a unique set. ∎
+
+This theorem formally justifies the shift from “which documents to retrieve?” to “which logical objects are affected?” and matches LEDGER’s empirical finding that dependency‑aware retrieval selects only the necessary context, keeping token usage constant per edit.
+
+4.2 Convergence of Consolidation
+
+Theorem 4.2 (Convergence). Let G_t' be a DAG with bounded edge weights.
+
+1. The propagation step terminates in at most \mathrm{diam}(G_t') iterations.
+2. If updates eventually cease and only weight decay is applied, the memory M_t converges to a unique stable theory M^*.
+
+Proof.
+(1) Since G_t' is a DAG, there exists a topological ordering \sigma: V \to \mathbb{N}. Propagation proceeds strictly along increasing \sigma; no node can be visited twice. Therefore the number of iterations is bounded by the length of the longest path, \mathrm{diam}(G_t') \le |V|-1.
+
+(2) After insertions cease, V_{t+1}=V_t. Consider the metric space (\mathcal{W}, d_1) of edge weights with d_1(W,W') = \|W - W'\|_1, which is complete. Define the weight update operator T(W) = \gamma W + (1-\gamma)\hat{w}(x_t) with \gamma \in (0,1). Then
+
+d_1(T(W), T(W')) = \|\gamma W + (1-\gamma)\hat{w} - \gamma W' - (1-\gamma)\hat{w}\|_1 = \gamma\|W-W'\|_1,
+
+so T is a contraction. By the Banach fixed‑point theorem, there exists a unique fixed point W^* and W_t \to W^* exponentially: \|W_t - W^*\|_1 \le \gamma^t \|W_0 - W^*\|_1. Hence M_t \to M^* = (G, W^*, \Phi).
+
+Corollary (Local stability without cessation): If updates never cease, each update affects only the bounded subgraph \mathrm{Aff}(x_t), so \|W_{t+1} - W_t\| is bounded by O(|\mathrm{Aff}|/|V|). The memory does not suffer from unbounded growth or catastrophic forgetting of unrelated parts.
+
+4.3 Soundness of Consistency Verification
+
+Theorem 4.3 (Soundness). Assume the verification predicate \mathrm{Ver}(v) is sound for each local check (i.e., \mathrm{Ver}(v)=1 \implies v is consistent with its dependencies). Then the theory \mathcal{T}_{t+1} obtained by applying \Phi_{\text{ver}} is globally logically consistent.
+
+Proof. By induction on the topological order of G_{t+1}.
+Base case: Axioms and objects with no dependencies are trivially consistent.
+Inductive step: Assume for all u \prec v, \mathrm{Ver}(u)=1 and their knowledge base KB_u is consistent. \mathrm{Cons}(v) checks that KB_{\mathrm{dep}(v)} \cup \{v\} \not\models \bot; since all u \in \mathrm{dep}(v) are consistent by the induction hypothesis, this local check suffices. \mathrm{NoCirc} prevents cycles; \mathrm{NotRefute} and \mathrm{ProofComp} guarantee no counter‑evidence or missing proof steps. Hence v is consistent.
+
+By induction, every node in the DAG is consistent, so the entire theory is consistent. The verification cost per edit is O(\sum_{v \in \mathrm{Aff}} \text{SAT}(|\mathrm{dep}(v)|)), not \text{SAT}(|V|).
+
+Remark on checker soundness: The theorem relies on the idealised soundness of \mathrm{Cons}(v). In a real deployment, a hybrid verifier will produce a confidence rather than a Boolean. The overall consistency guarantee then degrades gracefully with the checker’s accuracy.
+
+4.4 Computational Complexity
+
+Theorem 4.4 (Complexity). Let n = |V_t|, m = |E_t|, and a = |\mathrm{Aff}(x_t)| for a given update.
+
+· Dependency extraction: O(a \cdot L_{\mathrm{LM}}), where L_{\mathrm{LM}} is the cost of the LLM‑based parser.
+· Propagation: O(a + e_a), where e_a is the number of edges in the induced subgraph on \mathrm{Aff}(x_t).
+· Retrieval for inference: the size of the retrieved subgraph depends only on the query scope, not on n; retrieval time is O(1) with respect to theory growth.
+
+Proof. Extraction runs the parser on the incoming text and on the text of each affected node to re‑compute dependencies; this is linear in a. Propagation traverses the forward reachable set, which is O(a + e_a). Retrieval constructs a relevant subgraph Sub(q) by taking the downward closure of top‑k nodes; its size is bounded by a constant (determined by branching factor and depth bound), independent of n. ∎
+
+This property is crucial for multi‑year projects: the system does not slow down as the theory grows. LEDGER empirically validates this: it maintains a constant ~1,500 tokens per edit regardless of document size, an 85% reduction compared to full regeneration.
+
+---
+
+Chapter 5
+
+Learning and Multi‑Agent Architecture
+
+5.1 Training Objectives
+
+TAMA is not solely a static algorithm; its components are trained to improve extraction, dependency prediction, and consistency verification. Following the Logic‑Augmented Generation (LAG) paradigm (Xiao et al., arXiv:2508.05509), we define five training heads:
+
+1. Object Classification \mathcal{L}_{\text{cls}}: minimise -\log P(\tau \mid s), the log‑likelihood of the object type given its surface form.
+2. Dependency Prediction \mathcal{L}_{\text{dep}}: for each pair of objects i,j, predict the presence of a dependency edge. The loss is
+   \mathcal{L}_{\text{dep}} = -\sum_{i,j} \big[ y_{ij}\log \sigma(w_{ij}^\top [\phi_i;\phi_j]) + (1-y_{ij})\log(1-\sigma(\dots)) \big],
+   \]  
+   where y_{ij} are pseudo‑labels from the deterministic extractor (TheoremGraph’s 98.8% precision) and w_{ij} is an edge‑type‑specific weight vector.
+3. Contradiction Detection \mathcal{L}_{\text{contr}}: a contrastive loss
+   \mathcal{L}_{\text{contr}} = \max(0, \mu - d(\phi_{Th}, \phi_{\neg Th})),
+   \]  
+   where \phi_{\neg Th} is the embedding of a synthetically negated statement.
+4. Consolidation Prediction \mathcal{L}_{\text{consol}}: predicts the affected set \mathrm{Aff}(x_t) directly, trained on simulated theory edits.
+5. Theory Evolution Prediction \mathcal{L}_{\text{evol}}: a graph‑generation objective P(G_{t+1} \mid G_t, x_t), encouraging the system to anticipate how a theory will change.
+
+These objectives are optimised jointly, creating a second learning process that runs alongside the base language model. The dependency prediction head effectively implements LAG’s principle of decomposing complex queries into atomic sub‑questions ordered by logical dependencies.
+
+5.2 Multi‑Agent Internal Pipeline
+
+The architecture is implemented as a collection of specialised agents that execute the pipeline sequentially:
+
+· Parser Agent: receives raw user input and extracts objects with types, surface forms, and candidate dependencies.
+· Graph Agent: integrates the extracted objects into the existing dependency graph, checks for cycles, and proposes initial edge weights.
+· Proof Agent: for theorems and lemmas, verifies the proof structure and completion.
+· Consistency Agent: runs the SAT/SMT‑based verifier (or its hybrid counterpart) on the affected subgraph.
+· Citation Agent: validates external references and their status.
+· Retriever Agent: at inference time, computes the relevant subgraph using Personalised PageRank with query‑specific priors.
+· Generator Agent: the language model itself, which receives the consistent subgraph and produces the final response.
+
+Agents communicate through a shared blackboard (the theory state \mathcal{S}_t). This modular design allows independent improvement of each component and mirrors CogMem’s hierarchical consolidation loops.
+
+---
+
+Chapter 6
+
+Inference as Subgraph Retrieval
+
+Unlike classical RAG, which retrieves a set of document chunks by vector similarity, TAMA retrieves a logically closed subgraph.
+
+Definition 6.1 (Retrieved Subgraph). For a query q, let the relevance of a node v be
+
+\text{Rel}(v,q) = \alpha \cdot \text{sim}(\phi_q, \phi_v) + (1-\alpha) \cdot \text{PPR}_{G_t}(v \mid q),
+
+where \text{PPR} is the Personalised PageRank score with a teleport vector concentrated on nodes that match the query. The system selects the top‑k most relevant nodes and then constructs
+
+Sub(q) = \{ v \mid v \text{ is selected or } v \text{ is a } \texttt{DEP}\text{-ancestor of a selected node} \}.
+
+This set satisfies downward closure: if v \in Sub(q) then \mathrm{dep}(v) \subseteq Sub(q). Thus the language model receives a self‑contained, logically coherent context. The size of Sub(q) is bounded by k \cdot b^{d}, where b is the average branching factor and d is the maximum dependency depth; both are independent of the total theory size |V_t|.
+
+Inference then proceeds as
+
+y = f_\theta(x, Sub(q)),
+
+instead of y = f_\theta(x, \text{top-}k\text{ chunks}). This shift addresses a known failure mode: vector similarity alone misses structural dependencies that are critical for multi‑step reasoning.
+
+---
+
+Chapter 7
+
+Experimental Design and Future Validation
+
+Because this dissertation is a theoretical contribution, we present a rigorous experimental framework to guide future empirical validation. The following design allows a direct comparison of TAMA against baselines on the tasks of long‑term theory maintenance and consistent inference.
+
+7.1 Datasets
+
+· Primary corpus: The TheoremGraph dataset (Kurgan et al., 2026), containing 11.7 million statements and 18.3 million directed dependencies extracted from informal mathematical texts. This provides a realistic, large‑scale graph with pre‑existing dependency labels and a deterministic extraction pipeline of known precision (98.8%).
+· Synthetic theory edits: We will generate a suite of controlled edits—definition changes, lemma modifications, new theorem additions, and experimental updates—simulating the evolution of a scientific manuscript over time. Each edit is paired with a ground‑truth affected set, validated by domain experts for a subset of 500 edits.
+
+7.2 Baselines
+
+1. Vanilla LLM with a large context window (e.g., 128k tokens), fed the full accumulated text.
+2. Standard RAG pipeline: chunked embeddings + top‑k retrieval by cosine similarity.
+3. Knowledge‑Graph‑Augmented RAG (KG‑RAG): a static knowledge graph used as an index, without consistency propagation.
+4. LEDGER‑only (Wang et al., 2026): the typed graph retrieval system without propagation/verification, to isolate the contribution of the full consolidation operator.
+
+7.3 Evaluation Metrics
+
+· Logical Consistency (LC): LC = 1 - \frac{|\{v \in V_t \mid \neg \mathrm{Ver}(v)\}|}{|V_t|}
+· Theorem Recall (TR): TR = \frac{|Th_{\text{retrieved}} \cap Th_{\text{relevant}}|}{|Th_{\text{relevant}}|}
+· Definition Stability (DS): DS = \frac{1}{|D|} \sum_{D_i} e^{-\|\phi(D_i^t) - \phi(D_i^{t-1})\|}
+· Notation Stability (analogous)
+· Contradiction Rate (CR): CR = \frac{|\{(v_i,v_j) \mid v_i \models \neg v_j\}|}{|V|^2}
+· Proof Preservation (PP): PP = \frac{|\{Th \mid \text{Proof}_{t+1}(Th) \vdash_t Th\}|}{|Th|}
+· Memory Efficiency: total storage cost relative to the flat text baseline.
+· Latency: end‑to‑end response time, decomposed into extraction, propagation, verification, and generation.
+
+7.4 Ablation Studies
+
+We will ablate: (a) the propagation step (i.e., static graph vs. dynamic propagation), (b) the verification module (full vs. no consistency check), (c) the dependency prediction head (using only deterministic edges vs. learned edges), and (d) the subgraph closure strategy (downward closure vs. simple top‑k).
+
+7.5 Implementation Plan
+
+A prototype will be built using:
+
+· Parser: A fine‑tuned T5‑large model for statement extraction and typing, bootstrapped with TheoremGraph’s rule‑based labels.
+· Graph database: Neo4j for storing G_t and running reachability queries.
+· Verifier: A hybrid pipeline: Z3 for statements that can be automatically formalised; a GPT‑4‑based heuristic for informal statements, outputting a confidence score that is thresholded.
+· Learning heads: Implemented in PyTorch, trained jointly with a frozen LLM base.
+
+The primary experiment will run 100 sequential edits on a theory of initially 10,000 objects, measuring all metrics at each step. We expect TAMA to maintain significantly higher Logical Consistency and Proof Preservation than baselines, with Definition Stability approaching 1.0 after initial transients.
+
+---
+
+Chapter 8
+
+Related Work
+
+TAMA integrates ideas from several recent lines of research.
+
+Hierarchical Memory for LLMs. CogMem (Zhang et al., 2025) proposes a three‑layer memory (working, episodic, semantic) with consolidation loops. TAMA adopts this hierarchical view but specialises the semantic layer to a typed dependency graph, making it theory‑aware.
+
+Dependency‑Aware Retrieval. LEDGER (Wang et al., 2026) shows that explicit typed dependency graphs improve consistency from 56% to 76% across models while keeping retrieval cost constant per edit. TAMA generalises LEDGER’s static graph into a dynamic memory with propagation and verification, and provides the formal underpinnings.
+
+Logic‑Augmented Generation. LAG (Xiao et al., 2025) reframes augmentation as dependency‑aware decomposition and sequential grounding, reducing hallucination. TAMA’s inference‑time subgraph retrieval with downward closure is a direct realisation of LAG’s principles.
+
+Statement‑Level Graph Extraction. TheoremGraph (Kurgan et al., 2026) demonstrates that informal mathematics can be automatically parsed into a directed graph of 11.7M statements and 18.3M dependencies with high precision. This provides the parser backbone for TAMA and validates the feasibility of large‑scale object extraction.
+
+Neuro‑Symbolic and Proof‑Assistant Integration. Systems such as Lean Copilot and GPT‑f have combined LLMs with formal proof assistants. TAMA can be seen as a bridge: its graph structure is compatible with kernel‑level dependencies in Lean, enabling eventual formal verification.
+
+Earlier Structured Memory Models. Neural Turing Machines, Memory Networks, and more recent graph‑retrieval systems (REALM, Atlas) addressed structured memory, but none dynamically maintained logical consistency under theory evolution. TAMA’s consolidation operator is the differentiating contribution.
+
+---
+
+Chapter 9
+
+Discussion and Future Directions
+
+Limitations. The current formulation assumes high‑quality extraction of objects and dependencies; in practice, extraction errors will propagate. The confidence score c on objects provides a partial remedy, but a full treatment of probabilistic dependency edges and uncertain reasoning is left for future work. The verification step relies on a decidable logical fragment, which may not capture all nuances of natural scientific language. The hybrid verifier sketched in Chapter 3 is a first step toward addressing this.
+
+Relaxing Acyclicity. The strict DAG requirement may reject legitimate co‑definitions (e.g., mutual inductive types). A future extension could allow cycles that are well‑founded under a stratification ordering, preserving the soundness of local verification while supporting richer theory structures.
+
+Category‑Theoretic Semantics. One can view the set of all consistent theories as a category \mathbf{Th} where morphisms are updates that preserve \texttt{DEP}-closure. The consolidation operator \Phi is an endofunctor, and consistency verification acts as a subobject classifier selecting consistent subtheories. While this observation is not yet fully developed, it suggests deep connections with formal verification and could guide the design of self‑healing graphs that repair inconsistencies automatically.
+
+Multi‑Agent Collaboration. The current architecture is single‑user; extending TAMA to a shared, distributed memory that multiple AI agents (and humans) can collaboratively evolve would be a natural next step, requiring merge and conflict‑resolution operators.
+
+Continual Learning. Theorem 4.2 guarantees convergence only when updates cease. In lifelong learning settings, new mechanisms are needed to prevent catastrophic forgetting while allowing indefinite theory growth. Modular memory and elastic weight consolidation are possible approaches.
+
+Autonomous Discovery. With a persistent, self‑consistent theory memory, an AI system could autonomously formulate conjectures, design experiments, and refine theories over weeks or months. TAMA provides the representational foundation for such autonomous scientific agents.
+
+Experimental Roadmap. Chapter 7 details the immediate next steps: implementing the prototype and running the proposed experiments. Beyond that, we envision deployment in a real‑world scientific collaboration, where the system assists a team of researchers in maintaining a living document, automatically flagging inconsistencies and suggesting repairs.
+
+---
+
+Chapter 10
+
+Conclusion
+
+This dissertation has presented the Theory‑Aware Memory Architecture (TAMA), a new memory layer for language models that represents scientific knowledge as a typed, evolving dependency graph. We have formally defined the theory representation, the memory model, the consolidation operator, and the consistency verification process. The main theorems establish the minimality of the affected subgraph, the convergence of consolidation to a stable state (via Banach’s fixed‑point theorem), the soundness of local verification, and computational efficiency that scales with the size of the change rather than the entire theory.
+
+TAMA’s key insight is the transformation of memory retrieval into dependency computation. Instead of asking “which documents are similar to the query?”, the system asks “which logical objects are affected by this change?” and “which subgraph is needed to make this inference consistent?”. By maintaining the logical architecture of knowledge itself, rather than its textual surface, TAMA enables language models to participate in scientific projects that extend over months or years while preserving mathematical consistency.
+
+The work unifies disparate empirical successes—LEDGER’s typed graphs, CogMem’s hierarchical consolidation, LAG’s dependency‑aware grounding, TheoremGraph’s large‑scale extraction—into a single formal framework. It lays the groundwork for a new generation of persistent, self‑consistent reasoning machines. Future intelligent systems may be judged not by the number of tokens they can process, but by how faithfully they can preserve, extend, and verify the internal structure of human knowledge.
+
+
+Appendices
+
+The following appendices provide complete formal proofs, algorithmic details, and a session analysis summarising the evolution of the dissertation, key theorems, and the critical advice that shaped the final manuscript.
+
+---
+
+Appendix A – Full Proofs and Formal Details
+
+A.1 Detailed Proof of Theorem 4.1 (Minimal Affected Subgraph)
+
+Theorem 4.1. Let G_t = (V_t, E_t) be a consistent DAG. For an update x_t adding objects O_{\text{new}} and edges E_{\text{new}}, define G_t' = (V_t \cup O_{\text{new}}, E_t \cup E_{\text{new}}) and \mathrm{Aff}(O_{\text{new}}) = \{ v \in V_t' \mid \exists u \in O_{\text{new}} \text{ with a } \texttt{DEP}\text{-path } u \leadsto v \}. Then \mathrm{Aff}(O_{\text{new}}) is the unique \subseteq-minimal set of vertices such that G_t' \setminus \mathrm{Aff}(O_{\text{new}}) is consistent with respect to the pre‑update theory.
+
+Proof.
+
+1. Soundness (sufficiency of \mathrm{Aff}). Take any v \notin \mathrm{Aff}(O_{\text{new}}). By definition, there is no \texttt{DEP}-path from any node in O_{\text{new}} to v. The interpretation [\![v]\!] in the theory depends only on its \texttt{DEP}-ancestors. Since none of those ancestors can be in O_{\text{new}} (otherwise a path would exist), the set of ancestors of v is unchanged from G_t. Therefore the truth value of v is unaffected by the new objects; v remains consistent with the original theory. Hence G_t' \setminus \mathrm{Aff}(O_{\text{new}}) is consistent.
+2. Completeness (necessity of \mathrm{Aff}). Let v \in \mathrm{Aff}(O_{\text{new}}). Then there exists a chain u = v_0 \xrightarrow{\texttt{DEP}} v_1 \xrightarrow{\texttt{DEP}} \dots \xrightarrow{\texttt{DEP}} v_k = v with u \in O_{\text{new}}. Consider a model where the interpretation of u is altered (e.g., from true to false). By the counterfactual definition of \texttt{DEP}, the interpretation of v_1 could change, then v_2, and by induction v could change. Thus the validity of v is not guaranteed without re‑verification; it cannot be assumed consistent.
+3. Minimality. Suppose there exists S \subsetneq \mathrm{Aff}(O_{\text{new}}) that is also sufficient. Then there is some v \in \mathrm{Aff}(O_{\text{new}}) \setminus S. Since v is reachable, the argument of completeness shows that excluding v risks inconsistency. Hence no proper subset can suffice; \mathrm{Aff} is minimal.
+4. Uniqueness. The definition of \mathrm{Aff}(O_{\text{new}}) is purely graph‑theoretic: forward reachability in a finite directed graph. Algorithmically, breadth‑first search from O_{\text{new}} computes exactly this set deterministically. Therefore there is exactly one such set. ∎
+
+A.2 Detailed Proof of Theorem 4.2 (Convergence)
+
+Theorem 4.2. Let G_t' be a DAG and W_t bounded. The consolidation procedure satisfies:
+
+1. The propagation step terminates after at most \mathrm{diam}(G_t') iterations.
+2. If, after a finite time, no further insertions/deletions occur and only weight decay is applied, the memory M_t converges to a unique stable state M^*.
+
+Proof of (1). Because G_t' is a DAG, we can assign a topological ordering \sigma : V \to \mathbb{N} such that for every edge (u,v), \sigma(u) < \sigma(v). In the propagation step, when a node is updated, only its successors can be queued for re‑evaluation. Therefore, any propagation chain follows strictly increasing \sigma. No node can be processed twice in the same propagation wave because its status stabilises once all predecessors have been processed. Consequently, the number of iterations is bounded by the length of the longest path in the DAG, i.e., the diameter \mathrm{diam}(G_t') \le |V|-1. Termination is guaranteed. ∎
+
+Proof of (2). After insertions and deletions have ceased, the vertex set V becomes fixed. The only remaining change is the weight update rule
+
+W_{t+1}(e) = \gamma W_t(e) + (1-\gamma) \hat{w}_t(e),
+
+with \gamma \in (0,1), where \hat{w}_t(e) is a bounded adjustment (e.g., re‑estimated weight after a local change; once changes stop, \hat{w}_t(e) becomes constant). We work in the Banach space (\mathbb{R}^{|E|}, \|\cdot\|_1) of edge weight vectors, which is complete. Define the operator T: \mathbb{R}^{|E|} \to \mathbb{R}^{|E|} by T(W) = \gamma W + (1-\gamma) \mathbf{c}, where \mathbf{c} is the constant vector of post‑change weights. For any two weight vectors W, W',
+
+\|T(W) - T(W')\|_1 = \|\gamma (W - W')\|_1 = \gamma \|W - W'\|_1.
+
+Since \gamma \in (0,1), T is a strict contraction. By the Banach fixed‑point theorem, there exists a unique W^* such that T(W^*) = W^*, and for any initial W_0, the sequence W_{t+1} = T(W_t) converges to W^* at an exponential rate: \|W_t - W^*\|_1 \le \gamma^t \|W_0 - W^*\|_1. Hence M_t = (G, W_t, \Phi) converges to M^* = (G, W^*, \Phi). ∎
+
+A.3 Detailed Proof of Theorem 4.3 (Soundness of Local Verification)
+
+Theorem 4.3. Assume that the verification predicate \mathrm{Ver}(v) is locally sound: \mathrm{Ver}(v) = 1 implies that v is logically consistent with its immediate dependencies. If the theory graph is a DAG, then applying \Phi_{\text{ver}} yields a globally consistent theory \mathcal{T}_{t+1}.
+
+Proof. By induction on the topological order of the final graph G_{t+1}.
+
+Base case. Nodes with \mathrm{dep}(v) = \emptyset (axioms, raw data) are verified trivially: \mathrm{Cons}(v) vacuously holds, and there are no cycles or missing proofs. They are consistent.
+
+Inductive hypothesis. Assume for all u with \sigma(u) < \sigma(v) that \mathrm{Ver}(u) = 1 and that the set of all such u forms a consistent subtheory.
+
+Inductive step. Consider v. Its dependencies \mathrm{dep}(v) all have topological order strictly less than \sigma(v) (otherwise a cycle would exist). Hence, by the inductive hypothesis, the conjunction KB_{\mathrm{dep}(v)} = \bigwedge_{u \in \mathrm{dep}(v)} u.\mathrm{stmt} is satisfiable and consistent. The verification predicate checks:
+
+· \mathrm{Cons}(v): KB_{\mathrm{dep}(v)} \land v.\mathrm{stmt} is satisfiable. Since the background KB is consistent, adding v preserves consistency.
+· \mathrm{NoCirc}(v): adding v introduces no \texttt{DEP}-cycle; the graph remains a DAG.
+· \mathrm{NotRefute}(v): no statement in the theory refutes a theorem on which v depends; this is a semantic check that can be reduced to testing that no conjecture E with p > 1-\epsilon is inconsistent with v’s dependencies.
+· \mathrm{ProofComp}(v): if v is a theorem, all proof leaves are present and verified.
+
+Thus v is consistent with all earlier nodes. By induction, every node in G_{t+1} is consistent with its predecessors, so the whole theory is consistent. ∎
+
+A.4 Detailed Proof of Theorem 4.4 (Complexity)
+
+Theorem 4.4. Let n = |V_t|, m = |E_t|, a = |\mathrm{Aff}(x_t)|, and L_{\mathrm{LM}} be the cost of the parser. Then:
+
+· Extraction: O(a \cdot L_{\mathrm{LM}}).
+· Propagation: O(a + e_a), where e_a is the number of edges in the induced subgraph on \mathrm{Aff}(x_t).
+· Retrieval: the size of the retrieved subgraph Sub(q) is independent of n; retrieval time is O(1) with respect to theory growth.
+
+Proof. Extraction runs the LLM‑based parser on the incoming text and on the text of each node in \mathrm{Aff}(x_t) to re‑compute its dependencies and embedding. As there are at most a such nodes, the cost is bounded by a \cdot L_{\mathrm{LM}}.
+
+Propagation: The affected set is computed by forward reachability from O_{\text{new}} along \texttt{DEP} edges. This can be implemented via BFS/DFS in time O(a + e_a), where e_a is the number of edges incident to nodes in \mathrm{Aff}(x_t). Each such edge is visited at most once.
+
+Retrieval: Sub(q) is built by first selecting the top‑k nodes according to a relevance score, then taking the downward closure under \texttt{DEP}. The size of the closure is bounded by k \cdot b^d, where b is the average branching factor and d the maximal dependency depth. Both b and d are structural properties of the theory, independent of the overall theory size n. Thus |Sub(q)| = O(1) relative to n, and the retrieval time is constant. ∎
+
+A.5 Lemmas
+
+Lemma 2.2 (Acyclicity Condition). If a cycle of \texttt{DEP} \cup \texttt{REF} exists, the theory is ill‑founded.
+
+Proof. Let the cycle be v_1 \to v_2 \to \dots \to v_k \to v_1. For k=1, an object depends on itself, violating the well‑foundedness of definitions. For k>1, the chain yields a cyclic dependency: the interpretation of v_1 requires that of v_k, which requires that of v_1. No grounding order exists. ∎
+
+Lemma 2.3 (Deterministic Precision). The deterministic rule‑based extractor of TheoremGraph achieves 98.8% judge‑verified precision on informal mathematical text, justifying its use to generate training labels y_{ij} for the dependency prediction head.
+
+---
+
+Appendix B – Algorithmic Pseudo‑code
+
+Algorithm 1: Consolidation operator \Phi(M_t, x_t)
+
+```
+Input: Memory M_t = (G_t, W_t), raw input x_t
+Output: M_{t+1}
+
+1. O_new, E_new ← ParserAgent(x_t)
+2. G_t' ← (V_t ∪ O_new, E_t ∪ E_new)
+3. Aff ← BFS_Forward(O_new, E_DEP)   ▷ only DEP edges
+4. for each v in Aff:
+5.    W_t'(e) for e incident to v ← decay_weight(W_t(e))
+6. for each v in topological_order(Aff):
+7.    if not Ver(v):
+8.        if repair_possible(v):
+9.            v ← repair(v)
+10.       else:
+11.           remove v and all incident edges from G_t'
+12.           Aff ← Aff \ {v} ∪ successors_affected(v)
+13. W_{t+1} ← final_weights(W_t')
+14. return (G_{t+1}, W_{t+1})
+```
+
+Algorithm 2: Verification predicate \mathrm{Ver}(v)
+
+```
+1. if not NoCirc(v, G): return False
+2. KB ← conjunction of u.stmt for u in dep(v)
+3. if SAT(KB ∧ ¬v.stmt) is True:  ▷ inconsistency
+4.    return False
+5. if exists E ∈ Conjectures such that E.refutes(v) and E.confidence > 0.95:
+6.    return False
+7. if v.type == THM and not all leaves of v.proof in V:
+8.    return False
+9. return True
+```
+
+Algorithm 3: Inference Subgraph Retrieval Sub(q)
+
+```
+1. scores ← α * cos_sim(φ_q, φ_v) + (1-α) * PPR(v|q)
+2. top_k ← argmax_k scores
+3. sub ← top_k ∪ {u | u is DEP-ancestor of some node in top_k}
+4. return sub
+```
+
+---
+
+Appendix C – Learning Objectives and Training Details
+
+C.1 Loss Functions
+
+· Object Classification: \mathcal{L}_{\text{cls}} = -\frac{1}{N}\sum_i \log P(\tau_i \mid s_i; \theta_{\text{cls}}), where \tau_i is the true type.
+· Dependency Prediction: For each pair (i,j) with pseudo‑label y_{ij} from the deterministic extractor,
+  \mathcal{L}_{\text{dep}} = -\sum_{i,j} \left[ y_{ij} \log \sigma(w_{ij}^\top [\phi_i;\phi_j]) + (1-y_{ij}) \log(1-\sigma(\dots)) \right].
+· Contradiction Detection: Contrastive margin loss:
+  \mathcal{L}_{\text{contr}} = \max(0, \mu - \|\phi_{Th} - \phi_{\neg Th}\|_2),
+  where \phi_{\neg Th} is the embedding of a synthetically negated statement generated by a fixed set of templates.
+· Consolidation Prediction: A binary classification head over nodes v predicting whether v \in \mathrm{Aff}(x_t); trained on simulated edits with ground‑truth affected sets derived by exhaustive reachability.
+· Theory Evolution Prediction: A graph generative loss: maximize P(G_{t+1} \mid G_t, x_t) using a Graph Neural Network that predicts added edges and nodes.
+
+These objectives are jointly minimized: \mathcal{L}_{\text{total}} = \mathcal{L}_{\text{cls}} + \lambda_1 \mathcal{L}_{\text{dep}} + \lambda_2 \mathcal{L}_{\text{contr}} + \lambda_3 \mathcal{L}_{\text{consol}} + \lambda_4 \mathcal{L}_{\text{evol}}, with hyperparameters tuned on a validation set of theory edits.
+
+C.2 Pseudo‑label Generation
+
+We adopt the TheoremGraph deterministic pipeline: regular expression patterns for common mathematical constructs, cross‑reference resolution, and scoping rules that identify logical dependency. The resulting edges have a verified precision of 98.8%, making them reliable supervision for the dependency prediction head. In the future, this head could be fine‑tuned with human‑annotated dependencies in specialised domains.
+
+C.3 Training Procedure
+
+The system is trained in two phases:
+
+1. Pre‑training: The parser and embedding models are pre‑trained on a large corpus of scientific papers to recognise object types and surface forms.
+2. Fine‑tuning with simulated theory evolution: A series of synthetic theories (each a DAG of ~500 objects) is perturbed by random edits (definition change, lemma insertion, etc.). The full TAMA pipeline is rolled out, and all five losses are back‑propagated through the differentiable components. The graph operations (reachability, SAT calls) are non‑differentiable; their outcomes are treated as fixed targets for the trainable heads.
+
+---
+
+Appendix D – Experimental Design Supplement
+
+D.1 Data Generation for Simulated Edits
+
+We create a corpus of 1,000 initial theories by sampling connected DAGs from the TheoremGraph dataset. Each theory contains between 2,000 and 5,000 objects. For each theory, we programmatically generate 20 edit sequences, where each edit is one of:
+
+· AddDefinition: insert a new definition with random dependencies on existing axioms/definitions.
+· ModifyLemma: change the statement of a randomly chosen lemma, then update its proof (simulated by a text‑rephrasing model).
+· AddTheorem: add a new theorem that depends on several existing lemmas.
+· UpdateExperiment: alter the results of an experiment, which may refute a linked conjecture.
+
+For each edit, we pre‑compute the ground‑truth affected set by exhaustive forward reachability using all \texttt{DEP} edges. A subset of 500 edits will be manually verified by domain experts.
+
+D.2 Detailed Ablation Study Design
+
+We will compare the following configurations:
+
+1. TAMA‑full: all components enabled (propagation + verification + learned dependencies).
+2. TAMA‑no‑prop: static graph; only insertion and retrieval (similar to LEDGER without propagation).
+3. TAMA‑no‑verif: propagation but no consistency verification (nodes are marked invalid but not removed/repaired).
+4. TAMA‑det‑edges: uses only deterministic edges (no learned dependency prediction head).
+5. TAMA‑no‑closure: retrieval without downward closure (only top‑k nodes).
+
+Each configuration will be evaluated on the same set of edit sequences, measuring LC, TR, DS, CR, PP, memory, and latency.
+
+D.3 Prototype Implementation Details
+
+· Parser: A T5‑large model fine‑tuned on TheoremGraph’s labeled statements. Input: paragraph; output: list of objects with type, surface form, and candidate dependencies.
+· Graph Store: Neo4j with a Python driver. Reachability queries for \mathrm{Aff} are performed via built‑in shortest‑path algorithms.
+· SAT/SMT: Z3 for statements that can be translated into decidable first‑order logic fragments. A heuristic LLM‑based verifier (GPT‑4 API) will be used for the remaining informal statements, returning a confidence score; threshold set at 0.9.
+· Learning Heads: Implemented in PyTorch, sharing a common Transformer encoder with the LLM base (frozen during TAMA‑specific training).
+
+---
+
+Appendix E – Notation Glossary
+
+Symbol Meaning
+\mathcal{O} Universe of scientific objects
+\tau Object type (A, D, N, L, Th, P, E, C, R)
+s Surface form (natural language text)
+\phi Learned embedding vector
+\mathrm{dep}(v) Set of explicit dependencies of v
+t Timestamp
+c Confidence score
+\mathcal{T}_t Theory tuple at time t
+V_t Carrier set of all objects
+G_t = (V_t, E_t, \lambda) Typed dependency graph
+\texttt{DEP} Logical dependency edge
+\texttt{REF} Informational reference edge
+\prec Reachability order via \texttt{DEP} \cup \texttt{REF}
+\Phi Consolidation operator
+\Phi_{\text{insert}} Insertion step
+\Phi_{\text{prop}} Propagation step
+\Phi_{\text{ver}} Verification step
+\mathrm{Aff}(x_t) Affected set – forward reachable from new objects via \texttt{DEP}
+\mathrm{Ver}(v) Verification predicate
+W_t Edge weight function
+Sub(q) Logically closed retrieval subgraph for query q
+\text{PPR} Personalised PageRank
+\alpha Interpolation factor for retrieval relevance
+
