@@ -1,0 +1,494 @@
+MVP Proposal: CRYSTALCORE.OS – Scheduled Delay-Tolerant Routing Engine
+
+---
+
+1. Executive Summary
+
+CRYSTALCORE.OS is a reference implementation of the mathematical framework for scheduled delay‑tolerant networking described in “Mathematical Foundations of Scheduled Delay‑Tolerant Networking”. The project aims to deliver a minimum viable product (MVP) that brings the formal model to life: a deterministic routing engine that computes the earliest possible delivery path for a data bundle through a network of pre‑scheduled contact windows, using the time‑expanded graph (TEG) and Dijkstra’s algorithm proved optimal in the paper.
+
+The MVP will serve as:
+
+· a golden benchmark for heuristic DTN routing algorithms (CGR, SABR),
+· an educational tool for understanding the core mathematics,
+· a foundation for future expansion into multi‑bundle scheduling, capacity‑aware routing, and interplanetary network simulation.
+
+The deliverable includes a Python library, a command‑line interface, example contact plans, and full documentation, all hosted in a public GitHub repository.
+
+---
+
+2. Background & Motivation
+
+Interplanetary and deep‑space networks cannot rely on the TCP/IP handshake model due to extreme propagation delays (minutes to hours) and intermittent connectivity. The theoretical work establishes a rigorous physical‑layer‑aware model:
+
+· Contacts are defined by start/end times, capacity functions derived from the Shannon–Hartley theorem and free‑space path loss, and constant light‑time delays.
+· Bundles carry creation timestamps and lifetimes.
+· Routing reduces to a shortest‑path problem on a Time‑Expanded Graph (TEG) constructed from the contact plan.
+· The TEG construction is provably correct and optimal for single‑bundle earliest delivery.
+
+Real‑world DTN protocols (BPv7, CCSDS SABR, CGR) implement heuristics that approximate this optimum. An exact, open‑source reference implementation is currently lacking. CRYSTALCORE.OS fills this gap, providing a transparent, testable, and extensible core that aligns directly with the mathematics.
+
+---
+
+3. MVP Objectives
+
+1. Core Routing Engine
+      Implement the full TEG construction algorithm (Appendix B) and Dijkstra shortest‑path search, exactly as proved in the paper, for a single bundle and a given contact plan.
+2. Data Model
+      Provide Python classes for:
+   · Nodes, Contacts (with piecewise constant capacity), Bundles.
+   · Time‑Expanded Graph vertices, waiting edges, and transmission edges.
+   · Path representation.
+3. I/O and Validation
+   · Read contact plans and bundles from a well‑defined JSON/YAML format.
+   · Validate that input obeys the model assumptions (e.g., contacts do not overlap for same node pair? Not required, but consistency checks).
+   · Output the computed path as a timeline of hops with start/finish times.
+4. Correctness Assurance
+      Include unit tests that verify:
+   · Exact matches with hand‑calculated simple cases.
+   · Consistency with the lemmas (e.g., any feasible continuous path maps to a TEG path).
+   · Edge cases (bundle too large for any contact, lifetime expiration, multiple possible paths).
+5. Documentation & Examples
+   · README with quickstart.
+   · Jupyter notebook demonstrating a Mars‑Earth relay scenario.
+   · API reference.
+6. GitHub Repository
+      Set up the project with continuous integration (GitHub Actions) for testing and linting, and open the repository for community contributions under a permissive license (MIT).
+
+Out of scope for MVP: Multi‑bundle sequential capacity updating, dynamic contact plan updates, real‑time data streams, GUI, integration with actual DTN stacks (ION, HDTN). These are planned as post‑MVP enhancements.
+
+---
+
+4. Technical Approach
+
+4.1 Architecture
+
+The MVP will be a Python 3.10+ library (crystalcore) with a thin CLI wrapper.
+Dependencies: numpy (for numerical integration if needed), networkx (graph representation and Dijkstra), pydantic (data validation). All of these are well‑supported and lightweight.
+
+The TEG construction will not pre‑compute the full graph eagerly. Instead, it will generate vertices and edges on‑demand during the Dijkstra search to keep memory usage bounded when dealing with large contact plans. This matches the real‑time CGR philosophy while still guaranteeing optimality.
+
+4.2 Data Flow
+
+```
+Contact Plan (JSON) + Bundle (JSON) 
+       → Python objects 
+       → TEG Builder (creates source vertex, explores outgoing edges) 
+       → Dijkstra (with lazy edge generation) 
+       → Earliest arrival time & path
+       → Output (console, JSON, plot)
+```
+
+4.3 Key Algorithms
+
+· Event discretisation: Extract all contact start/end times, add bundle creation time.
+· Contact volume integral: Evaluate piecewise constant capacity to decide transmission feasibility.
+· Transmission edge creation: For a given departure event t_k and contact κ, solve for finish time and target vertex using the exact formula (B.2). Insert new vertex if needed.
+· Dijkstra: Standard min‑priority queue over (arrival_time, vertex). Terminate when any destination vertex is settled and has time ≤ lifetime.
+
+4.4 Example Contact Plan Format (JSON)
+
+```json
+{
+  "nodes": ["Earth", "MarsOrbiter", "MarsRover"],
+  "contacts": [
+    {
+      "from": "Earth",
+      "to": "MarsOrbiter",
+      "start": "2026-07-28T00:00:00",
+      "end": "2026-07-28T04:00:00",
+      "capacity_bps": 420000,
+      "delay_s": 1320.0
+    }
+    ...
+  ]
+}
+```
+
+Bundle:
+
+```json
+{
+  "id": "bundle1",
+  "size_bits": 1000000000,
+  "src": "Earth",
+  "dst": "MarsRover",
+  "create_time": "2026-07-28T00:00:00",
+  "lifetime_s": 86400
+}
+```
+
+---
+
+5. Implementation Plan & Timeline
+
+Sprint 1 (Week 1–2): Foundation
+
+· Repository setup, environment, CI.
+· Data model classes (Node, Contact, Bundle).
+· Contact volume integral computation.
+· Unit tests for physical calculations.
+
+Sprint 2 (Week 3–4): TEG & Dijkstra
+
+· Event discretisation.
+· Lazy TEG edge generator: waiting edges (trivial), transmission edges for each contact/event.
+· Dijkstra implementation using heapq.
+· Basic path reconstruction.
+
+Sprint 3 (Week 5–6): Correctness & Edge Cases
+
+· Comprehensive test suite with known‑answer scenarios.
+· Validate against the proofs (e.g., a TEG path always maps to a feasible continuous plan).
+· Handle bundle too large, expired lifetime, no path.
+
+Sprint 4 (Week 7–8): CLI, Docs, Release
+
+· Command‑line interface (argparse) to run a contact plan + bundle.
+· Jupyter notebook with Mars‑Earth example from Appendix E.
+· Full README, contribution guide, API docs (pdoc).
+· v0.1.0 release.
+
+Total: ~8 weeks part‑time (one developer). After MVP, we will tag issues for multi‑bundle capacity, SABR heuristics comparison, and integration with HDTN/ION via CGR interface.
+
+---
+
+6. Deliverables
+
+1. GitHub Repository – https://github.com/crystalcore-os/crystalcore (suggested) containing:
+   · src/crystalcore/ – library code.
+   · tests/ – pytest suite.
+   · examples/ – sample contact plans and Jupyter notebook.
+   · docs/ – detailed documentation.
+   · cli.py – entry point.
+2. Python Package – publishable to PyPI for easy installation (pip install crystalcore).
+3. Documentation – hosted on GitHub Pages, covering theory, API, and usage examples.
+4. Validation Report – a short document demonstrating that the MVP reproduces the optimal path for the Mars‑Earth scenario described in Appendix E.
+
+---
+
+7. GitHub Repository Setup (Initial Steps)
+
+1. Create organisation/user crystalcore-os and repo crystalcore.
+2. Add .gitignore (Python), LICENSE (MIT), README.md (stub with project goals).
+3. Create initial commit with the proposal (this document) as PROPOSAL.md.
+4. Set up branch protection and CI with GitHub Actions:
+   · Linting (flake8, black)
+   · Testing (pytest)
+5. Invite collaborators and begin Sprint 1.
+
+---
+
+8. Risks & Mitigation
+
+· Performance on large plans: The lazy TEG approach avoids building the full O(M²) graph up front. Dijkstra explores only a small fraction. If needed, we can prune time instants that cannot lead to better paths (e.g., using earliest arrival at each node).
+· Floating point precision: All time and capacity calculations use integer microseconds or decimal.Decimal to guarantee exact volume integrals, avoiding rounding errors.
+· Discrepancies with real CGR: The MVP solves the exact optimal problem; it may find routes that real‑time heuristics miss. This is a feature, not a bug. The documentation will clarify the difference.
+
+---
+
+9. Conclusion
+
+CRYSTALCORE.OS MVP will materialise the rigorous mathematical skeleton of scheduled DTN routing into a reliable, testable, and well‑documented software component. It will empower researchers, network engineers, and educators to explore and validate the theoretical limits of interplanetary communication. The open‑source repository will serve as the starting point for a growing ecosystem of DTN tools, bridging the gap between formal proofs and operational networks.
+
+
+
+Here's the same content fully in English.
+
+---
+
+1. Project Structure
+
+```
+crystalcore/
+├── LICENSE
+├── README.md
+├── PROPOSAL.md
+├── pyproject.toml
+├── .gitignore
+├── .github/
+│   └── workflows/
+│       └── ci.yml
+├── src/
+│   └── crystalcore/
+│       ├── __init__.py
+│       ├── models.py            # Node, Contact, Bundle, Path
+│       ├── physics.py           # Shannon, path loss, contact volume
+│       ├── discretize.py        # Event point extraction
+│       ├── teg.py               # Lazy TEG edges & Dijkstra
+│       ├── router.py            # High-level routing API
+│       └── cli.py               # Command-line interface
+├── tests/
+│   ├── __init__.py
+│   ├── test_models.py
+│   ├── test_physics.py
+│   ├── test_discretize.py
+│   ├── test_teg.py
+│   └── test_router.py
+├── examples/
+│   ├── mars_earth_plan.json
+│   ├── example_bundle.json
+│   └── demo.ipynb
+└── docs/
+    └── api.md
+```
+
+---
+
+2. Code Examples
+
+src/crystalcore/models.py – Data models
+
+```python
+from __future__ import annotations
+from dataclasses import dataclass, field
+from typing import List, Optional
+import datetime
+
+@dataclass
+class Node:
+    name: str
+
+@dataclass
+class Contact:
+    from_node: str
+    to_node: str
+    start: float         # Unix timestamp (seconds) or ISO datetime
+    end: float
+    capacity_bps: float  # bit/s, constant over the window
+    delay_s: float       # one-way light-time, constant
+
+    @property
+    def volume_bits(self) -> float:
+        """Total contact volume in bits."""
+        return self.capacity_bps * (self.end - self.start)
+
+@dataclass
+class Bundle:
+    id: str
+    size_bits: float
+    src: str
+    dst: str
+    create_time: float
+    lifetime_s: float
+
+    @property
+    def expire_time(self) -> float:
+        return self.create_time + self.lifetime_s
+
+@dataclass
+class Hop:
+    contact: Contact
+    departure_time: float
+    finish_time: float      # time when transmission completes
+    arrival_time: float     # finish_time + delay
+
+@dataclass
+class Path:
+    hops: List[Hop]
+    final_arrival: float
+
+    @property
+    def delivery_time(self) -> float:
+        return self.final_arrival
+```
+
+src/crystalcore/discretize.py – Time discretisation
+
+```python
+from typing import List, Set
+from .models import Contact, Bundle
+
+def event_times(contacts: List[Contact], bundle: Bundle) -> List[float]:
+    """Extracts and sorts all significant time instants."""
+    times = set()
+    times.add(bundle.create_time)
+    for c in contacts:
+        times.add(c.start)
+        times.add(c.end)
+    # Could also add bundle.expire_time if needed
+    return sorted(times)
+```
+
+src/crystalcore/physics.py – Volume and transfer time calculation
+
+```python
+def earliest_finish(contact_start: float, contact_end: float,
+                    capacity_bps: float, required_bits: float,
+                    earliest_departure: float) -> float | None:
+    """
+    Returns the earliest possible transmission finish time
+    for a constant‑rate contact, or None if the volume is insufficient.
+    """
+    start = max(earliest_departure, contact_start)
+    if start >= contact_end:
+        return None
+    available_time = contact_end - start
+    max_volume = capacity_bps * available_time
+    if max_volume < required_bits:
+        return None
+    xfer_time = required_bits / capacity_bps
+    return start + xfer_time
+```
+
+src/crystalcore/teg.py – Lazy time‑expanded graph and Dijkstra
+
+```python
+import heapq
+from typing import Dict, List, Tuple, Optional
+from .models import Contact, Bundle, Path, Hop
+from .physics import earliest_finish
+
+def dijkstra_earliest_delivery(contacts: List[Contact],
+                               bundle: Bundle,
+                               event_times: List[float]) -> Optional[Path]:
+    """
+    Dijkstra shortest‑path search on the lazy TEG.
+    Explores states (node, time) on demand.
+    """
+    best = {}   # (node, time) -> earliest known arrival
+    heap = []   # (arrival_time, node, current_time, path_hops)
+    src = bundle.src
+    start_state = (src, bundle.create_time)
+    best[start_state] = bundle.create_time
+    heapq.heappush(heap, (bundle.create_time, src, bundle.create_time, []))
+
+    while heap:
+        arr_time, node, cur_time, hops = heapq.heappop(heap)
+
+        if node == bundle.dst:
+            if arr_time <= bundle.expire_time:
+                return Path(hops=hops, final_arrival=arr_time)
+            continue
+
+        # 1) Waiting: stay at the same node until the next event time
+        next_times = [t for t in event_times if t > cur_time]
+        if next_times:
+            next_t = next_times[0]
+            wait_state = (node, next_t)
+            new_arr = arr_time + (next_t - cur_time)
+            if wait_state not in best or new_arr < best[wait_state]:
+                best[wait_state] = new_arr
+                heapq.heappush(heap, (new_arr, node, next_t, hops))
+
+        # 2) Transmission: evaluate all contacts that depart from 'node'
+        for contact in contacts:
+            if contact.from_node != node:
+                continue
+            if max(cur_time, contact.start) >= contact.end:
+                continue
+            finish = earliest_finish(
+                contact.start, contact.end,
+                contact.capacity_bps, bundle.size_bits,
+                cur_time
+            )
+            if finish is None:
+                continue
+            arrival = finish + contact.delay_s
+            if arrival > bundle.expire_time:
+                continue
+            new_state = (contact.to_node, arrival)
+            new_arr = arrival
+            if new_state not in best or new_arr < best[new_state]:
+                best[new_state] = new_arr
+                new_hops = hops + [Hop(contact=contact,
+                                       departure_time=cur_time,
+                                       finish_time=finish,
+                                       arrival_time=arrival)]
+                heapq.heappush(heap, (new_arr, contact.to_node, arrival, new_hops))
+
+    return None  # no feasible path
+```
+
+src/crystalcore/router.py – High‑level routing API
+
+```python
+from .models import Contact, Bundle, Path
+from .discretize import event_times
+from .teg import dijkstra_earliest_delivery
+
+def route_bundle(contacts: List[Contact], bundle: Bundle) -> Path | None:
+    events = event_times(contacts, bundle)
+    return dijkstra_earliest_delivery(contacts, bundle, events)
+```
+
+src/crystalcore/cli.py – Command‑line interface
+
+```python
+import argparse
+import json
+from .models import Contact, Bundle
+from .router import route_bundle
+
+def main():
+    parser = argparse.ArgumentParser(description='CrystalCore.OS DTN Router')
+    parser.add_argument('plan', help='JSON contact plan file')
+    parser.add_argument('bundle', help='JSON bundle file')
+    args = parser.parse_args()
+
+    with open(args.plan) as f:
+        plan_data = json.load(f)
+    contacts = [Contact(**c) for c in plan_data['contacts']]
+
+    with open(args.bundle) as f:
+        bundle_data = json.load(f)
+    bundle = Bundle(**bundle_data)
+
+    path = route_bundle(contacts, bundle)
+    if path:
+        print(f"Earliest delivery: {path.delivery_time}")
+        for i, hop in enumerate(path.hops):
+            print(f"Hop {i+1}: {hop.contact.from_node} -> {hop.contact.to_node}")
+            print(f"  Depart: {hop.departure_time}, Finish: {hop.finish_time}, Arrive: {hop.arrival_time}")
+    else:
+        print("No feasible path within lifetime.")
+```
+
+Example contact plan (examples/mars_earth_plan.json)
+
+```json
+{
+  "nodes": ["Earth", "MarsOrbiter", "MarsRover"],
+  "contacts": [
+    {
+      "from_node": "Earth",
+      "to_node": "MarsOrbiter",
+      "start": 0.0,
+      "end": 14400.0,
+      "capacity_bps": 420000.0,
+      "delay_s": 1320.0
+    },
+    {
+      "from_node": "MarsOrbiter",
+      "to_node": "MarsRover",
+      "start": 20000.0,
+      "end": 25000.0,
+      "capacity_bps": 2000000.0,
+      "delay_s": 0.1
+    }
+  ]
+}
+```
+
+Example bundle (examples/example_bundle.json)
+
+```json
+{
+  "id": "bundle-001",
+  "size_bits": 1000000000.0,
+  "src": "Earth",
+  "dst": "MarsRover",
+  "create_time": 0.0,
+  "lifetime_s": 500000.0
+}
+```
+
+---
+
+3. Alignment with the MVP
+
+· Physical models: physics.py implements the contact volume and transfer time calculations (Eqs. 1, 2, 3 from the theoretical document).
+· Discretisation: discretize.py extracts all event instants from the contact plan and the bundle creation time.
+· Lazy time‑expanded graph: teg.py never builds the full graph ahead of time. It generates (node, time) states on the fly during Dijkstra (waiting edges + transmission edges). This mirrors the TEG described in Appendix B, with the exact formula (B.2) simplified thanks to constant capacity.
+· Correctness: The algorithm guarantees the earliest possible delivery (Theorem 1) because it explores every feasible state without omitting any solution.
+· Extensibility: The modular design makes it straightforward to add multi‑bundle sequential routing with residual capacity updates (Appendix G) in a future iteration.
+
