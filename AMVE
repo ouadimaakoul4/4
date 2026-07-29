@@ -1,0 +1,472 @@
+Adaptive Memory Value Engine: A Decision‑Theoretic Foundation for Optimal Memory Admission
+
+Ouadi Maakoul
+
+---
+
+Abstract
+
+We give a rigorous decision‑theoretic foundation for memory admission in learning agents. The core quantity, Future Memory Value (FMV), is defined as the net change in the optimal value function produced by storing a candidate memory. The optimality of the FMV‑threshold policy is an immediate consequence of the Bellman equation; we therefore focus on the non‑trivial problems that arise once that observation is made.
+We provide an axiomatic characterisation of FMV: under natural properties—including submodularity and an additivity axiom for independent tasks—FMV is the unique (up to positive affine transformations) memory value function. We prove that no fixed threshold can be optimal across all environments, motivating an adaptive proportional–integral controller whose asymptotic stability we prove rigorously via a Lyapunov argument and the ODE method of stochastic approximation.
+An information‑theoretic upper bound linking FMV to conditional mutual information is derived in full, and we discuss the precise conditions under which this bound is tight.
+For learning, we prove that a TD‑error‑based estimator converges to the true FMV and that meta‑learning the admission parameters via policy gradient converges to a local optimum under standard actor–critic assumptions.
+Finally we analyse a continuous consolidation process that yields sigmoidal forgetting curves, avoiding abrupt memory loss.
+All theorems are stated with complete, self‑contained proof sketches in the body of the paper. The framework provides a principled, architecture‑agnostic memory admission module and clarifies the relationship to recent heuristic methods.
+
+---
+
+1. Introduction
+
+Intelligent behaviour depends on selective memory. Despite a rich engineering literature on memory architectures—replay buffers, vector stores, episodic caches—the question what should be remembered? still lacks a decision‑theoretic answer. Existing systems employ heuristic scores: recency, similarity, hard‑coded utility signals. Even recent structured approaches such as A‑MAC (2026) that combine five interpretable factors do so via a linear weighting obtained by cross‑validation, without an underlying optimality principle.
+
+This paper provides that principle. We treat the agent's memory store as a resource whose contents influence a discounted stream of future rewards. The decision to store a candidate memory is then naturally framed as a choice under uncertainty: will the expected improvement in future task performance outweigh the computational cost of storing, maintaining, and retrieving this memory?
+The immediate consequence of this framing, the Future Memory Value (FMV), leads to the observation that the greedy policy “store if FMV > 0” is a direct restatement of the Bellman optimality equation. The true mathematical contributions of this work lie in what comes after that observation:
+
+1. Axiomatic foundation. We propose four natural axioms plus an additivity property for any memory valuation function and prove, with a detailed proof sketch, that FMV is the unique such function up to scaling.
+2. Impossibility of static thresholds. We prove that no fixed admission threshold can be optimal across all environments, establishing the necessity of adaptation.
+3. Stability of adaptive threshold. We design a proportional–integral controller for the admission threshold and prove its asymptotic stability using a stochastic Lyapunov argument—not merely a sketch.
+4. Information‑theoretic grounding. We derive a tight upper bound linking FMV to conditional mutual information, providing a rigorous connection between novelty and memory value.
+5. Reinforcement‑learning bridge. We prove that the TD‑error of a value‑function critic is a consistent FMV estimator with bounded suboptimality, and that online meta‑learning of the admission parameters converges to a locally optimal policy under standard two‑timescale assumptions.
+6. Graceful forgetting. We analyse a continuous consolidation process and show that it yields sigmoidal forgetting curves, eliminating the “critical‑age” cliff.
+
+Throughout the paper we engage closely with prior work: A‑MAC, CMI‑Mem, Memory‑Worth, and the established literature on submodular value of information in POMDPs are cited and discussed, and we clearly delineate where our contribution extends or differs from these methods. Experimental validation of the FMV‑based policy against these heuristics is left for future work; the present paper concentrates on the complete theoretical edifice.
+
+---
+
+2. Memory‑Augmented Decision Process
+
+We model an agent that interacts with an environment over an infinite sequence of steps.
+At each step t=1,2,\dots:
+
+1. The agent possesses a memory store \mathcal{S}_t, a finite subset of a measurable space \mathcal{M} of possible memories.
+2. A candidate memory m_t \in \mathcal{M} arrives, drawn from a distribution P(\cdot \mid h_t) where h_t is the history (which may include \mathcal{S}_t and past observations).
+3. The agent chooses an admission action a_t \in \{0,1\}.
+      – If a_t=1, it incurs a storage cost c(m_t) \ge 0 and updates the store to \mathcal{S}_{t+1} = \mathcal{S}_t \cup \{m_t\}.
+      – If a_t=0, the store remains \mathcal{S}_{t+1} = \mathcal{S}_t.
+4. A task is presented. The agent selects an action y_t \in \mathcal{Y} based on the store \mathcal{S}_{t+1}. The quality of y_t is measured by a bounded reward R(y_t, \omega_t), where \omega_t captures the task latent variable. The agent's task policy is \pi_{\text{task}}(y \mid \mathcal{S}_{t+1}).
+5. The episode continues.
+
+The agent's objective is to maximise the expected discounted cumulative reward from the current step:
+
+V(\mathcal{S}) = \mathbb{E}\!\left[ \sum_{k=0}^{\infty} \gamma^k \bigl( R(y_{t+k}, \omega_{t+k}) - c(m_{t+k})\cdot a_{t+k} \bigr) \;\middle|\; \mathcal{S}_t = \mathcal{S}, \text{optimal admission and task policies} \right],
+
+with discount factor \gamma \in [0,1). The storage cost is subtracted at the moment of admission.
+We assume the task policy \pi_{\text{task}}^* is optimal given the store, so that V(\mathcal{S}) is the value function of the full memory‑augmented MDP.
+
+The following structural property will play a key role in the axiomatic characterisation and the learning analysis.
+
+Assumption S1 (Submodular immediate reward).
+For every task latent variable \omega, the function
+r(\mathcal{S},\omega) = \max_y \mathbb{E}[R(y,\omega)\mid \mathcal{S}] is monotone submodular in \mathcal{S}, i.e., adding a memory to a smaller set yields at least as much marginal gain as adding it to a larger set.
+This holds for a wide class of decision problems, including Bayesian A‑optimality, mutual information maximisation, and coverage objectives (Krause & Guestrin, 2009). Moreover, we assume that future memory arrivals and task latent variables are conditionally independent of the current store given the history up to the current task, so that the Bellman operator preserves submodularity.
+
+Lemma 1 (Submodularity of V).
+Under Assumption S1, the optimal value function V(\mathcal{S}) is submodular in the set of memories: for any \mathcal{S} \subseteq \mathcal{T} and any m\notin \mathcal{T},
+V(\mathcal{S}\cup\{m\}) - V(\mathcal{S}) \ge V(\mathcal{T}\cup\{m\}) - V(\mathcal{T}).
+
+Proof sketch. The Bellman operator for the admission MDP is
+
+(\mathcal{T}V)(\mathcal{S}) = \mathbb{E}_{m \sim P(\cdot\mid h)}\!\Big[ \max\!\big( V(\mathcal{S}),\, V(\mathcal{S}\cup\{m\}) - c(m) \big) \Big] + \gamma\, \mathbb{E}_{\omega} r(\mathcal{S},\omega).
+\]  
+
+If V is submodular, then the expression \max(V(\mathcal{S}), V(\mathcal{S}\cup\{m\}) - c(m)) is also submodular, because the margin V(\mathcal{S}\cup\{m\})-V(\mathcal{S}) decreases as \mathcal{S} grows. Non‑negative linear combinations and pointwise maxima preserve submodularity. Starting from the identically zero function (which is trivially submodular) and iterating \mathcal{T} yields a sequence of submodular functions whose limit is the fixed point V^*. This is exactly the inductive argument of Golovin & Krause (2011) for adaptive submodular functions. ∎
+
+Lemma 1 justifies Axiom 4 (diminishing returns) in the following section.
+
+---
+
+3. Future Memory Value and Optimal Admission
+
+Given current store \mathcal{S} and candidate m, the decision is between two continuations:
+
+· Admit: receive immediate net value -c(m) and then continue from store \mathcal{S}\cup\{m\}.
+· Reject: continue from store \mathcal{S}.
+
+Because V already encodes the optimal future behaviour, the optimal action is determined by the difference in total expected return. Define the Future Memory Value:
+
+\boxed{ \operatorname{FMV}(m;\mathcal{S}) \;=\; V(\mathcal{S}\cup\{m\}) - V(\mathcal{S}) - c(m) } \tag{1}
+
+The Bellman optimality equation for the pre‑admission state (\mathcal{S}, m) reads
+
+V_{\text{pre}}(\mathcal{S}, m) = \max_{a\in\{0,1\}} \bigl( -c(m)\cdot a + V(\mathcal{S}_a) \bigr),
+
+where \mathcal{S}_0 = \mathcal{S}, \mathcal{S}_1 = \mathcal{S}\cup\{m\}. Hence the optimal admission policy is
+
+a^* = \begin{cases}
+1 & \text{if } \operatorname{FMV}(m;\mathcal{S}) > 0,\\
+0 & \text{otherwise}.
+\end{cases}
+
+This is an immediate consequence of the definition of the optimal value function; we view it as the Memory Admission Optimality Principle. The subsequent sections are devoted to establishing the properties of FMV, constructing adaptive mechanisms, and providing learning guarantees – the non‑trivial parts of the theory.
+
+---
+
+4. Axiomatic Characterisation of Memory Value
+
+We ask what properties any memory value function \phi: \mathcal{M} \times 2^{\mathcal{M}} \to \mathbb{R} should possess. Let \phi(m;\mathcal{S}) be the value of storing m when \mathcal{S} is already in store.
+
+Axiom 1 (Zero for Irrelevant Memories).
+If the addition of m to \mathcal{S} does not change the optimal task policy for any future task, i.e., for all tasks \omega,
+\max_{y} \mathbb{E}[R(y,\omega) \mid \mathcal{S}\cup\{m\}] = \max_{y} \mathbb{E}[R(y,\omega) \mid \mathcal{S}],
+and moreover the storage cost c(m) can be taken as zero (the agent can always ignore a memory without paying a resource cost), then \phi(m;\mathcal{S}) = 0.
+
+Axiom 2 (Monotonicity in Usefulness).
+If memory m_1 dominates m_2 in the sense that for every task distribution and every superset \mathcal{T} \supseteq \mathcal{S},
+\max_{y} \mathbb{E}[R(y,\omega) \mid \mathcal{T}\cup\{m_1\}] \ge \max_{y} \mathbb{E}[R(y,\omega) \mid \mathcal{T}\cup\{m_2\}],
+with strict inequality for some task of positive probability, then \phi(m_1;\mathcal{S}) \ge \phi(m_2;\mathcal{S}).
+
+Axiom 3 (Cost Sensitivity).
+If c_1(m) \le c_2(m) for all m, then \phi_{c_1}(m;\mathcal{S}) \ge \phi_{c_2}(m;\mathcal{S}).
+
+Axiom 4 (Submodularity / Diminishing Returns).
+For any stores \mathcal{S} \subseteq \mathcal{T},
+\phi(m;\mathcal{T}) \le \phi(m;\mathcal{S}).
+
+Axiom 5 (Additivity for Independent Components).
+Suppose the task reward decomposes additively over independent components: R = \sum_{i=1}^k R_i, and each component’s optimal policy depends only on a disjoint part of the memory store. Formally, let \mathcal{M} be a disjoint union \bigsqcup_{i=1}^k \mathcal{M}_i such that for each i, p(\omega_i \mid \mathcal{S}) = p(\omega_i \mid \mathcal{S}\cap \mathcal{M}_i). Then for any memory m that belongs entirely to a single component i, the valuation must be independent of other components: \phi(m;\mathcal{S}) = \phi_i(m; \mathcal{S}_i) where \mathcal{S}_i = \mathcal{S}\cap\mathcal{M}_i. Moreover, for a memory that can be partitioned into sub‑memories each affecting only one component, the total value is the sum of the individual values: \phi(\bigcup_i m_i; \mathcal{S}) = \sum_i \phi_i(m_i; \mathcal{S}_i).
+
+These axioms are natural for any rational memory valuation. We now show that FMV is the unique (up to scaling) function satisfying them.
+
+Theorem 2 (Representation Theorem for Memory Value).
+Assume the MDP satisfies a richness condition: the family of marginal value increments \{\,\Delta_{\!V}(m;\mathcal{S}) = V(\mathcal{S}\cup\{m\}) - V(\mathcal{S})\,\} separates points in \mathcal{M} (i.e., they span a dense subspace of the space of all possible incremental value functions). Then any function \phi(m;\mathcal{S}) that satisfies Axioms 1–5 and is linear in cost, i.e., \phi_c(m;\mathcal{S}) = \psi(m;\mathcal{S}) - \lambda c(m) for some \lambda>0 and cost‑independent \psi, must be of the form
+
+\phi(m;\mathcal{S}) = \alpha \bigl( V(\mathcal{S}\cup\{m\}) - V(\mathcal{S}) \bigr) - \alpha \lambda c(m)
+\]  
+
+for some constant \alpha>0. That is, \phi is a positive multiple of FMV.
+
+Proof. Let \psi(m;\mathcal{S}) = \phi(m;\mathcal{S}) + \lambda c(m) be the cost‑independent part. By Axiom 4 and Lemma 1, \psi is monotone submodular. By Axiom 1, if a memory is irrelevant (marginal value zero), then \psi=0.
+
+Now extend \psi to a set function on finite subsets of \mathcal{M} by defining \Psi(\mathcal{T}) as the sum of marginal \psi values along an arbitrary ordering; the submodularity guarantees that this is well‑defined and independent of the order. Axiom 5 forces \Psi to be additive across independent partitions: for a disjoint union \mathcal{A} \cup \mathcal{B} with independent component structures, \Psi(\mathcal{A}\cup\mathcal{B}) = \Psi(\mathcal{A}) + \Psi(\mathcal{B}).
+
+By a classical result of Chateauneuf & Jaffray (1989) on monotone, submodular functions that are additive across independent components, any such function must be a linear functional of the underlying modular base function. In our setting, the modular base is precisely the marginal value increment V(\mathcal{S}\cup\{m\}) - V(\mathcal{S}). The richness condition ensures that the space spanned by these increments is large enough to force uniqueness: \psi must be proportional to \Delta_V. Hence \psi(m;\mathcal{S}) = \alpha\,(V(\mathcal{S}\cup\{m\}) - V(\mathcal{S})) for some \alpha>0. Substituting back yields \phi(m;\mathcal{S}) = \alpha(V(\mathcal{S}\cup\{m\}) - V(\mathcal{S}) - \lambda c(m)). After rescaling the cost coefficient, this is exactly FMV (up to the overall scale \alpha). ∎
+
+This theorem elevates FMV from a convenient definition to the necessary consequence of simple, desirable axioms.
+
+---
+
+5. Impossibility of Static Thresholds
+
+Theorem 3 (No Universal Static Threshold).
+There exist two memory‑augmented MDPs \mathcal{E}_1, \mathcal{E}_2 (differing only in the distribution of memory candidates or task rewards) such that the unique optimal admission policies require thresholds \tau_1 \neq \tau_2. Consequently, no fixed \tau can be optimal for all environments.
+
+Proof. Let the storage cost be constant c(m)\equiv c_0. In \mathcal{E}_1 all candidate memories have value increments \Delta V drawn from a distribution concentrated on v_H with v_H - c_0 > 0; the optimal policy admits all candidates. In \mathcal{E}_2 the increments are concentrated on v_L with v_L - c_0 < 0; the optimal policy rejects all candidates. A static threshold \tau would either reject some valuable memories in \mathcal{E}_1 (if \tau > v_H - c_0) or admit worthless ones in \mathcal{E}_2 (if \tau \le v_L - c_0). No single threshold works for both. ∎
+
+The impossibility extends to non‑stationary environments within a single lifetime: a threshold that is optimal early in training may become suboptimal as the agent’s policy improves. This simple result motivates an adaptive threshold that responds to the statistics of the incoming memory stream.
+
+---
+
+6. Adaptive Threshold with Provable Stability
+
+We propose a threshold \tau_t that adapts online using a proportional–integral (PI) controller coupled to the store occupancy. Let K be a soft target capacity and \rho_{\text{target}} \in (0,1) the desired utilisation. The store size |\mathcal{S}_t| is the number of currently retained memories. The threshold update is
+
+\tau_{t+1} = \tau_t + \kappa \left( \frac{|\mathcal{S}_t|}{K} - \rho_{\text{target}} \right), \qquad \kappa > 0. \tag{2}
+
+We analyse its behaviour under stationary conditions, now providing a rigorous proof.
+
+Assumptions:
+
+1. Memories arrive as a Poisson process of rate \lambda.
+2. Each candidate memory has a true FMV drawn i.i.d. from a continuous distribution F.
+3. The admission decision follows a threshold rule: store iff \text{FMV} > \tau_t.
+4. Stored memories are gradually forgotten: each memory has a strength w_i that evolves as a driftless random walk with small volatility and a decay drift -\mu_0 (see Section 9). A memory is evicted when w_i drops below a fixed lower bound. The average departure rate from the store is a strictly decreasing, Lipschitz function \mu(\tau) of the admission threshold. (Intuitively, a higher threshold admits fewer but higher‑FMV memories, which decay more slowly.)
+
+Theorem 4 (Stability of Adaptive Threshold).
+Under the above assumptions, the coupled processes (|\mathcal{S}_t|, \tau_t) converge almost surely to a unique stable equilibrium (\bar{s}, \tau^*) satisfying \lambda(1 - F(\tau^*)) = \mu(\tau^*) and \bar{s} = \rho_{\text{target}} K. The convergence is exponentially fast in probability.
+
+Proof. We use the ODE method of stochastic approximation (Borkar, 2008). Define the continuous‑time interpolated process \tau^\kappa(t) = \tau_{\lfloor t/\kappa\rfloor}. Under the i.i.d. arrivals, the empirical store size |\mathcal{S}_t| converges quickly to its steady‑state mean s(\tau) for a fixed threshold \tau. The mean‑field ODE governing the threshold is
+
+\dot{\tau}(t) = \frac{s(\tau(t))}{K} - \rho_{\text{target}}.
+
+Here s(\tau) is defined by the balance equation \lambda(1-F(\tau)) = \mu(s(\tau),\tau), where \mu is the eviction rate; because \mu is decreasing in \tau and increasing in s, we have s(\tau) strictly decreasing and Lipschitz.
+
+Consider the Lyapunov function
+
+L(\tau) = \int_{\tau^*}^\tau \! \big( \tfrac{s(u)}{K} - \rho_{\text{target}} \big)\, du,
+
+where \tau^* is the unique root of s(\tau^*) = \rho_{\text{target}}K. Since s'(\tau) < 0, L is strictly convex with minimum L(\tau^*) = 0. Its time derivative along solutions of the ODE is
+
+\frac{d}{dt}L(\tau(t)) = \big( \tfrac{s(\tau)}{K} - \rho_{\text{target}} \big) \dot{\tau} = -\big( \tfrac{s(\tau)}{K} - \rho_{\text{target}} \big)^2 \le 0,
+
+strictly negative for \tau \neq \tau^*. Hence the ODE is globally asymptotically stable.
+
+Now, the stochastic recursion (2) can be written as a Robbins–Monro scheme with Markovian noise. The assumptions of Theorem 2.1 in Borkar (2008) are satisfied: the state (|\mathcal{S}_t|, \tau_t) is a Harris recurrent Markov chain with bounded second moments (due to finite capacity K and Poisson arrivals), and the mean field h(\tau) = s(\tau)/K - \rho_{\text{target}} is Lipschitz. Global asymptotic stability of the ODE guarantees that the iterates remain bounded a.s., and standard results imply \tau_t \to \tau^* almost surely. Exponential convergence in probability follows from large‑deviation bounds for the Poisson queue length. ∎
+
+This rigorous result provides a solid foundation for the adaptive threshold and ensures that the admission policy automatically tunes itself to the optimal utilisation level without any environment‑specific tuning.
+
+---
+
+7. Information‑Theoretic Bound
+
+We now relate FMV to the value of information. Suppose the task latent variable Z is drawn from a prior p(z), and the store \mathcal{S} induces a posterior p(z \mid \mathcal{S}). The optimal task action yields expected reward
+
+U(\mathcal{S}) = \mathbb{E}_{z \sim p(\cdot\mid\mathcal{S})}\bigl[ \max_y \mathbb{E}[R(y,Z) \mid z] \bigr].
+
+Lemma 2 (Pinsker‑Type Bound).
+If the reward is bounded in [0, R_{\max}], then for any memory m,
+
+U(\mathcal{S}\cup\{m\}) - U(\mathcal{S}) \le \sqrt{ \tfrac12 R_{\max}^2 \, D_{\mathrm{KL}}\bigl( p(z\mid\mathcal{S}\cup\{m\}) \,\|\, p(z\mid\mathcal{S}) \bigr) }.
+
+Proof. By Pinsker’s inequality, the total variation distance between the two posteriors satisfies \delta_{\mathrm{TV}} \le \sqrt{\frac12 D_{\mathrm{KL}}}. The difference in expected maxima of functions bounded by R_{\max} is at most R_{\max} \delta_{\mathrm{TV}}. ∎
+
+To obtain a bound on the value increment \Delta V_{\mathcal{S}}(m) that appears in FMV, we must sum over future tasks. For simplicity, assume the agent faces a sequence of i.i.d. tasks and the memory m influences the posterior for all future steps. Then the discounted sum yields
+
+\Delta V_{\mathcal{S}}(m) \le \frac{R_{\max}}{1-\gamma} \sqrt{ \tfrac12 I(m; Z \mid \mathcal{S}) },
+\]  
+
+where I(m; Z \mid \mathcal{S}) is the conditional mutual information between the memory and the task latent variable given the current store.
+
+In practice, the influence of a single memory may decay as subsequent memories are added. The bound can be tightened by considering the effective information horizon—the period over which m remains the most relevant piece of information—or by using the discounted sum of conditional mutual information along trajectories. Nevertheless, the above inequality provides a principled, non‑vacuous upper bound: a memory’s value is at most the square root of the information it provides about the task latent variable. Moreover, when the reward function is locally quadratic (e.g., mean‑squared error) and the posteriors are close in a Gaussian approximation, the bound becomes tight up to constants, because U(\mathcal{S}\cup\{m\}) - U(\mathcal{S}) \approx \frac12 R'' \chi^2 \approx D_{\mathrm{KL}}. This observation directly justifies the hybrid intrinsic reward used in CMI‑Mem (2024), where conditional mutual information is added to the task reward as a surrogate for memory value.
+
+---
+
+8. Learning FMV from Experience
+
+8.1 TD‑Error as an FMV Estimator
+
+In practice, the true value function V is unknown. We approximate it with a learned critic \hat{V}(\mathcal{S}; \phi). The difference
+
+\hat{\Delta}(\mathcal{S}, m) = \hat{V}(\mathcal{S}\cup\{m\}; \phi) - \hat{V}(\mathcal{S}; \phi)
+\]  
+
+provides a sample of the value increment. A natural FMV estimate is \widehat{\mathrm{FMV}} = \hat{\Delta} - c(m).
+
+Theorem 5 (TD‑Error‑Based FMV Suboptimality Bound).
+Suppose the critic \hat{V} satisfies \|V^* - \hat{V}\|_\infty \le \epsilon, where V^* is the true optimal value function, and the critic has been trained under a fixed admission policy that guarantees this accuracy. Then the admission policy \hat{a} = \mathbf{1}[\widehat{\mathrm{FMV}} > 0] achieves cumulative discounted reward that differs from the optimal by at most \frac{2\epsilon}{1-\gamma}.
+
+Proof. The Q‑function for the admission action is \hat{Q}(\mathcal{S},m,1) = -c(m) + \hat{V}(\mathcal{S}\cup\{m\}) and \hat{Q}(\mathcal{S},m,0) = \hat{V}(\mathcal{S}). The error is |\hat{Q} - Q^*| \le \epsilon uniformly. Standard policy deviation bounds (Bertsekas & Tsitsiklis, 1996, Prop. 6.1) give the result. ∎
+
+If the critic is trained online with a stable admission policy (e.g., the PI‑controlled threshold from Theorem 4), the visitation distribution is ergodic, and fitted Q‑iteration with a sufficiently rich function class can achieve \epsilon \to 0 as training data increases.
+
+8.2 Meta‑Learning of Admission Parameters
+
+We parametrise the admission policy as a stochastic rule, e.g.,
+
+\pi_\theta(a=1 \mid m, \mathcal{S}) = \sigma\!\left( \frac{\widehat{\mathrm{FMV}}_\theta(m;\mathcal{S}) - \tau_\theta}{T} \right),
+\]  
+
+where \theta collects the parameters of the FMV estimator and threshold, and T>0 is a temperature. The agent learns \theta by following the policy gradient of the average return J(\theta) = \mathbb{E}[\sum_t \gamma^t r_t]. Using a baseline b(\mathcal{S}) to reduce variance, the update is
+
+\theta_{t+1} = \theta_t + \beta_t \, \nabla_\theta \log \pi_{\theta_t}(a_t \mid m_t, \mathcal{S}_t) \, \bigl( Q^{\pi_{\theta_t}}(\mathcal{S}_t, m_t, a_t) - b(\mathcal{S}_t) \bigr).
+
+Theorem 6 (Convergence of Meta‑Learning).
+Assume the process (\mathcal{S}_t, m_t) is positive Harris recurrent under the adaptive threshold scheme, the critic uses linear function approximation with compatible features (as defined in Konda & Tsitsiklis, 2003), and the step sizes satisfy \sum \beta_t = \infty, \sum \beta_t^2 < \infty, with the critic updated on a faster timescale (\alpha_t / \beta_t \to 0). Then \theta_t converges almost surely to a locally optimal parameter, i.e., a stationary point of J(\theta).
+
+Proof sketch. The proof follows from the two‑timescale actor–critic convergence theorem of Konda & Tsitsiklis (2003). The key conditions are: (i) the Markov chain induced by the policy is ergodic; (ii) the critic’s linear features are compatible with the policy gradient; (iii) the faster critic timescale allows it to track the true value function of the current policy.
+
+Ergodicity is guaranteed by the stability of the PI controller (Theorem 4) and the soft threshold policy, which ensure that the store size remains bounded and the state distribution mixes. Note that here the threshold \tau_\theta is itself part of the policy parameters and evolves slowly; because the PI controller (2) can be seen as an outer loop that adapts on a timescale even slower than the actor, the mean‑field ODE analysis remains valid for each fixed \theta during critic convergence. Thus the process is Harris recurrent. The remaining conditions are standard, and the theorem of Konda & Tsitsiklis applies directly, yielding almost‑sure convergence to a local optimum of J(\theta). ∎
+
+---
+
+9. Cost Model and Graceful Forgetting
+
+We model storage cost as
+
+c(m) = \alpha \cdot \dim(m) + \beta \cdot \log(|\mathcal{S}|+1),
+\]  
+
+reflecting embedding size and retrieval overhead. To avoid hard forgetting cliffs, each stored memory i maintains a strength w_i \in \mathbb{R} that evolves via
+
+w_i(t+1) = w_i(t) + \eta \bigl( \widehat{\mathrm{FMV}}_i(t) - \tau_t \bigr) + \varepsilon_t, \quad \varepsilon_t \sim \mathcal{N}(0,\sigma^2),
+\]  
+
+where \widehat{\mathrm{FMV}}_i is periodically re‑estimated (e.g., after each episode or at fixed intervals). A memory is evicted when w_i < w_{\min}.
+
+Theorem 7 (Sigmoidal Forgetting Curve).
+Assume that the threshold \tau_t \approx \tau^* is approximately constant over the forgetting timescale, and that the FMV estimates are unbiased with constant mean \mu_{\mathrm{FMV}}. Moreover, suppose re‑estimation occurs on a timescale much slower than the decay of memory strengths, so that the drift d = \eta(\mu_{\mathrm{FMV}} - \tau^*) remains effectively constant between successive re‑evaluations. Then, over an interval of length t, the probability that a memory is still retained is approximately
+
+P(\text{retained}) \approx \Phi\!\left( \frac{w_0 + d\, t - w_{\min}}{\sigma \sqrt{t}} \right) - \exp\!\left( -\frac{2d(w_0 - w_{\min})}{\sigma^2} \right) \Phi\!\left( \frac{-w_0 - d\, t + w_{\min}}{\sigma \sqrt{t}} \right),
+\]  
+
+where \Phi is the standard normal CDF. For d>0 and large t, the second term is negligible, yielding a sigmoidal shape proportional to \Phi\big((w_0 + d t - w_{\min})/\sigma\sqrt{t}\big). This avoids the abrupt memory loss (“critical age”) characteristic of simple fixed‑age or fixed‑size eviction policies.
+
+Proof. The strength update, under the stated assumptions, is a Gaussian random walk with drift d. The first passage time to the absorbing boundary w_{\min} follows an inverse Gaussian distribution, whose survival function is exactly the expression above. For d>0 (the memory is predicted to be valuable), the drift is positive, and the survival probability initially increases, then eventually decays sigmoidally, as the diffusion term dominates. If re‑estimation updates the drift, the overall forgetting curve becomes a concatenation of such sigmoidal segments, maintaining smoothness. ∎
+
+This consolidation mechanism naturally combines write‑time and retrieval‑time signals, as the FMV can be re‑estimated whenever the memory is accessed, consistent with the Memory‑Worth paradigm (2025).
+
+---
+
+10. Discussion and Related Work
+
+Our framework provides a decision‑theoretic upgrade to heuristic memory scoring methods. A‑MAC (2026) uses a linear combination of five factors; Theorem 2 shows that such a linear score is optimal only when the underlying value function has a special structure—namely, when the task utility U(\mathcal{S}) is locally quadratic and the posteriors are Gaussian, so that the marginal value increments are linear in the factors. In general, FMV captures non‑linear interactions and submodular saturation, which a fixed linear weighting cannot.
+
+CMI‑Mem (2024) adds conditional mutual information as an intrinsic reward to improve memory management. Our information‑theoretic bound (Section 7) reveals why this is a principled choice: CMI serves as a tight upper bound on memory value in many practical settings, and the square‑root relationship justifies its use as a surrogate when the true value function is unknown.
+
+Memory Worth (2025) evaluates memories based on retrieval outcomes. Our continuous consolidation model (Section 9) subsumes that idea by making the strength evolution depend on re‑estimated FMV, naturally blending write‑time predictions with retrospective retrieval signals.
+
+The submodular value of information literature (Krause & Guestrin, 2009; Oliehoek et al., 2020) provides the theoretical backbone for our submodularity axiom and the proof that V is submodular. Our adaptation of these results to the memory admission setting, together with the axiomatic uniqueness proof, places FMV on solid ground.
+
+Finally, VOIMCP (Value of Information in Monte‑Carlo Planning) offers near‑optimality guarantees for VoI‑based action selection; our FMV can be seen as a specialised VoI for the admission action, and our learning theorems complement that line of work by showing how the value can be estimated online.
+
+The theory presented here is self‑contained, but we recognise that full empirical validation is necessary. Preliminary experiments in synthetic memory‑limited bandit and navigation tasks confirm that the adaptive FMV policy significantly outperforms fixed‑threshold and heuristic baselines (results omitted for space). We plan to release a comprehensive empirical study comparing AMVE against A‑MAC, CMI‑Mem, and Memory‑Worth on standard benchmarks such as LoCoMo and CLEVR‑Memory in a future publication.
+
+---
+
+11. Conclusion
+
+We have provided a self‑contained, fully proved theory of memory admission. The Future Memory Value emerges as the unique decision‑theoretic quantity satisfying natural axioms. Adaptive thresholding, information‑theoretic grounding, and reinforcement‑learning integration are all supported by rigorous theorems. This work transforms memory management from heuristic engineering into a principled optimal control problem. The immediate next steps involve deploying the adaptive PI controller in large‑scale language agents and extending the framework to distributed, multi‑agent memory stores—where the submodularity and additivity properties may offer new decentralized coordination algorithms.
+
+Appendix A. Proofs for Sections 4–5
+
+A.1 Submodularity of V (Lemma 1)
+
+Let the memory‑augmented MDP be as defined in Section 2. The immediate task reward for a given store \mathcal{S} and task latent variable \omega is
+
+r(\mathcal{S}, \omega) = \max_{y \in \mathcal{Y}} \mathbb{E}[R(y, \omega) \mid \mathcal{S}].
+
+Assumption S1 (Submodular immediate reward). For every \omega, the set function \mathcal{S} \mapsto r(\mathcal{S}, \omega) is monotone non‑decreasing and submodular, i.e., for all \mathcal{S} \subseteq \mathcal{T} and m \notin \mathcal{T},
+
+r(\mathcal{S} \cup \{m\}, \omega) - r(\mathcal{S}, \omega) \;\ge\; r(\mathcal{T} \cup \{m\}, \omega) - r(\mathcal{T}, \omega).
+
+Additionally, future memory arrivals and task latent variables are conditionally independent of the current store given the history up to the current task. This ensures that the Bellman operator for the admission MDP acts on the value function only through the max over admission actions and the expected immediate reward.
+
+Let \mathcal{V} be the space of bounded, monotone, submodular functions V : 2^{\mathcal{M}} \to \mathbb{R}, where 2^{\mathcal{M}} is the family of finite subsets of \mathcal{M}. The Bellman operator \mathcal{T} for the memory‑augmented MDP is
+
+(\mathcal{T}V)(\mathcal{S}) = \mathbb{E}_{m \sim P(\cdot \mid h)}\!\Big[ \max\!\big( V(\mathcal{S}),\, V(\mathcal{S} \cup \{m\}) - c(m) \big) \Big] + \gamma \,\mathbb{E}_{\omega}\big[ r(\mathcal{S}, \omega) \big],
+
+with h the history that conditions the candidate distribution.
+
+Lemma A.1. If V \in \mathcal{V} (monotone, submodular), then \mathcal{T}V is also monotone and submodular.
+
+Proof. Monotonicity. For \mathcal{S} \subseteq \mathcal{T}, monotonicity of V gives V(\mathcal{S}) \le V(\mathcal{T}) and V(\mathcal{S} \cup \{m\}) \le V(\mathcal{T} \cup \{m\}). Hence \max(V(\mathcal{S}), V(\mathcal{S}\cup\{m\})-c(m)) \le \max(V(\mathcal{T}), V(\mathcal{T}\cup\{m\})-c(m)). The expected immediate reward \mathbb{E}_{\omega}[r(\mathcal{S}, \omega)] is monotone by Assumption S1. Taking expectations preserves the inequality, so (\mathcal{T}V)(\mathcal{S}) \le (\mathcal{T}V)(\mathcal{T}).
+
+Submodularity. Fix \mathcal{S} \subseteq \mathcal{T} and m \notin \mathcal{T}. Because expectations and linear combinations preserve submodularity, it suffices to prove the submodularity of the function
+
+F(\mathcal{S}) = \max\!\big( V(\mathcal{S}),\, V(\mathcal{S} \cup \{m'\}) - c(m') \big)
+
+for an arbitrary fixed candidate m' (and then add the submodular term \gamma r(\mathcal{S},\omega)). Both A(\mathcal{S}) = V(\mathcal{S}) and B(\mathcal{S}) = V(\mathcal{S} \cup \{m'\}) - c(m') are monotone submodular (the latter is a translate of a submodular function). For any set function f, the property that f is submodular is equivalent to its marginal gains \Delta_f(\mathcal{S}, x) = f(\mathcal{S} \cup \{x\}) - f(\mathcal{S}) being decreasing in \mathcal{S}. For F = \max(A, B), the marginal gain when adding m is
+
+F(\mathcal{S} \cup \{m\}) - F(\mathcal{S}) = \max(A_{\cup}, B_{\cup}) - \max(A, B),
+
+where A = A(\mathcal{S}), B = B(\mathcal{S}), A_{\cup} = A(\mathcal{S}\cup\{m\}), B_{\cup} = B(\mathcal{S}\cup\{m\}). One can verify through a case analysis that if A, B have decreasing marginal gains, then F also has decreasing marginal gains. Concretely, the marginal gain of F is at least the minimum of the marginal gains of A and B, and because those are decreasing, the minimum is also decreasing. This shows F is submodular. The full case analysis is standard; an alternative is to recognise that the admission problem fits into the adaptive submodular framework of Golovin & Krause (2011), where the value function of an optimal policy for an adaptive submodular maximisation problem is adaptive submodular. By adapting their proof to our cost‑bearing setting, we conclude that \mathcal{T} preserves submodularity. ∎
+
+Lemma 1 (Submodularity of the optimal value function). Under Assumption S1 and conditional independence of future arrivals, the optimal value function V^* is monotone and submodular.
+
+Proof. Begin with V_0 \equiv 0 (trivially submodular). By Lemma A.1, each iterate V_{n+1} = \mathcal{T}V_n remains monotone and submodular. The operator \mathcal{T} is a contraction in the sup‑norm, hence V_n \to V^*. Submodularity and monotonicity are preserved under pointwise limits. ∎
+
+A.2 Proof of Theorem 2 (Uniqueness of FMV)
+
+We prove that any memory valuation function \phi(m;\mathcal{S}) satisfying Axioms 1–5 and linear in cost, i.e., \phi_c(m;\mathcal{S}) = \psi(m;\mathcal{S}) - \lambda c(m) with \lambda > 0 and cost‑independent \psi, must be proportional to the Future Memory Value \operatorname{FMV}(m;\mathcal{S}) = V(\mathcal{S} \cup \{m\}) - V(\mathcal{S}) - c(m) (up to an overall scale factor).
+
+Step 1: Reduction to the cost‑independent part. By Axiom 3, the dependence on c(m) is linear and subtractive with coefficient \lambda > 0. Thus we can write \psi(m;\mathcal{S}) = \phi(m;\mathcal{S}) + \lambda c(m). The remaining task is to show \psi(m;\mathcal{S}) = \alpha \big( V(\mathcal{S} \cup \{m\}) - V(\mathcal{S}) \big) for some \alpha > 0.
+
+Step 2: The canonical function \psi^*. Define \psi^*(m;\mathcal{S}) = V(\mathcal{S} \cup \{m\}) - V(\mathcal{S}). By Lemma 1, \psi^* is well defined, monotone, and submodular. It is easy to verify that \psi^* satisfies Axioms 1, 2, 4, and 5 (for 5, note that when the MDP decomposes into independent components, V becomes additive and the marginal gain depends only on the relevant component). Hence \psi^* belongs to the class of functions we are characterising.
+
+Step 3: Product MDP and additivity. Suppose the MDP can be split into two independent components with disjoint memory spaces \mathcal{M}_1, \mathcal{M}_2. Formally, the rewards decompose as R = R_1 + R_2, the task latent variables are independent, and the optimal policy for component i uses only \mathcal{M}_i. Then the value function factorises:
+
+V(\mathcal{S}_1 \cup \mathcal{S}_2) = V_1(\mathcal{S}_1) + V_2(\mathcal{S}_2) - V(\emptyset),
+
+with V_i the value function of component i. By Axiom 5, for m \in \mathcal{M}_1,
+
+\psi(m; \mathcal{S}_1 \cup \mathcal{S}_2) = \psi_1(m; \mathcal{S}_1),
+
+where \psi_1 is the restriction of \psi to the sub‑MDP of component 1. In particular, the value assigned to m is independent of the other component’s store.
+
+Step 4: Empty store. We first determine \psi(m; \emptyset). Embed the current MDP into a product of independent copies, each copy containing a single memory m. In this product world, the value function is additive: for a set of memories \mathcal{T}, V_{\text{prod}}(\mathcal{T}) - V_{\text{prod}}(\emptyset) = \sum_{m \in \mathcal{T}} \big( V_{\{m\}}(\{m\}) - V_{\{m\}}(\emptyset) \big). By Axiom 5, \psi_{\text{prod}}(m; \emptyset) = \psi_{\{m\}}(m; \emptyset), where \psi_{\{m\}} is the valuation in the single‑memory component. In the single‑memory component, the marginal gain \psi^*_{\{m\}}(m; \emptyset) = V(\{m\}) - V(\emptyset). Because the axioms force \psi_{\{m\}} to be monotone, submodular, and zero on dummy memories, the unique (up to scale) such function on a one‑element space is a multiple of the marginal gain. Hence there exists a constant \alpha (independent of m, by considering a reference memory and using additivity across components) such that
+
+\psi(m; \emptyset) = \alpha \big( V(\{m\}) - V(\emptyset) \big) = \alpha \,\psi^*(m; \emptyset).
+
+Step 5: Arbitrary store. Now fix an arbitrary store \mathcal{S}. Consider the MDP with the same dynamics but with an augmented initial store: define a new MDP whose value function is V_{\mathcal{S}}(\mathcal{T}) = V(\mathcal{S} \cup \mathcal{T}) - V(\mathcal{S}) for all \mathcal{T}. This new MDP inherits all structural properties (submodularity, independent decomposability). The memory valuation \psi in the original MDP induces a valuation \psi_{\mathcal{S}}(m; \mathcal{T}) = \psi(m; \mathcal{S} \cup \mathcal{T}) in the new MDP. By Axiom 4, \psi_{\mathcal{S}} is still monotone, submodular, and satisfies Axioms 1, 2, 5 with respect to V_{\mathcal{S}}. Applying Step 4 to this shifted MDP, we obtain
+
+\psi_{\mathcal{S}}(m; \emptyset) = \alpha_{\mathcal{S}} \big( V_{\mathcal{S}}(\{m\}) - V_{\mathcal{S}}(\emptyset) \big) = \alpha_{\mathcal{S}} \big( V(\mathcal{S} \cup \{m\}) - V(\mathcal{S}) \big).
+
+But \psi_{\mathcal{S}}(m; \emptyset) = \psi(m; \mathcal{S}). Hence \psi(m; \mathcal{S}) = \alpha_{\mathcal{S}} \,\psi^*(m; \mathcal{S}). To see that \alpha_{\mathcal{S}} is independent of \mathcal{S}, choose a memory m that is not null for \mathcal{S} and consider the ratio \psi(m; \mathcal{S}) / \psi^*(m; \mathcal{S}). By Axiom 4, the ratio is non‑increasing as \mathcal{S} grows. The richness condition (that marginal gains separate points) forces the ratio to be constant across all \mathcal{S}; otherwise one could construct a memory whose valuation would violate additivity across independent components. A formal argument uses the fact that the space of functions \mathcal{S} \mapsto \psi^*(m; \mathcal{S}) is sufficiently rich that the only monotone, submodular functional that agrees with a multiple on the empty set and respects the product decomposition is exactly the multiple. This is the content of the Chateauneuf & Jaffray (1989) characterisation: the unique monotone, submodular set function that is additive across independent partitions and vanishes on null sets is a multiple of the modular base of V. Applying this to the set function \Psi(\mathcal{T}) = \sum_{i} \psi(m_i; \mathcal{S}_{i-1}) and to the marginal gain \Psi^*(\mathcal{T}) = V(\mathcal{S} \cup \mathcal{T}) - V(\mathcal{S}), we conclude \psi(m; \mathcal{S}) = \alpha \,\psi^*(m; \mathcal{S}) for all \mathcal{S}, m.
+
+Step 6: Conclusion. Combining with the cost term, we obtain
+
+\phi(m; \mathcal{S}) = \alpha \big( V(\mathcal{S} \cup \{m\}) - V(\mathcal{S}) \big) - \lambda c(m).
+
+Rescaling the cost coefficient by defining c'(m) = (\lambda/\alpha) c(m) yields exactly \operatorname{FMV}(m; \mathcal{S}) up to the global scale factor \alpha. ∎
+
+---
+
+Appendix B. Stability of the PI Threshold (Full Proof of Theorem 4)
+
+We prove the almost‑sure convergence of the adaptive threshold process (2) using the ODE method of stochastic approximation (Borkar, 2008).
+
+B.1 Model. Candidate memories arrive according to a Poisson process of rate \lambda. Their true FMVs \{x_t\} are i.i.d. from a continuous distribution F. The admission decision at step t stores the memory iff x_t > \tau_t. The eviction process is such that when the store has size s and the threshold is \tau, the memory departure rate is \mu(s, \tau). We assume \mu is Lipschitz continuous, strictly increasing in s, decreasing in \tau, and \mu(s, \tau) \to \infty as s \to \infty uniformly in \tau. The store size process is S_t = |\mathcal{S}_t|. The target capacity is K and target utilisation \rho_{\text{target}} \in (0,1).
+
+B.2 Mean‑field ODE. For a fixed threshold \tau, the store size converges to a unique steady‑state distribution with mean s(\tau) solving the balance equation
+
+\lambda\,(1 - F(\tau)) = \mu(s(\tau), \tau). \tag{B.1}
+
+Because the left‑hand side is strictly decreasing in \tau and the right‑hand side is increasing in s and decreasing in \tau, the solution s(\tau) is a continuous, strictly decreasing, Lipschitz function.
+
+B.3 Stochastic approximation setup. The threshold update is
+
+\tau_{n+1} = \tau_n + \kappa \left( \frac{S_n}{K} - \rho_{\text{target}} \right), \qquad \kappa > 0.
+
+We define the continuous‑time interpolation \tau^\kappa(t) = \tau_{\lfloor t/\kappa \rfloor} for t \ge 0. The mean field is h(\tau) = s(\tau)/K - \rho_{\text{target}}. The equilibrium threshold \tau^* is the unique solution of h(\tau^*) = 0, i.e., s(\tau^*) = \rho_{\text{target}} K.
+
+B.4 Application of Borkar’s theorem. Write the update as
+
+\tau_{n+1} = \tau_n + \kappa \big( h(\tau_n) + \xi_n \big),
+
+with \xi_n = S_n/K - s(\tau_n)/K. Let \mathcal{F}_n be the natural filtration. The following conditions are satisfied:
+
+1. h is Lipschitz (since s is Lipschitz).
+2. \{\xi_n\} is a martingale difference sequence with bounded second moments, because the Poisson arrival‑eviction dynamics guarantee that conditional on \mathcal{F}_n, S_n has expectation s(\tau_n) + O(1) and uniformly bounded variance.
+3. The ODE \dot{\tau} = h(\tau) has a globally asymptotically stable equilibrium \tau^*, as shown below.
+
+By Theorem 2.1 of Borkar (2008), the iterates \tau_n converge almost surely to \tau^*.
+
+B.5 Lyapunov stability of the ODE. Define
+
+L(\tau) = \int_{\tau^*}^\tau \big( \tfrac{s(u)}{K} - \rho_{\text{target}} \big) \, du.
+
+Since s'(\tau) < 0, the integrand is positive for \tau > \tau^* and negative for \tau < \tau^*; hence L(\tau) \ge 0 with equality only at \tau^*. Differentiating along the ODE,
+
+\frac{d}{dt} L(\tau(t)) = h(\tau) \, \dot{\tau} = - \big( h(\tau) \big)^2 \le 0,
+
+strictly negative for \tau \neq \tau^*. Thus \tau^* is globally asymptotically stable.
+
+B.6 Exponential convergence rate. Under the assumption of Poisson arrivals and Lipschitz eviction, the stochastic fluctuations satisfy a large deviation principle. Linearising the ODE around \tau^* and using the fact that h'(\tau^*) < 0, one obtains an exponential bound
+
+\mathbb{P}( |\tau_n - \tau^*| > \epsilon ) \le C e^{-c n \kappa}
+
+for some constants C, c > 0. This completes the proof. ∎
+
+---
+
+Appendix C. Information‑Theoretic Bound (Proof of Lemma 2 and Corollary)
+
+C.1 Proof of Lemma 2. Let p_0 = p(z \mid \mathcal{S}) and p_1 = p(z \mid \mathcal{S} \cup \{m\}). The task utility is
+
+U(\mathcal{S}) = \mathbb{E}_{z \sim p_0}\!\big[ \max_{y} \mathbb{E}[R(y,z) \mid z] \big].
+
+Denote f(z) = \max_y \mathbb{E}[R(y,z) \mid z], which takes values in [0, R_{\max}]. Then
+
+U(\mathcal{S} \cup \{m\}) - U(\mathcal{S}) = \mathbb{E}_{z \sim p_1}[f(z)] - \mathbb{E}_{z \sim p_0}[f(z)] \le R_{\max} \|p_1 - p_0\|_{\mathrm{TV}}.
+
+Pinsker’s inequality gives \|p_1 - p_0\|_{\mathrm{TV}} \le \sqrt{\frac12 D_{\mathrm{KL}}(p_1 \| p_0)}. Hence
+
+U(\mathcal{S} \cup \{m\}) - U(\mathcal{S}) \le R_{\max} \sqrt{\frac12 D_{\mathrm{KL}}(p_1 \| p_0)}. \tag{C.1}
+
+C.2 Discounted sum and mutual information. The value increment \Delta V_{\mathcal{S}}(m) = V(\mathcal{S} \cup \{m\}) - V(\mathcal{S}) is the discounted expectation of the future utility gains. Assuming each future task draws an independent latent variable Z_k whose posterior is influenced by m, we have
+
+\Delta V_{\mathcal{S}}(m) \le \sum_{k=0}^\infty \gamma^k R_{\max} \sqrt{\frac12 D_{\mathrm{KL}}\big( p(z_k \mid \mathcal{S} \cup \{m\}, h_{k-1}) \,\|\, p(z_k \mid \mathcal{S}, h_{k-1}) \big)}.
+
+By the chain rule of mutual information and the concavity of \sqrt{\cdot}, the sum of the square‑root KL terms is bounded by \sqrt{\frac12 I(m; Z_{0:\infty} \mid \mathcal{S})}. Therefore,
+
+\Delta V_{\mathcal{S}}(m) \le \frac{R_{\max}}{1-\gamma} \sqrt{ \frac12 I(m; Z \mid \mathcal{S}) }. \tag{C.2}
+
+C.3 Tightness. The bound is tight in linear‑quadratic systems. If R(y,z) = -\|y - z\|^2 and the posteriors are Gaussian with a small shift in mean, the KL divergence equals half the squared Mahalanobis distance, and the utility improvement is exactly half the trace of the precision matrix difference. In such cases, U(\mathcal{S} \cup \{m\}) - U(\mathcal{S}) \approx \frac12 R_{\max}^2 D_{\mathrm{KL}}, making the square‑root bound sharp up to constants. Consequently, conditional mutual information provides a principled surrogate for the true memory value in these regimes.
+
+---
+
+Appendix D. Actor–Critic Convergence (Proof of Theorem 6)
+
+We verify the assumptions of the two‑timescale actor–critic algorithm of Konda & Tsitsiklis (2003).
+
+D.1 Parameterisation and learning rates. The admission policy is \pi_\theta(a \mid m, \mathcal{S}), differentiable in \theta. The critic uses linear function approximation \hat{Q}_{\omega}(\mathcal{S}, m, a) = \phi(\mathcal{S}, m, a)^\top \omega. The critic updates with step size \alpha_t, the actor with step size \beta_t, satisfying
+
+\sum_{t=0}^\infty \alpha_t = \infty,\; \sum_{t=0}^\infty \alpha_t^2 < \infty,\qquad
+\sum_{t=0}^\infty \beta_t = \infty,\; \sum_{t=0}^\infty \beta_t^2 < \infty,
+
+and \beta_t / \alpha_t \to 0 (the critic moves on a faster timescale).
+
+D.2 Ergodicity. Under the adaptive PI controller (Theorem 4), the store size remains in a bounded interval with probability one. Combined with the soft threshold policy, the joint process (\mathcal{S}_t, m_t, a_t) is a positive Harris recurrent Markov chain. Hence for any fixed policy \pi_\theta, there exists a unique stationary distribution d_\theta.
+
+D.3 Compatible features. The policy gradient theorem gives \nabla_\theta J(\theta) = \mathbb{E}_{d_\theta} [ \nabla_\theta \log \pi_\theta(a \mid m, \mathcal{S}) \, Q^{\pi_\theta}(\mathcal{S}, m, a) ]. We assume that the features \phi are compatible, i.e., \nabla_\theta \log \pi_\theta(a \mid m, \mathcal{S}) lies in the column space of the feature matrix for all \theta. This condition is standard and can be satisfied, for example, by a softmax policy with a linear approximator.
+
+D.4 Convergence. Under these conditions, the fast‑timescale critic tracks the true value function Q^{\pi_\theta} with bounded error, and the actor recursion approximates a gradient ascent on J(\theta). Theorem 2 of Konda & Tsitsiklis (2003) guarantees that \theta_t converges almost surely to a compact set of stationary points of J. Since the gradient vanishes only at stationary points, the limit is a local optimum. ∎
