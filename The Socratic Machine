@@ -1,0 +1,693 @@
+The Socratic Machine
+
+ouadi Maakoul 
+
+AI : Claude, Deepseek 
+
+Abstract
+
+We present the Socratic Machine, a cryptographic protocol for privacy-preserving, verifiable contribution assessment and resource allocation in decentralised coordination systems. The protocol combines three zk‑SNARK circuits—task completion, impact assessment, and aggregation—to enable participants to prove that they have completed tasks and that their impact scores are computed honestly, without revealing the underlying private data. A nullifier mechanism based on the Poseidon hash function guarantees that each secret key can be used at most once per epoch, providing key‑limited Sybil resistance. Contributions are aggregated off‑chain and verified on‑chain through a single Groth16 proof that enforces nullifier uniqueness and computes the epoch average. A softmax‑based resource allocation function (the PRI mechanism) distributes a fixed pool of resources according to the relative impact of each participant, with analytically bounded sensitivity that limits the profitability of score manipulation. We analyse incentives as an infinitely repeated Prisoner’s Dilemma and prove that cooperation is sustainable as a subgame perfect equilibrium under grim trigger when the discount factor exceeds one‑half. The overall system is proven sound under standard cryptographic assumptions, and we discuss implementation trade‑offs, security margins, and extensions toward full Sybil resistance via external identity‑binding oracles.
+
+---
+
+Introduction
+
+Decentralised autonomous organisations, open‑source ecosystems, and collaborative knowledge networks face a persistent challenge: how to measure and reward contributions fairly without a central authority, while preserving the privacy of individual participants. Traditional reputation systems rely on persistent identities, which link activity across contexts and expose sensitive metadata. Conversely, purely anonymous systems suffer from Sybil attacks, where a single entity creates many identities to capture a disproportionate share of rewards. A ideal contribution‑aware system should (i) verifiably attest to the completion of specific tasks, (ii) produce a tamper‑proof impact score derived from private metrics, (iii) aggregate many such scores into a global allocation while preventing double‑submission, and (iv) do all of the above without leaking information about who did what.
+
+The Socratic Machine addresses this quadruple challenge by unifying zero‑knowledge proofs, cryptographic accumulators, and game‑theoretic incentives into a single protocol. At its core, three non‑interactive zero‑knowledge circuits—each proved independently and verified on‑chain—enable participants to earn impact scores. The task completion circuit confirms that a participant has performed a designated task and outputs a nullifier derived from the participant’s secret key and a task identifier, allowing the system to track activity without linking it to a long‑term identity. The impact assessment circuit attests that a set of private quality metrics, weighted by a domain‑specific scoring function, yields a normalised impact score in [0,1]. The aggregation circuit collects the nullifiers and scores from all active participants in an epoch, enforces their strict ordering to guarantee that no secret key is used twice, and outputs the epoch’s mean impact and a binding commitment. Crucially, sorting the nullifier list is performed off‑chain by the prover, so the circuit only verifies monotonicity, reducing on‑chain constraints from O(N\log N) to O(N).
+
+Our design builds on well‑established cryptographic primitives. We instantiate the zk‑SNARK with the Groth16 proving system over the BN254 pairing‑friendly curve, using the Poseidon hash for Merkle tree commitments and nullifier generation because of its low arithmetic complexity. The resource allocation function—the Proportional Resource by Impact (PRI) mechanism—applies a softmax with temperature \beta to the set of impact scores, distributing a fixed total resource R. We prove that the sensitivity of any participant’s allocation to changes in their own score is bounded by \beta P_i, making small undetected inflations unrewarding. This local fairness property is complemented by a global incentive analysis: we model the repeated interaction among participants as an infinitely repeated Prisoner’s Dilemma with discount factor \delta, and we show that the cooperative equilibrium (all participants exert honest effort) is subgame perfect under grim trigger whenever \delta \ge 1/2, with the threshold shifting predictably if the cost of cooperation changes.
+
+We emphasise what the system does not provide: full Sybil resistance. The nullifier construction only prevents a single secret key from being used more than once per epoch. An adversary can still create arbitrarily many distinct keys. Achieving complete Sybil resistance requires an external mechanism—such as proof‑of‑personhood, stake‑based registration, or biometric oracles—that limits the number of keys a real‑world entity can control. Our protocol supplies the cryptographic infrastructure on which such identity‑binding can be layered.
+
+The remainder of the paper is organised as follows. Section 1 recalls the algebraic and geometric preliminaries of finite fields and elliptic curves. Section 2 presents the R1CS and Groth16 proving system. Section 3 describes the Poseidon hash, Merkle trees, and pairing details. Section 4 specifies the three Socratic Machine circuits in detail. Section 5 analyses the nullifier construction and its Sybil‑resistance properties. Section 6 derives the softmax allocation and its sensitivity bound. Section 7 models the repeated game and proves the cooperative equilibrium. Section 8 compares the aggregation circuit’s complexity with an in‑circuit sorting alternative. Section 9 proves the end‑to‑end soundness of the system. Section 10 introduces a supplementary resilience metric. Appendices A–H provide full constraint counts, pairing computations, extended security proofs, and implementation guidance. Together, these components form a rigorous foundation for privacy‑preserving, verifiable contribution measurement in decentralised governance.
+
+1. Algebraic and Geometric Preliminaries
+
+1.1 Finite Fields
+
+Let p be a large prime (\approx 2^{254}). The field \mathbb{F}_p consists of integers modulo p with addition and multiplication defined modulo p. Every non‑zero element has a multiplicative inverse.
+We denote the field size by |\mathbb{F}_p| = p.
+
+1.2 Elliptic Curves and Bilinear Pairings
+
+An elliptic curve over \mathbb{F}_p is the set of solutions (x,y) \in \mathbb{F}_p^2 to
+
+y^2 = x^3 + a x + b, \qquad 4a^3 + 27b^2 \neq 0,
+\]  
+
+together with a point at infinity \mathcal{O}. The points form an abelian group under the chord‑and‑tangent rule.
+
+Let \mathbb{G}_1, \mathbb{G}_2 be two cyclic subgroups of an elliptic curve group of the same prime order r, and let \mathbb{G}_T be a multiplicative group of order r.
+
+A bilinear pairing is a map e: \mathbb{G}_1 \times \mathbb{G}_2 \to \mathbb{G}_T satisfying:
+
+1. Bilinearity: e(aP, bQ) = e(P,Q)^{ab} for all a,b \in \mathbb{F}_r, P \in \mathbb{G}_1, Q \in \mathbb{G}_2.
+2. Non‑degeneracy: e(P,Q) \neq 1_{\mathbb{G}_T} for some P,Q.
+3. Efficient computability.
+
+We work with the BN254 curve (Barreto–Naehrig, embedding degree 12).
+Security note: The curve was originally targeted at 128‑bit security, but due to recent improvements in the number field sieve for pairing‑friendly curves, its effective security is now estimated around 100–110 bits. For applications requiring a strict 128‑bit margin, BLS12‑381 would be a more appropriate choice. The pairing used is the optimal Ate pairing.
+
+---
+
+2. Zero‑Knowledge Proofs: R1CS and Groth16
+
+2.1 Rank‑1 Constraint Systems (R1CS)
+
+Let \mathbb{F} be a finite field. An R1CS instance consists of three matrices A,B,C \in \mathbb{F}^{n \times m} and a witness vector \mathbf{w} \in \mathbb{F}^m such that
+
+(A\mathbf{w}) \circ (B\mathbf{w}) = C\mathbf{w},
+\]  
+
+where \circ denotes the Hadamard (entry‑wise) product.
+The first component of \mathbf{w} is fixed to 1 to encode constant terms.
+
+Encoding arithmetic gates.
+
+· Addition: w_k = w_i + w_j.
+    Set row k of A with 1 at positions i and j, all other entries 0; row k of B with 1 at position 1 (the constant wire); row k of C with 1 at position k.
+    Then (A\mathbf{w})_k = w_i + w_j, (B\mathbf{w})_k = 1, so the Hadamard product forces C\mathbf{w}_k = w_k = w_i + w_j.
+· Multiplication: w_k = w_i \times w_j.
+    Set A_{k,i}=1, B_{k,j}=1, C_{k,k}=1, all other entries 0.
+    Then (A\mathbf{w})_k = w_i, (B\mathbf{w})_k = w_j, (C\mathbf{w})_k = w_k, enforcing w_k = w_i w_j.
+
+2.2 Quadratic Arithmetic Programs (QAP)
+
+An R1CS instance can be transformed into a QAP over \mathbb{F}. Choose distinct roots r_1,\dots,r_n \in \mathbb{F}.
+There exist polynomials A_i(x), B_i(x), C_i(x) of degree <n such that for all i, A_i(r_k) = A_{k,i}, etc.
+Let t(x) = \prod_{k=1}^n (x - r_k) be the vanishing polynomial.
+
+The witness \mathbf{w} satisfies the R1CS iff the polynomial
+
+H(x) = \frac{\left(\sum_{i=0}^m w_i A_i(x)\right)\! \left(\sum_{i=0}^m w_i B_i(x)\right) - \sum_{i=0}^m w_i C_i(x)}{t(x)}
+\]  
+
+is a polynomial (i.e. no remainder).
+
+2.3 Groth16 Protocol
+
+We use the Groth16 zk‑SNARK with a common reference string (CRS) in the pairing‑based setting.
+
+Setup (\lambda, C) \to (pk, vk)
+
+· Sample random \alpha, \beta, \gamma, \delta, \tau \in \mathbb{F}_r^*.
+· Compute the CRS elements in \mathbb{G}_1 and \mathbb{G}_2 (written additively):
+    [\sigma]_1 = \sigma \cdot g_1, [\sigma]_2 = \sigma \cdot g_2 for relevant scalars.
+· The public parameters include:
+  [\alpha]_1,\; [\beta]_1,\; [\beta]_2,\; [\delta]_1,\; [\delta]_2,\; \big\{[\tau^i]_1\big\}_{i=0}^{n-1},\; \big\{[\tau^i]_2\big\}_{i=0}^{n-1},
+  \]  
+  \Big[\frac{\beta A_i(\tau) + \alpha B_i(\tau) + C_i(\tau)}{\gamma}\Big]_1,\;
+  \Big[\frac{\beta A_i(\tau) + \alpha B_i(\tau) + C_i(\tau)}{\delta}\Big]_1.
+  \]  
+
+Prove (pk, \mathbf{w}) \to \pi = (A, B, C)
+
+· Let w_i be the witness (with w_0=1).
+· Compute h(x) = H(x) from the QAP.
+· Sample random r,s \in \mathbb{F}_r^*.
+· Compute:
+  A = \alpha + \sum_{i=0}^m w_i A_i(\tau) + r\delta \quad \in \mathbb{G}_1,
+  \]  
+  B = \beta + \sum_{i=0}^m w_i B_i(\tau) + s\delta \quad \in \mathbb{G}_2,
+  \]  
+  C = \frac{\sum_{i=\ell+1}^m w_i(\beta A_i(\tau) + \alpha B_i(\tau) + C_i(\tau)) + h(\tau)t(\tau)}{\delta} + sA + rB - rs\delta \quad \in \mathbb{G}_1.
+  \]  
+  The sum over i=\ell+1 excludes the public inputs i=1..\ell.
+
+Verify (vk, \pi, \text{public\_inputs}) \to \{0,1\}
+
+· Check:
+  e(A, B) = e([\alpha]_1, [\beta]_2) \cdot e\!\left( \sum_{i=0}^\ell a_i \Big[\frac{\beta A_i(\tau) + \alpha B_i(\tau) + C_i(\tau)}{\gamma}\Big]_1,\; [\gamma]_2 \right) \cdot e(C, [\delta]_2).
+  \]  
+
+Security (sketch): Perfect completeness holds by algebraic substitution. Knowledge soundness holds under the q‑SDH and q‑PKE assumptions in the generic group model. Zero‑knowledge follows from the randomisers r,s that perfectly blind the witness.
+
+---
+
+3. Cryptographic Building Blocks
+
+3.1 Poseidon Hash
+
+We use the Poseidon permutation over \mathbb{F}_p with state size t=3 (typical configuration: 8 full rounds and 57 partial rounds). It is a sponge construction built from a sequence of full and partial rounds of an S‑box x \mapsto x^5, linear mixing with an MDS matrix, and round constants. The final output is a single field element. Poseidon is collision‑resistant and efficiently representable in arithmetic circuits.
+
+3.2 Merkle Trees
+
+A Merkle tree commits to a list of elements with a public root. A Merkle proof for element x at index i consists of the siblings along the path to the root. Verification computes the root using the provided siblings and the hash function. With tree depth d, the proof size is O(d).
+
+---
+
+4. The Socratic Machine Circuits
+
+The Socratic Machine employs three distinct zk‑SNARK circuits, each proved separately.
+
+4.1 Task Completion Circuit
+
+Purpose: Prove that a participant has completed a specific task, without revealing private data.
+
+Public inputs: Merkle root r, task identifier \text{task\_id}.
+Private inputs: Secret key sk, Merkle path siblings.
+
+The circuit:
+
+1. Computes \nu = \text{Poseidon}(sk, \text{task\_id}, r) (the nullifier, revealed later).
+2. Verifies the Merkle proof that \text{task\_id} belongs to the tree with root r.
+
+Constraints: O(\text{depth}) Poseidon hashes for Merkle verification, plus one additional hash for \nu.
+
+4.2 Impact Assessment Circuit
+
+Purpose: Attest that a set of quality metrics satisfies a scoring function, and produce an aggregated impact score in [0,1].
+
+Public inputs: Normalised impact score s.
+Private inputs: Metrics vector \mathbf{m}, weights \mathbf{w} (fixed per domain).
+
+The circuit checks:
+
+· Each metric in [0,1]: 0 \le m_k \le 1 (range checks).
+· \sum w_k = 1.
+· s = \sum_k w_k m_k.
+
+Constraints: K range checks (each requiring bit decomposition) plus one sum‑of‑products.
+
+4.3 Aggregation Circuit (with Off‑Chain Sorting)
+
+Purpose: Combine many participants' impacts into a single epoch result while enforcing nullifier uniqueness.
+
+Public inputs:
+
+· N: number of active tasks
+· Aggregated average \mu
+· Epoch commitment C
+
+Private inputs:
+
+· Sorted nullifier list \nu_1 < \nu_2 < \dots < \nu_N
+· Sorted impact scores s_1,\dots,s_N (matching the nullifier order)
+
+The circuit enforces:
+
+1. Nullifier monotonicity: For i=1 to N-1, \nu_i < \nu_{i+1}.
+2. Average computation: \mu = \frac{1}{N}\sum_{i=1}^N s_i.
+3. Commitment: C = \text{Poseidon}(\nu_1,\dots,\nu_N, \mu) (binding the entire batch).
+
+Prover’s off‑chain work: The prover sorts the nullifiers and corresponding scores before generating the proof. Sorting is not done inside the circuit, avoiding O(N \log N) constraints.
+
+On‑chain (verifier) complexity: The verifier checks a Groth16 proof that internally performs N-1 inequality checks. The commitment C is computed via a sponge that absorbs N+1 field elements; this remains linear in N and is instantiated for a fixed maximum batch size in any given circuit.
+
+---
+
+5. Sybil Resistance: Nullifier Uniqueness
+
+Definition (Nullifier).
+For a participant with secret key sk and epoch identifier e, the nullifier is
+
+\nu = \text{Poseidon}\big( sk,\; \text{Poseidon}(sk, \text{ctx}),\; e \big).
+\]  
+
+Theorem 5.1 (Nullifier Uniqueness per Key per Epoch).
+Fix an epoch and a context. If two active nullifiers \nu_i, \nu_j in the sorted list satisfy \nu_i = \nu_j, then either sk_i = sk_j, or a collision in Poseidon has been found. The probability that an adversary can produce two distinct secret keys yielding the same nullifier is bounded by
+
+\Pr[\text{collision}] \le \frac{N^2}{2p} + \epsilon_{\text{hash}}(\lambda),
+\]  
+
+where N is the number of identities, p = |\mathbb{F}_p|, and \epsilon_{\text{hash}} is a negligible function in the security parameter.
+
+Proof.
+Assume \nu_i = \nu_j. By construction \nu_i = H(sk_i, h_i, e) where h_i = H(sk_i, \text{ctx}), similarly for j. If sk_i \neq sk_j, then a collision has been found in H. Since Poseidon is collision‑resistant, this happens with probability at most \epsilon_{\text{hash}}.
+If sk_i = sk_j, then the same key was used twice. The aggregation circuit’s monotonicity check requires \nu_1 < \nu_2 < \dots, so any duplicate (which are equal, not strictly increasing) will cause the proof to be invalid. Hence no two submissions with the same secret key can appear in a valid aggregation proof.
+The birthday bound N^2/(2p) accounts for the probability of accidental collision among distinct honest keys, which is added to the adversarial advantage \epsilon_{\text{hash}}. ∎
+
+Corollary 5.2 (Key‑Limited Sybil Resistance).
+The system guarantees that a single secret key cannot be used more than once per epoch. This is not full Sybil resistance: an adversary can still generate k distinct secret keys and obtain k valid nullifiers. Full Sybil resistance requires an external identity‑binding mechanism (stake, proof‑of‑personhood, biometric oracle, etc.) that limits the number of secret keys a real‑world entity can control.
+
+---
+
+6. Softmax Allocation and Sensitivity
+
+The PRI mechanism distributes a fixed total resource R each epoch according to impact scores \{s_i\} via a softmax function.
+
+Definition 6.1 (PRI Allocation).
+Given scores s_i \in [0,1], temperature \beta > 0, the allocation to participant i is
+
+P_i = R \cdot \frac{\exp(\beta s_i)}{\sum_{j=1}^N \exp(\beta s_j)}.
+\]  
+
+Define the normalised probability p_i = \exp(\beta s_i)/\sum_j \exp(\beta s_j).
+
+Lemma 6.2 (Bounded Influence).
+For any i,j,
+
+\left|\frac{\partial P_i}{\partial s_j}\right| \le \beta\, P_i \le \beta R,
+\]  
+
+and the relative sensitivity is
+
+\left|\frac{\partial P_i}{P_i \,\partial s_j}\right| = \beta\,|\delta_{ij} - p_j| \le \beta.
+\]  
+
+Proof.
+The gradient of the softmax is standard:
+
+\frac{\partial p_i}{\partial s_j} = \beta\, p_i (\delta_{ij} - p_j).
+\]  
+
+Since P_i = R\, p_i, we have
+
+\frac{\partial P_i}{\partial s_j} = \beta\, P_i (\delta_{ij} - p_j).
+\]  
+
+Taking absolute values, |\delta_{ij} - p_j| \le \max(p_j, 1-p_j) \le 1, so |\partial P_i/\partial s_j| \le \beta P_i \le \beta R. The relative change is obtained by dividing by P_i, giving \beta |\delta_{ij}-p_j| \le \beta. ∎
+
+This shows that a small manipulation of one’s own score (\delta_{ii}=1) can change one’s allocation by at most a factor \beta relative to its current size, limiting the profitability of undetected score inflation.
+
+---
+
+7. Incentive Mechanism: Repeated Game Analysis
+
+We model the interactions of N participants as an infinitely repeated game with discount factor \delta \in (0,1). Each epoch is a stage game with the following Prisoner’s Dilemma payoff matrix (row player payoff / column player payoff):
+
+ Cooperate (C) Defect (D)
+C (2,2) (0,3)
+D (3,0) (1,1)
+
+These numbers represent normalised utility from the PRI allocation net of effort cost.
+In a single shot, (D,D) is the unique Nash equilibrium, while (C,C) yields higher total welfare.
+
+We consider grim trigger strategies: start by cooperating, and if any player defects, switch to D forever.
+
+Lemma 7.1 (Punishment Equilibrium).
+The strategy profile “all D” is a Nash equilibrium of the stage game: deviating to C gives payoff 0 < 1, so no profitable unilateral deviation.
+
+Theorem 7.2 (Cooperation as Subgame Perfect Equilibrium).
+Under grim trigger, the cooperative profile (all C every period) is a subgame perfect Nash equilibrium if
+
+\delta \ge \frac{1}{2}.
+\]  
+
+Proof.
+Consider a player contemplating a unilateral deviation from C in the current period.
+
+· Deviation payoff: playing D while the rest play C yields 3 this period.
+· Consequence: from next period onward, all players revert to D, giving a per‑period payoff of 1.
+
+The present value of cooperating forever is:
+
+V_C = 2 + \delta \cdot 2 + \delta^2 \cdot 2 + \dots = \frac{2}{1-\delta}.
+\]  
+
+The present value of deviating once and then facing (D,D) forever is:
+
+V_D = 3 + \delta \cdot 1 + \delta^2 \cdot 1 + \dots = 3 + \frac{\delta}{1-\delta}.
+\]  
+
+Cooperation is sustainable iff V_C \ge V_D, i.e.
+
+\frac{2}{1-\delta} \ge 3 + \frac{\delta}{1-\delta}.
+\]  
+
+Multiply by (1-\delta):
+
+2 \ge 3(1-\delta) + \delta = 3 - 2\delta.
+\]  
+
+Rearrange: 2\delta \ge 1, so \delta \ge 1/2.
+
+When \delta \ge 1/2, no player has an incentive to deviate from the cooperative path, and since the punishment is itself an equilibrium (Lemma 7.1), the strategy profile is subgame perfect. ∎
+
+Remark.
+The threshold can be adjusted for different cost structures. For example, if the cost of cooperating reduces the (C,C) payoff to 1.7 while (D,C) still pays 3 and (D,D) remains 1, the inequality becomes
+
+\frac{1.7}{1-\delta} \ge 3 + \frac{\delta}{1-\delta}
+\;\Longrightarrow\; 1.7 \ge 3(1-\delta) + \delta = 3 - 2\delta
+\;\Longrightarrow\; 2\delta \ge 1.3 \;\Longrightarrow\; \delta \ge 0.65.
+\]  
+
+The derivation is mechanically identical to the proof above; only the numerical value changes.
+
+---
+
+8. Complexity Analysis of the Aggregation Circuit
+
+On‑chain (circuit) constraints:
+The aggregation circuit must enforce N-1 inequality checks \nu_i < \nu_{i+1}. Each inequality over \mathbb{F}_p is implemented by bit‑decomposing the two elements and comparing bitwise, requiring O(\log p) addition/multiplication gates. Hence total gates = O(N \log p), which is linear in N for fixed field size.
+
+Off‑chain prover work:
+The prover sorts the nullifier list in O(N \log N) time using a standard sorting algorithm. This is performed locally and does not increase circuit complexity.
+
+Comparison with naive on‑chain sorting:
+A circuit that sorted N elements would require a sorting network of O(N \log N) comparators, each comparator O(\log p) gates, leading to O(N \log N \log p) constraints. By shifting sorting off‑chain, we reduce on‑chain work by a factor of \log N, a significant improvement for large N.
+
+---
+
+9. Overall System Soundness
+
+Theorem 9.1 (End‑to‑End Soundness).
+Assume the cryptographic primitives (Poseidon, Groth16) are secure. Then in any valid epoch finalisation, the aggregated impact score \mu is computed from a set of distinct secret‑key‑per‑task contributions whose individual task‑completion and impact‑assessment proofs were valid.
+
+Proof sketch.
+
+· Each individual proof (task completion, impact assessment) is verified on‑chain before the aggregation proof is submitted. The Groth16 knowledge‑soundness ensures that valid proofs imply the existence of witnesses satisfying the respective circuit constraints.
+· The aggregation circuit receives the previously verified nullifier–score pairs as private inputs and enforces: (i) the nullifiers are strictly increasing, (ii) \mu equals the arithmetic mean of the scores, (iii) the commitment C binds the whole batch.
+· By Theorem 5.1, strict monotonicity implies that all nullifiers are distinct, hence no secret key was used more than once.
+· Thus the aggregation correctly summarises the set of verified contributions. ∎
+
+---
+
+10. Resilience Scoring (Supplemental Metric)
+
+The protocol maintains a resilience score R_i(t) for each node to weight future incentives and detect abandonment. It is defined recursively:
+
+R_i(t) = \alpha \cdot \mathbf{1}_{\text{active}}(i,t) + \beta \cdot \text{consistency}_i(t) + \gamma \cdot \text{longevity}_i(t),
+\]  
+
+where \alpha+\beta+\gamma=1, \text{consistency}_i(t) measures the inverse variance of recent scores, and \text{longevity}_i(t) = \min(1, \#\text{epochs active}/10). This is an empirical metric, not a proven theorem.
+
+
+Appendices
+
+---
+
+Appendix A: Detailed Cryptographic Primitives
+
+A.1 Poseidon Hash Construction
+
+The Poseidon permutation is defined over a finite field \mathbb{F}_p. We use a state size t = 3 (two elements for the rate, one for the capacity in the sponge construction).
+
+Permutation structure.
+The permutation consists of R_F = 8 full rounds (where the S‑box is applied to every element of the state) and R_P = 57 partial rounds (where the S‑box is applied to only one element). A round r comprises:
+
+1. AddConstants: x_i \leftarrow x_i + c_i^{(r)}, where c^{(r)} are round‑specific constants.
+2. SubWords: For full rounds: x_i \leftarrow x_i^5 for all i.
+      For partial rounds: x_0 \leftarrow x_0^5; other x_i unchanged.
+3. MixLayer: Multiply the state vector by a t \times t MDS matrix M over \mathbb{F}_p.
+
+The MDS matrix ensures that the linear layer provides full diffusion. The constant round numbers are chosen to resist algebraic and statistical attacks.
+
+Sponge mode.
+The hash function \text{Poseidon}(m_1,\dots,m_k) operates as follows:
+
+· Initialise the state with all zeros.
+· For each message element m_i, add it to the first rate element (element 0) and apply the permutation.
+· After all elements are absorbed, apply a final permutation and output the first rate element.
+
+The sponge construction gives collision resistance and indifferentiability from a random oracle when the capacity is large enough (1 field element provides ≈ 254 bits of capacity, more than sufficient).
+
+A.2 Merkle Tree and Proof Verification
+
+A Merkle tree of depth d stores up to 2^d leaves. Each leaf is a field element. The hash function for internal nodes is \text{Poseidon}(L, R).
+
+Merkle proof.
+A proof for leaf x at index i consists of the sibling hashes h_1, \dots, h_d and a direction bit for each (0 = left, 1 = right). The verifier recomputes:
+
+h_0 = \text{leaf hash}(x),\qquad h_{j} = \begin{cases} 
+\text{Poseidon}(h_{j-1}, s_j) & \text{if direction } 0\\
+\text{Poseidon}(s_j, h_{j-1}) & \text{if direction } 1
+\end{cases}
+\]  
+
+and checks that h_d equals the public root.
+
+In the circuit, each Poseidon call costs ≈ 275 multiplication gates (for the chosen round numbers). A tree of depth d thus contributes d hashes, i.e. 275d constraints.
+
+A.3 Bilinear Pairing Details
+
+BN254 curve.
+The curve is defined by the equation y^2 = x^3 + 3 over \mathbb{F}_p with
+
+p = 36 t^4 + 36 t^3 + 24 t^2 + 6 t + 1,\qquad t = 4965661367192848881.
+\]  
+
+The subgroup order r is a 254‑bit prime. The embedding degree is 12, so the full extension tower \mathbb{F}_{p^{12}} is used for the target group.
+
+Optimal Ate pairing.
+The pairing is computed as e(P,Q) = f_{u,Q}(P)^{(p^{12}-1)/r} where u = 6t+2 is the BN parameter and f_{u,Q} is a Miller function. The algorithm runs in about  \log_2(u)  Miller steps. For the Groth16 verifier, the pairing is called three times (or can be reduced with a single product check if using a final exponentiation optimisation).
+
+---
+
+Appendix B: R1CS and QAP Transformation
+
+B.1 From Arithmetic Circuit to R1CS
+
+Any arithmetic circuit with multiplication gates and linear combination gates can be expressed as an R1CS. Each gate adds one row to the matrices A,B,C. The transformation is:
+
+· For each input and intermediate signal, assign a wire index w_i.
+· For addition of wires i and j into k: set A_{k,i}=1, A_{k,j}=1, B_{k,0}=1, C_{k,k}=1.
+· For multiplication: set A_{k,i}=1, B_{k,j}=1, C_{k,k}=1.
+· For constants c: use the wire w_0=1 with coefficient c.
+
+This encoding satisfies (A\mathbf{w})_k \cdot (B\mathbf{w})_k = (C\mathbf{w})_k for each gate k.
+
+B.2 QAP via Lagrange Interpolation
+
+Let n be the number of gates. Choose n distinct evaluation points r_1,\dots,r_n \in \mathbb{F}. For each wire index i, define polynomials A_i(x) of degree <n such that A_i(r_k) = A_{k,i}. This is done by Lagrange interpolation:
+
+A_i(x) = \sum_{k=1}^n A_{k,i} \cdot L_k(x),\quad L_k(x) = \prod_{j \neq k} \frac{x - r_j}{r_k - r_j}.
+\]  
+
+Similarly define B_i(x) and C_i(x).
+
+Define the vanishing polynomial t(x) = \prod_{k=1}^n (x - r_k).
+
+B.3 Equivalence Proof
+
+Lemma B.1. A vector \mathbf{w} satisfies the R1CS if and only if the polynomial
+
+P(x) = \left(\sum_i w_i A_i(x)\right)\left(\sum_i w_i B_i(x)\right) - \sum_i w_i C_i(x)
+\]  
+
+is divisible by t(x).
+
+Proof.
+For each gate k, P(r_k) = (A\mathbf{w})_k \cdot (B\mathbf{w})_k - (C\mathbf{w})_k. So P(r_k)=0 for all k iff all constraints are satisfied. Since t(x) has roots exactly \{r_k\}, P(x) is divisible by t(x) iff P(r_k)=0 for all k. ∎
+
+Thus the quotient H(x) = P(x)/t(x) is a polynomial of degree at most n-2 (since the product of two degree‑(n-1) polynomials is degree 2n-2, minus degree n-1 terms yields degree <2n; division by degree n polynomial gives degree <n).
+
+---
+
+Appendix C: Groth16 Protocol – Full Details
+
+C.1 Protocol Specification
+
+Setup(1^\lambda, C)
+
+1. Compute \tau, \alpha, \beta, \gamma, \delta \leftarrow \mathbb{F}_r^*.
+2. For i=0..m: compute A_i(\tau), B_i(\tau), C_i(\tau).
+3. Generate proving key elements:
+
+\begin{aligned}
+&\{ \tau^i G_1 \}_{i=0}^{n-1}, \quad \{ \tau^i G_2 \}_{i=0}^{n-1}, \\
+&\{ \frac{\beta A_i(\tau) + \alpha B_i(\tau) + C_i(\tau)}{\gamma} G_1 \}_{i=0}^{\ell}, \quad
+\{ \frac{\beta A_i(\tau) + \alpha B_i(\tau) + C_i(\tau)}{\delta} G_1 \}_{i=\ell+1}^{m}, \\
+&\alpha G_1, \beta G_1, \beta G_2, \delta G_1, \delta G_2.
+\end{aligned}
+\]  
+
+The verification key contains:
+
+\alpha G_1, \beta G_2, \gamma G_2, \delta G_2, \{ \frac{\beta A_i(\tau) + \alpha B_i(\tau) + C_i(\tau)}{\gamma} G_1 \}_{i=0}^{\ell}.
+\]  
+
+Prove(pk, \mathbf{w})
+
+1. Compute the witness polynomial h(x) such that P(x)=h(x)t(x).
+2. Choose r,s \leftarrow \mathbb{F}_r^*.
+3. Compute:
+
+\begin{aligned}
+A &= \alpha + \sum_{i=0}^m w_i A_i(\tau) + r\delta \quad (\text{in } \mathbb{G}_1),\\
+B &= \beta + \sum_{i=0}^m w_i B_i(\tau) + s\delta \quad (\text{in } \mathbb{G}_2),\\
+C &= \frac{\sum_{i=\ell+1}^m w_i \big(\beta A_i(\tau) + \alpha B_i(\tau) + C_i(\tau)\big) + h(\tau)t(\tau)}{\delta}
++ sA + rB - rs\delta.
+\end{aligned}
+\]  
+
+Verify(vk, \pi, \mathbf{a})
+
+Parse \pi = (A,B,C). Compute the public input term:
+
+V = \sum_{i=0}^\ell a_i \cdot \frac{\beta A_i(\tau) + \alpha B_i(\tau) + C_i(\tau)}{\gamma} G_1.
+\]  
+
+Check:
+
+e(A, B) = e(\alpha G_1, \beta G_2) \cdot e(V, \gamma G_2) \cdot e(C, \delta G_2).
+\]  
+
+C.2 Completeness
+
+Plug in the expressions for A,B,C. Let A_\tau = \sum_{i=0}^m w_i A_i(\tau), B_\tau = \sum_{i=0}^m w_i B_i(\tau), C_\tau = \sum_{i=0}^m w_i C_i(\tau).
+
+\begin{aligned}
+e(A,B) &= e(\alpha + A_\tau + r\delta,\; \beta + B_\tau + s\delta) \\
+&= e(\alpha, \beta) \cdot e(\alpha, B_\tau) \cdot e(A_\tau, \beta) \cdot e(A_\tau, B_\tau) \\
+&\quad \cdot e(\alpha, s\delta) \cdot e(r\delta, \beta) \cdot e(r\delta, B_\tau) \cdot e(A_\tau, s\delta) \cdot e(r\delta, s\delta).
+\end{aligned}
+\]  
+
+The right‑hand side expands to:
+
+e(\alpha G_1, \beta G_2) \cdot e(V, \gamma G_2) \cdot e(C, \delta G_2).
+\]  
+
+Using the definition of C and the fact that A_\tau B_\tau = C_\tau + h(\tau)t(\tau) (by the QAP), all terms cancel leaving equality. The full expansion is standard; see [Groth16] for a step‑by‑step derivation.
+
+C.3 Knowledge Soundness
+
+The protocol is knowledge‑sound under the q-PKE (Power Knowledge of Exponent) and q-SDH (Strong Diffie‑Hellman) assumptions. A sketch:
+
+· From a valid proof (A,B,C) for public inputs \mathbf{a}, the extractor uses the trapdoor \tau to derive polynomials A(\tau), B(\tau), C(\tau) consistent with the CRS.
+· By the q-PKE assumption, the adversary must know representations of A,B,C as combinations of the CRS elements.
+· Algebraic manipulations show that the verification equation forces the existence of a witness \mathbf{w} and a polynomial h(x) such that the QAP relation holds.
+· The formal reduction constructs an extractor that solves the q-SDH problem if a false proof is accepted. For full details, see the original Groth16 paper.
+
+C.4 Zero‑Knowledge
+
+Given a witness, the simulator chooses random A',B' in \mathbb{G}_1,\mathbb{G}_2 and sets C' such that the verification equation holds:
+
+C' = \delta^{-1} \big( \alpha\beta + A' B' - e(V,\gamma) \big) \quad \text{(with careful group encoding)}.
+\]  
+
+The distribution of (A',B',C') is identical to real proofs because r,s are uniformly random and perfectly blind the witness terms.
+
+---
+
+Appendix D: Circuit Constraint Counts and Optimisations
+
+D.1 Task Completion Circuit
+
+· Merkle verification of depth d: d Poseidon hashes → 275d constraints.
+· Nullifier computation: 1 Poseidon hash → 275 constraints.
+· Total: 275(d+1) constraints.
+
+For d=20, this is ≈ 5775 constraints.
+
+D.2 Impact Assessment Circuit
+
+· K range checks: each requires decomposing a field element into 254 bits and asserting each bit is 0/1. Using a standard bit‑decomposition gadget, each range check costs ≈ 254 multiplication gates + 2 addition gates. So K \cdot 256 constraints.
+· Sum-of-products: K multiplications for w_k m_k (1 gate each) and K-1 additions → 2K constraints.
+· Weight sum check: K additions → K constraints.
+  Total: ≈ K \cdot 258 + K constraints.
+
+For K=10, ≈ 2590 constraints.
+
+D.3 Aggregation Circuit – Inequality Gates
+
+To enforce \nu_i < \nu_{i+1}, we compare two 254‑bit numbers. The standard method:
+
+1. Bit‑decompose both numbers into 254 bits each.
+2. Compute a difference bit‑wise from MSB to LSB, determining the first bit where they differ.
+3. Assert that at that bit, \nu_i has 0 and \nu_{i+1} has 1.
+
+This can be done with a comparator gadget of ≈ 350 constraints per inequality. For N-1 comparisons, total ≈ 350(N-1) constraints, which is O(N).
+
+D.4 Poseidon Commitment with Multiple Inputs
+
+The aggregation circuit computes C = \text{Poseidon}(\nu_1,\dots,\nu_N, \mu). Each absorption requires a full permutation (275 constraints). With N+1 absorptions (including the final squeezing might be done separately), the commitment requires 275(N+1) constraints. This remains linear in N. The sponge construction uses a capacity of 1 element, so no extra padding is needed for a number of inputs that is a multiple of the rate (rate=2). For odd numbers, a single padding element can be added.
+
+---
+
+Appendix E: Softmax Allocation – Extended Analysis
+
+E.1 Gradient Derivation
+
+We have p_i = \frac{e^{\beta s_i}}{Z}, with Z = \sum_j e^{\beta s_j}.
+
+\frac{\partial p_i}{\partial s_j} = \frac{\partial}{\partial s_j} \left( e^{\beta s_i} Z^{-1} \right) 
+= \beta \delta_{ij} p_i - e^{\beta s_i} \cdot \frac{\beta e^{\beta s_j}}{Z^2} 
+= \beta p_i (\delta_{ij} - p_j).
+\]  
+
+The resource allocation is P_i = R p_i, so \frac{\partial P_i}{\partial s_j} = R \beta p_i (\delta_{ij} - p_j) = \beta P_i (\delta_{ij} - p_j).
+
+E.2 Lipschitz Continuity
+
+The function f(s) = (P_1, \dots, P_N) is Lipschitz continuous in the L_1 norm with constant 2\beta R. For any two score vectors s, s':
+
+\sum_i |P_i(s) - P_i(s')| \le 2\beta R \sum_i |s_i - s_i'|.
+\]  
+
+This can be derived from the bound on partial derivatives and the mean value theorem.
+
+E.3 Effect of Temperature \beta
+
+· As \beta \to 0, the allocation becomes uniform: P_i \to R/N.
+· As \beta \to \infty, the entire resource goes to the participant(s) with the maximum score.
+· The sensitivity bound \beta R quantifies the maximum change in allocation per unit score change, providing a tunable resistance to manipulation.
+
+---
+
+Appendix F: Repeated Game – Extended Analysis
+
+F.1 Folk Theorem
+
+For sufficiently high discount factors, any individually rational payoff profile can be sustained as a subgame perfect equilibrium. In our setting, the minmax payoff is the mutual defection value (1). The cooperative payoff (2) is feasible and individually rational, so the Folk Theorem guarantees that cooperation is possible for \delta close enough to 1, though the specific threshold depends on the payoff matrix.
+
+F.2 Imperfect Monitoring
+
+If actions are observed with noise, grim trigger may be too brittle. A forgiving strategy like “tit‑for‑tat” or a “smooth” punishment can be analysed. Under imperfect public monitoring with a signal structure, cooperation can still be sustained using belief‑based equilibria, though the threshold \delta increases.
+
+F.3 Tit‑for‑Tat
+
+Under tit‑for‑tat (cooperate in period 1; thereafter copy opponent’s last action), if both players use it, the outcome is perpetual cooperation as long as no mistake occurs. The condition for stability against deviation is \delta \ge \frac{T-R}{R-P} = \frac{3-2}{2-1}=1, which is not satisfied for \delta<1. Thus tit‑for‑tat is not a subgame perfect equilibrium in the standard PD unless augmented with some form of punishment. Grim trigger yields a more robust equilibrium.
+
+F.4 Collusion Among a Subset
+
+If a coalition of k players can coordinate, they can collectively defect against the rest while continuing to cooperate internally, potentially extracting higher payoffs. This can be incorporated as a modified game. The protocol’s Sybil‑resistance (though limited) and the softmax allocation make such collusion difficult because the total pool is fixed and defection hurts the colluders’ partners as well via the normalisation. A full analysis is beyond the current scope.
+
+---
+
+Appendix G: Soundness and Security Proofs
+
+G.1 End‑to‑End Soundness (Detailed)
+
+Theorem 9.1 (expanded). Under the security assumptions of Groth16 (knowledge soundness) and Poseidon (collision resistance), an epoch finalisation that passes verification implies the existence of a set of distinct keys \{sk_i\} and valid task completions such that the published \mu is the average of their impact scores.
+
+Proof.
+
+· The on‑chain verifier accepts the aggregation proof \pi_{agg}. By Groth16 knowledge soundness, there exists an extractor that, given the public inputs (\mu, C), outputs a witness including sorted nullifiers \{\nu_i\}, scores \{s_i\}, and the intermediate values.
+· The circuit constraints enforce \nu_1 < \nu_2 < \dots < \nu_N and \mu = \frac{1}{N}\sum s_i. By Theorem 5.1, all \nu_i are distinct and derived from distinct sk_i (unless a collision is found, which we rule out).
+· Prior to aggregation, each participant submits a task‑completion proof and an impact assessment proof. Those proofs are individually verified on‑chain. Their public outputs are the nullifier \nu_i (for the task proof) and the score s_i (for the impact proof). The contract stores only those that pass verification.
+· The aggregation prover must therefore use as witnesses only those verified (\nu_i, s_i) pairs. Any attempt to use fabricated or altered pairs would contradict the soundness of the individual proofs.
+· Thus the final \mu is computed from genuine, distinct contributions. ∎
+
+G.2 Sybil Resistance Model
+
+We model the adversary as having control over an unbounded number of secret keys. The system provides key‑limited Sybil resistance: no key can be used twice in an epoch. Full Sybil resistance requires external identity binding. We can quantify the adversary’s advantage in a game where it tries to obtain more than its fair share:
+
+Game. The adversary may register any number of keys. An honest identity oracle (e.g., proof‑of‑personhood) limits each real entity to at most M keys. The maximum share the adversary can claim is \frac{M \cdot \text{adversary\_entities}}{N + \text{adversary\_keys}}. Without such an oracle, M is unbounded.
+
+Our protocol’s nullifier uniqueness prevents double‑submission, but does not restrict key generation.
+
+G.3 Privacy Guarantees
+
+· Task Completion Proof: The prover reveals only the nullifier \nu. Because \nu is a randomised hash (with secret key and internal hash), it is unlinkable to the participant’s identity across different tasks, as long as the secret key is not reused.
+· Impact Assessment Proof: The score s is public, but the metrics vector \mathbf{m} remains hidden. The zero‑knowledge property of Groth16 ensures that nothing beyond the statement “there exist metrics and weights satisfying the scoring function” is leaked.
+· Aggregation Proof: Reveals only the sorted nullifiers (which are already public from the task proofs) and the average \mu. No individual scores are disclosed.
+
+---
+
+Appendix H: Implementation Considerations
+
+H.1 BN254 vs BLS12‑381
+
+Property BN254 BLS12‑381
+Field size p ≈ 254 bits ≈ 381 bits
+Security level ≈ 100–110 bits ≈ 128 bits
+Pairing efficiency Slightly faster Slower (larger field)
+Curve maturity Widely used (Ethereum) Becoming standard
+Proof size Smaller (due to smaller field) Larger
+
+For applications where long‑term security is paramount (e.g., value transfer), BLS12‑381 is recommended despite larger circuits and proofs.
+
+H.2 Batch Verification
+
+Multiple Groth16 proofs sharing the same CRS can be batch‑verified by combining pairing equations using a random linear combination. This reduces verification cost from O(k) pairings to O(1) pairings and some exponentiations, at the cost of a small soundness loss.
+
+H.3 Recursive Proof Composition
+
+For large N, proving the aggregation circuit as a single monolithic circuit becomes expensive. A recursive proof composition (using Halo2, Nova, or a folding scheme) can split the aggregation into a tree of smaller proofs, each covering a chunk of nullifiers. This reduces prover memory and allows parallel proving, while the final verifier checks a single constant‑size proof.
+
+---
+
+End of Appendices.
