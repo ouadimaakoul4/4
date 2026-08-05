@@ -1,0 +1,709 @@
+Toward a Universal Ethical Capsule:
+Formal Foundations and Safety Proofs
+
+Ouadi Maakoul
+
+Abstract
+
+We present a rigorous mathematical instantiation of the Universal Ethical Capsule (UEC), a model‑agnostic runtime safety filter that intercepts candidate actions from an arbitrary AI system and permits execution only if a Human Safety Functional (HSF) exceeds a certified threshold. This revision incorporates recent advances in robust control barrier functions, conformal prediction for uncertainty quantification, runtime verification automata, and constrained Markov decision processes, thereby strengthening the original theorems. The HSF is defined as a lexicographic product of hard compliance and soft risk evaluation. Each component—harm, risk, epistemic uncertainty, formal compliance, and oversight availability—is given a computable semantics grounded in robust CBF theory, robust signal temporal logic (STL), calibrated inference, and containment verification. Five core theorems are stated with full proofs that explicitly account for model mismatch, calibration error, and the decidability limits of runtime enforcement. We further extend the framework to discrete action spaces via containment verification and discuss real‑time implementation bounds. The result is a formally verifiable, runtime‑feasible safety layer that does not depend on the internal design of the AI model it protects, and whose guarantees remain meaningful under realistic imperfections.
+
+---
+
+1. Introduction
+
+The companion paper proposes a Universal Ethical Capsule: a decision filter that evaluates every action a proposed by an AI system before it affects the world. That paper left the central aggregation function HSF(a) = f(H,R,U,C,O) unspecified and did not provide the technical machinery to compute its arguments. This supplement rectifies those gaps by:
+
+1. Defining each component H,R,U,C,O in terms of well‑studied mathematical formalisms, now with rigorous robustness margins.
+2. Choosing a specific functional form for f that separates inviolable rules from weighted trade‑offs, thereby enabling independent certification of the hard constraints.
+3. Proving five core safety theorems that account for model error, uncertainty calibration, and computational limits.
+4. Providing an algorithmic schema and an autonomous‑driving instantiation to demonstrate computational feasibility.
+5. Extending the approach to discrete action domains (e.g., LLM outputs) via containment verification for syntactic constraints, and discussing the inherent limits of semantic harm detection.
+
+The philosophy remains unchanged: the capsule is an external, model‑agnostic oracle that can be verified independently of the AI system.
+
+---
+
+2. System Model and Enhanced Preliminaries
+
+2.1 Environment
+
+The world is modelled as a continuous‑time control‑affine system
+
+dx/dt = f(x) + g(x)u + w,   x ∈ X ⊆ R^n, u ∈ U ⊆ R^m,
+
+where w is a bounded disturbance with known support W. For discrete‑time decisions (e.g., LLM outputs) we consider a sampled counterpart x_{t+1} = F(x_t, u_t, w_t). The state x encapsulates all ethically relevant quantities.
+
+2.2 Safe Set and Robust CBF
+
+A continuously differentiable function h : R^n → R defines the ethical safe set
+
+C = { x ∈ R^n | h(x) ≥ 0 }.
+
+We require a robust control barrier function (RCBF) that ensures forward invariance despite disturbances, following the set‑based formulation of Wabersich et al. (2025).
+
+Definition 2.1 (Robust CBF). A function h is a Robust CBF on an open set D ⊃ C if there exists a class K function α such that for all x ∈ D,
+
+sup_{u ∈ U} inf_{w ∈ W} [ L_f h(x) + L_g h(x) u + ∂h/∂x w ] ≥ -α(h(x)).
+
+If such a condition holds, any Lipschitz controller selecting u from the feasible set renders C forward invariant.
+
+For high relative degree systems, we employ Higher‑Order RCBFs (HORCBF) with a chain of functions ψ_0 = h, ψ_i = dψ_{i-1}/dt + α_i(ψ_{i-1}).
+
+2.3 Robust Signal Temporal Logic (RSTL)
+
+Temporal safety requirements are expressed in Signal Temporal Logic. For each formula φ we compute a robustness degree ρ(φ, ξ) ∈ R. Satisfaction is ρ > 0. To account for prediction error, we use robust semantics that inflate the predicate by a margin δ proportional to the model error bound. Formally, given a certified bound ε on the maximum deviation between predicted trace ξ_pred and the true trajectory, we define the robust robustness ρ_robust(φ, ξ_pred) = ρ(φ, ξ_pred) − L_ρ ε, where L_ρ is the Lipschitz constant of the robustness function (see, e.g., Fainekos and Pappas 2009). A positive ρ_robust then guarantees satisfaction on the true trace.
+
+2.4 Calibrated Epistemic Uncertainty with Conformal Prediction
+
+We maintain a Bayesian posterior over world model parameters. However, to avoid the pitfalls of uncalibrated uncertainty, we complement any learned predictor with conformal prediction. Given a calibration set of (state, action, true harm) tuples, we construct a prediction interval for H that contains the true harm with probability 1 − δ. The uncertainty component U is defined as the width of this interval, guaranteeing that high U truly implies high epistemic uncertainty with a finite‑sample coverage guarantee. This directly addresses the unidentifiability issues of evidential deep learning and enforces the monotonicity required in Theorem 4.
+
+2.5 Constrained MDP with Slater’s Condition
+
+The AI’s interaction over a horizon T_max is a CMDP with cost functions c_i(x,a). The UEC must ensure E[Σ_t γ^t c_i(x_t,a_t)] ≤ d_i. We assume strict feasibility (Slater’s condition) with a constant ζ > 0, meaning there exists a policy that satisfies constraints with a slack of ζ (Liu et al. 2026). This ensures strong duality and a bounded sample complexity for safe policy learning.
+
+2.6 Containment Verification for Discrete Actions
+
+For discrete action spaces (e.g., token sequences), we employ the containment verification framework of Moon and Varshney (2026). The AI model is treated as a “havoc oracle” that can output any action; the UEC implements a verified finite‑state machine that only emits actions satisfying all syntactically checkable hard constraints. This guarantees safety independently of the AI’s internal structure for properties that are regular (finite‑state) over the action interface. Semantic ethical rules that require understanding of meaning cannot be reduced to such a monitor; those are handled separately by the soft harm/risk evaluation, which necessarily relies on a model‑based classifier with its own—unverified—error bounds. We discuss this limitation in Section 8.
+
+---
+
+3. Formal Definition of the Human Safety Functional
+
+3.1 Component Definitions
+
+For a proposed action a at state x:
+
+1. Predicted human harm H(x,a) ∈ [0,1]:
+   H(x,a) = E_{x' ~ p(·|x,a)}[ harm(x') ],
+   where harm : X → [0,1] is a pre‑specified injury/damage function. The predictor is a neural network calibrated via isotonic regression on a held‑out set. We output the conformal prediction upper bound to ensure safety.
+2. Physical and societal risk R(x,a) ∈ [0,1]:
+   R(x,a) = w_phys * Pr(x' ∈ S_unsafe | x,a) + w_soc * soc_score(x,a),
+   with weights summing to 1. The probability is estimated by a robust multi‑step predictor that accounts for disturbance bounds.
+3. Epistemic uncertainty U(x,a) ∈ [0,1]:
+   U(x,a) = width of the (1−δ) conformal prediction interval for harm, normalized to [0,1]. This directly measures the model’s lack of knowledge with a guarantee that the true harm is inside the interval with high probability.
+4. Formal compliance C(x,a) ∈ R:
+   Let Φ = {φ_1,…,φ_k} be a set of robust STL formulas. Given the predicted trace ξ with certified error bound ε, compute the robust robustness ρ_robust(φ_i, ξ) = ρ(φ_i, ξ) − L_ρ ε_i. Then
+   C(x,a) = min_i ρ_robust(φ_i, ξ).
+   A positive minimum ensures satisfaction of all invariants even under the worst‑case model error.
+5. Human oversight availability O(x) ∈ [0,1]:
+   O(x) = 1 if the human channel is responsive within τ_max and not overloaded, else 0. The round‑trip latency is continuously monitored.
+
+3.2 Aggregation as a Lexicographic Product
+
+The HSF is defined as a two‑stage filter:
+
+If C(x,a) ≥ 0 AND [U(x,a) ≤ τ_U OR O(x) = 1] :
+SoftScore(x,a) = 1 − (α_H H + α_R R + α_U U)    (α_H+α_R+α_U=1)
+If SoftScore ≥ τ → execute (after possible safety‑preserving modification, see below).
+Else if U > τ_U and O = 1 → defer to human.
+Else → block (trigger safe fallback).
+Else:
+Block the action (and trigger safe fallback).
+
+For continuous action spaces, the “execute” path may further modify the nominal action a via a robust CBF‑QP to guarantee forward invariance of C. This QP solves
+
+u* = argmin_{u∈U} ‖u − u_nom‖²
+s.t.   L_f h(x) + L_g h(x)u ≥ −α(h(x)) + γ(x),
+
+where γ(x) is a disturbance margin as in Theorem 1. The HSF thus always emits a control that satisfies the hard safety invariant, even if the soft score approved the nominal action.
+
+For discrete actions (e.g., text), the “execute” path passes the action string through the containment monitor; if accepted, the string is emitted unchanged.
+
+---
+
+4. Ethical Invariants as Mathematical Constraints
+
+The ethical invariants translate into:
+
+(I1) Avoid severe harm ⇒ h(x) ≥ 0 is robustly forward invariant.
+(I2) Prefer lower‑risk actions ⇒ SoftScore is monotonically decreasing in H and R.
+(I3) Defer when uncertain ⇒ if U > τ_U and O=1, defer; if O=0, block.
+(I4) Verifiable explanation ⇒ every decision tuple (H,R,U,C,O,decision) is logged with cryptographic integrity.
+
+---
+
+5. Theorems and Proofs
+
+We now prove the five core theorems, incorporating model error, calibration, and robustness margins. All proofs assume the UEC’s internal components satisfy the stated robustness conditions; these conditions are verifiable by independent certification.
+
+---
+
+Theorem 1 (Robust Safety Invariance – RCBF Enforcement)
+
+Let h be a valid Robust Control Barrier Function for the disturbed system on C = {x | h(x) ≥ 0}. Suppose the UEC modifies any nominal action a_nom via the robust CBF‑QP:
+
+u* = argmin_{u∈U} ‖u − u_nom‖²
+s.t.   L_f h(x) + L_g h(x)u ≥ −α(h(x)) + γ(x),
+
+where γ(x) ≥ sup_{w∈W} |∂h/∂x w| is a margin that overcomes the worst‑case disturbance. Then for any initial x(0) ∈ C, the trajectory satisfies x(t) ∈ C for all t ≥ 0, with probability 1 if disturbances are bounded.
+
+Proof.
+The constraint ensures that for the executed u*,
+
+dh/dt = L_f h + L_g h u* + (∂h/∂x)w ≥ −α(h) − γ(x) + (∂h/∂x)w.
+
+Since γ(x) ≥ |(∂h/∂x)w| for all w ∈ W, we have dh/dt ≥ −α(h). The comparison lemma with the 1D system dy/dt = −α(y), y(0)=h(x(0))≥0 yields h(x(t)) ≥ y(t) ≥ 0. Thus C is forward invariant. Extension to high relative degree uses HORCBF with the same robust margin in each layer. ∎
+
+---
+
+Theorem 2 (Runtime Correctness under Model Error)
+
+Let Φ = {φ_i} be robust STL formulas with associated certified error bounds ε_i on the predicted trace. If the UEC’s hard‑veto condition requires C(x,a) = min_i ρ_robust(φ_i, ξ) ≥ 0, where ρ_robust(φ_i, ξ) = ρ(φ_i, ξ) − L_ρ ε_i, then any executed action produces a real trace that satisfies all φ_i, provided the actual prediction error does not exceed the certified bounds.
+
+Proof.
+By definition of robust STL, if ρ_robust(φ_i, ξ) ≥ 0, then even if the true trace deviates from the predicted trace by at most ε_i, the real robustness ρ(φ_i, ξ_true) ≥ ρ(φ_i, ξ) − L_ρ ε_i ≥ 0. Hence all φ_i are satisfied. The critical assumption is the availability of a verified bound ε_i; this is realistic for well‑characterized physical systems but cannot be certified for arbitrary AI action spaces (see Section 8). ∎
+
+---
+
+Theorem 3 (Stability under Safety‑First Fallback with Feasibility Guarantee)
+
+Assume the system admits a control Lyapunov function V and a robust CBF h as before. The UEC solves a soft‑constrained QP as in the original, but with the robust CBF constraint. If the QP is feasible, V(x(t)) converges to a neighborhood of the origin. If infeasible, the UEC falls back to a purely safety‑preserving controller that is guaranteed to exist because of the robust CBF property.
+
+Proof.
+Feasible case: identical to the original, with the added margin in the CBF condition, so ultimate boundedness holds. The Lipschitz continuity of the explicit solution ensures smooth transitions.
+
+Infeasible case: The robust CBF condition guarantees the existence of some u that satisfies dh/dt ≥ −α(h) even under worst‑case disturbance. The fallback selects such a u, preserving invariance of C. Thus safety is never violated. ∎
+
+---
+
+Theorem 4 (Human Oversight Theorem – Calibrated Uncertainty Reduces Expected Harm)
+
+Assume the UEC’s uncertainty U is derived from conformal prediction with coverage 1−δ, and that the calibrated monotonicity condition holds: E[harm | U=u] is non‑decreasing in u. Let the human overseer reduce harm to ε_h when available. Suppose the essential supremum of expected harm across uncertainty levels exceeds the human‑deferral cost, i.e.,
+
+h* := ess sup_{u∈[0,1]} E[harm | U=u] > ε_h.      (1)
+
+Then there exists a threshold τ_U ∈ [0,1) with Pr(U > τ_U) > 0 such that the expected harm under the UEC policy is strictly less than that of an always‑execute baseline. This guarantee holds for any human availability probability p_O ∈ [0,1].
+
+Proof.
+Define η = (h* − ε_h)/2 > 0. By the definition of essential supremum, the set S_η = {u : E[harm | U=u] > h* − η} satisfies Pr(U ∈ S_η) > 0. Since E[harm | U=u] is non‑decreasing, S_η is upward‑closed: if u₁ ∈ S_η and u₂ > u₁, then E[harm | u₂] ≥ E[harm | u₁] > h* − η, so u₂ ∈ S_η. Hence S_η = (τ_η, 1] for some τ_η < 1, and Pr(U > τ_η) > 0.
+
+For every u > τ_η, E[harm | U=u] > h* − η = (h* + ε_h)/2 > ε_h. Averaging over the region U > τ_η gives
+
+E[harm | U > τ_η] > (h* + ε_h)/2 > ε_h.   (2)
+
+Now consider the expected harm of the UEC decision rule:
+
+If U ≤ τ_η: execute AI action.
+If U > τ_η and O = 1: defer (harm = ε_h).
+If U > τ_η and O = 0: block (harm = 0, safe fallback).
+
+The expected harm is
+
+E[H_UEC] = ∫_0^{τ_η} E[harm|U=u] dP(u) + Pr(U > τ_η, O=1) ε_h.
+
+The always‑execute baseline has E[H_base] = ∫_0^1 E[harm|U=u] dP(u). The difference is
+
+Δ = Pr(U > τ_η) · [ E[harm | U > τ_η] − p_O·ε_h ],
+
+where p_O = Pr(O=1 | U > τ_η). Because p_O ≤ 1, we have p_O·ε_h ≤ ε_h, and using (2),
+
+E[harm | U > τ_η] − p_O·ε_h ≥ E[harm | U > τ_η] − ε_h > 0.
+
+Since Pr(U > τ_η) > 0, Δ > 0. Thus the threshold τ_U = τ_η strictly reduces expected harm, regardless of the specific value of p_O. ∎
+
+Note: This theorem provides an existential guarantee; a practical choice of τ_U can be found in the calibration phase by identifying the smallest uncertainty bin where the isotonically fitted E[harm|bin] exceeds ε_h.
+
+---
+
+Theorem 5 (Bounded‑Risk Decision – CMDP with Model Mismatch)
+
+Consider a CMDP with cost bounded in [0, C_max] and strict feasibility (Slater constant ζ > 0). The UEC uses T Monte Carlo rollouts from an imperfect world model with bias bound b. It allows an action only if the empirical cumulative cost estimate Ĵ_c ≤ d − β_T − b. With appropriate margin β_T, the true cumulative cost satisfies E[Σ_t γ^t c_t] ≤ d with probability 1−δ.
+
+Proof.
+We use a concentration bound for the empirical mean of T i.i.d. trajectories, each with discounted sum bounded by C_max/(1−γ). By Hoeffding, |Ĵ_c − J_model| ≤ ε with prob. 1−δ for ε = C_max sqrt( log(2/δ) / (2T(1−γ)^2) ). The model bias means |J_model − J_true| ≤ b. Hence |Ĵ_c − J_true| ≤ ε + b with high probability. Choose β_T = ε + b. Then enforcing Ĵ_c ≤ d − β_T ensures J_true ≤ d. The strict feasibility ensures that such actions exist with probability approaching 1 as T grows. For N steps, a union bound gives overall confidence 1 − Nδ. ∎
+
+---
+
+6. Extension to Discrete Action Spaces via Containment Verification
+
+For LLMs or other discrete‑output systems, the UEC implements a verified finite‑state monitor derived from the STL formulas and hard constraints that are expressible as regular properties over the action alphabet. Using the containment verification method of Moon and Varshney (2026), we construct a shim layer that intercepts any action string, checks it against a machine‑checked state machine encoding the syntactic ethical rules, and only passes through compliant actions. Examples include: refusal to output known hazardous commands, prevention of private‑data leakage via pattern matching, and enforcement of specific output formats.
+
+The AI model is treated as a nondeterministic oracle; the shim’s correctness is formally proven in a proof assistant. However, semantic constraints such as “do not generate hate speech” or “do not coerce” are not finite‑state recognizable over raw tokens; they inherently require a model‑based classifier that may itself have unverified error bounds. Therefore, in the discrete‑action UEC, the hard‑veto layer handles interface‑level invariants, while the soft harm/risk evaluator—using a separate learned classifier—handles semantic judgement, accepting that its guarantees are weaker than the syntactically verified portion. This division is explicitly acknowledged in the limitations (Section 8).
+
+---
+
+7. Autonomous Driving Instantiation (Updated)
+
+We illustrate with the lane‑change example. The RCBF h is defined using a minimum distance to obstacles with a margin that accounts for sensor noise and prediction errors. The harm predictor H uses an ensemble of calibrated networks with conformal prediction intervals. Uncertainty U is the normalized interval width. The STL formulas are monitored with robust semantics: φ_1 = G_[0,∞) (h(x) ≥ 0) with a certified error bound ε. If rain increases uncertainty, U exceeds τ_U, and the system defers to human oversight or safely brakes. The CBF‑QP ensures that even if the human‑deferred decision is delayed, the invariant h(x) ≥ 0 is maintained.
+
+---
+
+8. Discussion: Assumptions and Limitations
+
+Our guarantees rely on: (a) certified bounds on model prediction error, which are realistically obtainable only in well‑characterized physical domains; (b) the existence of a valid RCBF that covers all relevant safety states (for physical safety, this is plausible; for abstract ethical dimensions, constructing h is an open problem); (c) calibrated uncertainty via conformal prediction, which requires the calibration data to be exchangeable with runtime conditions—a property that can degrade under distribution shift and may necessitate online re‑calibration; (d) the existence of a strictly feasible policy for CMDP constraints, which can be verified offline.
+
+For discrete action spaces, the containment verification layer provides rigorous, machine‑checked guarantees only for syntactic properties at the action interface. It cannot, by itself, certify semantic ethical norms; those are relegated to a separate, model‑dependent classifier with unverified error bounds. The overall safety of the capsule in such settings is therefore only as strong as that classifier’s performance, not the formal verification.
+
+The separation of hard and soft constraints enables piecewise certification: even if the soft risk model errs, the robust CBF/STL hard constraints and the containment monitor continue to provide an independent safety net where applicable. The capsule remains model‑agnostic in the sense that it makes no assumptions about the AI’s internal design, but the scope of its formal guarantees narrows as the action space becomes less structured.
+
+---
+
+9. Conclusion
+
+We have strengthened the Universal Ethical Capsule into a mathematically grounded safety architecture that withstands model imperfections, epistemic uncertainty, and discrete action interfaces. By leveraging robust CBFs, conformal prediction, and containment verification, the five theorems now provide realistic guarantees under explicitly stated, verifiable conditions. The architecture separates syntactic, formally enforced constraints from semantic, model‑dependent evaluations, transparently exposing the limits of verification. The capsule remains model‑agnostic and computationally feasible, offering a practical path toward certifiable runtime AI safety.
+
+Appendices:
+
+Appendix A: Mathematical Preliminaries
+
+A.1 Robust Control Barrier Functions (RCBFs)
+
+We consider a disturbed control‑affine system
+
+\dot{x} = f(x) + g(x)u + w,\qquad x\in\mathcal{X}\subseteq\mathbb{R}^n,\; u\in\mathcal{U}\subseteq\mathbb{R}^m,
+
+where w\in\mathcal{W} is a bounded disturbance with known compact support \mathcal{W}. The functions f and g are locally Lipschitz. A continuously differentiable function h:\mathbb{R}^n\to\mathbb{R} defines the safe set
+
+\mathcal{C} = \{x\in\mathbb{R}^n \mid h(x)\ge 0\},\qquad 
+\partial\mathcal{C} = \{x\mid h(x)=0\},\qquad 
+\operatorname{Int}(\mathcal{C}) = \{x\mid h(x)>0\}.
+
+Definition A.1 (Robust Control Barrier Function). The function h is a Robust CBF on an open set \mathcal{D}\supset\mathcal{C} if there exists a class \mathcal{K} function \alpha (strictly increasing, \alpha(0)=0) such that for all x\in\mathcal{D},
+
+\sup_{u\in\mathcal{U}}\inf_{w\in\mathcal{W}}\Bigl[ L_f h(x) + L_g h(x)\,u + \frac{\partial h}{\partial x}\!\cdot\! w \Bigr] \;\ge\; -\alpha\bigl(h(x)\bigr). \tag{A.1}
+
+When \mathcal{U} is polyhedral, the condition can be enforced by solving a robust CBF‑QP:
+
+u^* = \underset{u\in\mathcal{U}}{\operatorname{argmin}} \|u - u_{\text{nom}}\|^2
+\quad\text{s.t.}\quad
+L_f h(x) + L_g h(x)\,u \;\ge\; -\alpha(h(x)) + \gamma(x),
+
+where \gamma(x)\ge \sup_{w\in\mathcal{W}} \bigl|\frac{\partial h}{\partial x}\!\cdot\! w\bigr|. The margin \gamma(x) absorbs the worst‑case disturbance. If \mathcal{U}=\mathbb{R}^m and L_g h\neq 0, the closed‑form solution is
+
+u^* = u_{\text{nom}} + \max\!\Bigl(0,\,
+\frac{-\alpha(h) - \gamma(x) - L_f h - L_g h\,u_{\text{nom}}}{\|L_g h\|^2}\Bigr) (L_g h)^\top .
+
+With this margin, robust forward invariance of \mathcal{C} is guaranteed (see Theorem 1).
+
+Higher‑order RCBFs. If h has relative degree r>1, a sequence of functions is constructed:
+
+\psi_0 = h,\qquad \psi_i = \dot\psi_{i-1} + \alpha_i(\psi_{i-1}),\quad i=1,\dots,r-1,
+
+and the final condition uses \psi_{r-1} in the RCBF inequality (A.1) with an appropriate disturbance margin. This yields nested invariance of the sets \mathcal{C}_i = \{x\mid \psi_i(x)\ge 0\}, ultimately preserving h(x)\ge 0.
+
+---
+
+A.2 Signal Temporal Logic with Robust Semantics
+
+Let a trace \xi: \mathbb{R}_{\ge 0}\to\mathbb{R}^n represent the system’s evolution. The quantitative (or robustness) semantics of an STL formula \varphi at time t is a real value \rho(\varphi,\xi,t) such that \xi\models\varphi if and only if \rho(\varphi,\xi,0)>0. The robust semantics are defined recursively; for a predicate \mu(x)\ge 0, \rho(\mu,\xi,t)=\mu(\xi(t)).
+
+To account for prediction errors, assume we have a predicted trace \tilde\xi and a certified bound \varepsilon>0 on the maximum deviation from the true trace \xi_{\text{true}}:
+
+\|\xi_{\text{true}} - \tilde\xi\|_\infty \le \varepsilon.
+
+Let L_\rho be a Lipschitz constant for the robustness function, which can be derived from the structure of \varphi (see, e.g., Fainekos and Pappas, “Robustness of temporal logic specifications for continuous-time signals,” Theoretical Computer Science, 2009). Then
+
+\rho(\varphi,\xi_{\text{true}}) \;\ge\; \rho(\varphi,\tilde\xi) - L_\rho\,\varepsilon.
+
+We define the robust robustness
+
+\rho_{\text{robust}}(\varphi,\tilde\xi) = \rho(\varphi,\tilde\xi) - L_\rho\,\varepsilon.
+
+Clearly, if \rho_{\text{robust}}(\varphi,\tilde\xi) \ge 0, then \rho(\varphi,\xi_{\text{true}})\ge 0 and the specification is guaranteed to be satisfied on the true trajectory. The UEC’s formal compliance component uses this value.
+
+---
+
+A.3 Conformal Prediction for Epistemic Uncertainty
+
+We employ inductive conformal prediction to obtain calibrated prediction intervals without distributional assumptions. Given a calibration set \mathcal{D}_{\text{cal}}=\{(x_i,a_i,y_i)\}_{i=1}^{N} where y_i is the true harm for the i-th sample, and a predictor \hat f (e.g., an ensemble mean), compute the residuals
+
+R_i = |y_i - \hat f(x_i,a_i)|.
+
+For a target error rate \delta\in(0,1), let q be the \lceil (N+1)(1-\delta)\rceil / N quantile of the empirical distribution of the residuals (or, equivalently, the 1-\delta quantile of the augmented set with an extra infinite residual). At runtime, for a new input (x,a), the prediction interval is
+
+C(x,a) = \bigl[ \hat f(x,a) - q,\; \hat f(x,a) + q \bigr].
+
+By the exchangeability of calibration and test data, this interval contains the true harm y with probability at least 1-\delta. We define the epistemic uncertainty as the normalized width
+
+U(x,a) = \frac{2q}{\text{max\_width}},
+
+where \text{max\_width} is the maximum interval width observed in the calibration set. This normalization yields U\in[0,1]. The coverage guarantee implies that a large U genuinely reflects high uncertainty. Furthermore, after isotonic calibration (see Appendix E.2), the conditional expectation \mathbb{E}[\text{harm}\mid U=u] becomes non‑decreasing in u.
+
+---
+
+A.4 Constrained Markov Decision Processes
+
+A CMDP is a tuple \mathcal{M}=(\mathcal{S},\mathcal{A},P,r,\{c_i\},\mu,\gamma) where \mathcal{S} is the state space, \mathcal{A} the action space, P(s'|s,a) the transition kernel, r a reward function (not needed for safety), c_i(s,a) cost functions, \mu the initial distribution, and \gamma\in[0,1) the discount factor. A policy \pi induces the expected cumulative cost
+
+J_{c_i}(\pi) = \mathbb{E}_\pi\Bigl[ \sum_{t=0}^{\infty} \gamma^t c_i(s_t,a_t) \Bigr].
+
+The safety constraint is J_{c_i}(\pi) \le d_i. We assume strict feasibility (Slater’s condition): there exists a policy \pi_0 and a constant \zeta>0 such that J_{c_i}(\pi_0) \le d_i - \zeta for all i. This ensures strong duality and bounded sample complexity for safe policy learning (Liu et al., 2026). The UEC’s risk evaluation uses Monte Carlo rollouts under the world model to estimate J_{c_i}.
+
+---
+
+Appendix B: Construction of the Human Safety Functional – Component Operators
+
+Harm predictor H. An ensemble of neural networks is trained to predict the harm value \texttt{harm}(x')\in[0,1]. Each network is calibrated via Platt scaling on a hold‑out set. The final estimate is the conformal upper bound: H(x,a) = \text{mean\_prediction} + q, where q is the quantile from conformal regression as described in A.3. This guarantees that with probability at least 1-\delta, the true harm does not exceed H.
+
+Risk R. Physical risk is estimated by a robust multi‑step predictor that simulates T trajectories under adversarial disturbance realizations within \mathcal{W}; the collision probability is the fraction of trajectories that enter a designated unsafe set. Societal risk is a deterministic penalty  \texttt{soc\_score}(x,a)\in[0,1]. The final risk is R = w_{\text{phys}}\Pr(\text{unsafe}) + w_{\text{soc}}\,\texttt{soc\_score}, with w_{\text{phys}}+w_{\text{soc}}=1.
+
+Epistemic uncertainty U. Computed directly as the normalized width of the conformal prediction interval for harm (see A.3). By construction, U satisfies the finite‑sample coverage property and, after isotonic calibration (Appendix E.2), \mathbb{E}[\text{harm}\mid U=u] is non‑decreasing.
+
+Formal compliance C. For each STL formula \varphi_i in the set \Phi, we compute the robust robustness \rho_{\text{robust}}(\varphi_i,\tilde\xi) with the certified prediction error bound \varepsilon_i. Then C = \min_i \rho_{\text{robust}}(\varphi_i,\tilde\xi). The hard‑veto condition C\ge 0 guarantees satisfaction of all invariants under the worst‑case model error.
+
+Oversight availability O. Binary: O=1 if the round‑trip latency to the human operator is below \tau_{\max} and the operator is not overloaded; else O=0. Monitored continuously.
+
+---
+
+Appendix C: Full Proofs of Theorems
+
+C.1 Theorem 1 – Robust Safety Invariance
+
+Proof. The RCBF‑QP enforces, for the executed control u^*,
+
+L_f h + L_g h \,u^* \;\ge\; -\alpha(h) + \gamma(x),
+
+with \gamma(x)\ge \sup_{w\in\mathcal{W}} \bigl|\frac{\partial h}{\partial x} w\bigr|. For any disturbance w\in\mathcal{W},
+
+\dot h = L_f h + L_g h\,u^* + \frac{\partial h}{\partial x} w \;\ge\; -\alpha(h) - \gamma(x) + \frac{\partial h}{\partial x} w \;\ge\; -\alpha(h).
+
+Consider the scalar system \dot y = -\alpha(y) with y(0)=h(x(0))\ge 0. By the comparison lemma, h(x(t)) \ge y(t) \ge 0 for all t\ge 0. Hence x(t)\in\mathcal{C} for all t. For higher‑order RCBFs, the same reasoning applied to each \psi_i ensures \psi_{r-1}(x(t))\ge 0 and consequently h(x(t))\ge 0. ∎
+
+---
+
+C.2 Theorem 2 – Runtime Correctness under Model Error
+
+Proof. The UEC allows an action only if C = \min_i \rho_{\text{robust}}(\varphi_i,\tilde\xi) \ge 0. By definition, \rho_{\text{robust}}(\varphi_i,\tilde\xi) = \rho(\varphi_i,\tilde\xi) - L_\rho\varepsilon_i \ge 0. Since \|\xi_{\text{true}} - \tilde\xi\|_\infty \le \varepsilon_i by the certified error bound, the Lipschitz continuity of the robustness function gives
+
+\rho(\varphi_i,\xi_{\text{true}}) \;\ge\; \rho(\varphi_i,\tilde\xi) - L_\rho\varepsilon_i \;\ge\; 0.
+
+Thus every formula \varphi_i is satisfied on the actual trajectory. The theorem’s hypothesis—the availability of a verified error bound \varepsilon_i—is satisfiable for systems with well‑characterised sensor noise and dynamics; for arbitrary AI action spaces, such certification is not possible and the guarantee reduces to a conditional one (see discussion in Section 8). ∎
+
+---
+
+C.3 Theorem 3 – Stability under Safety‑First Fallback
+
+Proof. When the soft‑constrained QP is feasible, the control simultaneously decreases a control Lyapunov function V (to a bounded relaxation) and satisfies the robust CBF constraint. The analysis of the original CLF‑CBF QP applies; the disturbance margin in the CBF condition guarantees ultimate boundedness of V to a neighbourhood of the origin.
+
+If the QP is infeasible, the robust CBF property (A.1) guarantees the existence of some u\in\mathcal{U} such that
+
+\inf_{w\in\mathcal{W}}\bigl[ L_f h + L_g h\,u + \tfrac{\partial h}{\partial x} w \bigr] \ge -\alpha(h).
+
+The safety‑preserving fallback selects any such u (e.g., by solving a minimal‑norm feasibility QP), thereby ensuring \dot h \ge -\alpha(h) and, by the same comparison argument as in Theorem 1, h(x(t))\ge 0 for all future times. Thus the hard safety invariant is never violated, even when performance objectives cannot be met. ∎
+
+---
+
+C.4 Theorem 4 – Human Oversight with Calibrated Uncertainty
+
+Proof. We repeat the corrected argument from Section 5. Let U be the conformal uncertainty measure, and assume \mathbb{E}[\texttt{harm}\mid U=u] is non‑decreasing (obtained via isotonic calibration). Define the essential supremum
+
+h^* = \operatorname{ess\,sup}_{u\in[0,1]} \mathbb{E}[\texttt{harm}\mid U=u],
+
+and suppose h^* > \varepsilon_h, where \varepsilon_h is the harm achieved by the human overseer. Let \eta = (h^* - \varepsilon_h)/2 > 0. By definition of the essential supremum, the set
+
+S_\eta = \{u \mid \mathbb{E}[\texttt{harm}\mid U=u] > h^* - \eta\}
+
+has positive probability. Monotonicity implies S_\eta is upward‑closed; therefore S_\eta = (\tau_\eta, 1] for some \tau_\eta < 1, and \Pr(U > \tau_\eta) > 0.
+
+For every u > \tau_\eta, \mathbb{E}[\texttt{harm}\mid U=u] > h^* - \eta = (h^* + \varepsilon_h)/2 > \varepsilon_h. Integrating over the region U > \tau_\eta yields
+
+\mathbb{E}[\texttt{harm}\mid U > \tau_\eta] > \varepsilon_h. \tag{C.1}
+
+The UEC decision rule for this threshold is:
+
+· U \le \tau_\eta: execute AI action (harm = \mathbb{E}[\texttt{harm}\mid U]),
+· U > \tau_\eta and O = 1: defer to human (harm = \varepsilon_h),
+· U > \tau_\eta and O = 0: block (harm = 0).
+
+Expected harm under the UEC is
+
+\mathbb{E}[H_{\text{UEC}}] = \int_{0}^{\tau_\eta} \! \mathbb{E}[\texttt{harm}\mid U=u]\,dP(u) \;+\; \Pr(U>\tau_\eta,\,O=1)\,\varepsilon_h.
+
+The always‑execute baseline has \mathbb{E}[H_{\text{base}}] = \int_0^1 \mathbb{E}[\texttt{harm}\mid U=u]\,dP(u). The difference is
+
+\Delta = \Pr(U>\tau_\eta)\Bigl[ \mathbb{E}[\texttt{harm}\mid U>\tau_\eta] - p_O\,\varepsilon_h \Bigr],
+
+where p_O = \Pr(O=1\mid U>\tau_\eta). Because p_O \le 1, we have p_O\,\varepsilon_h \le \varepsilon_h. Combining this with (C.1) gives
+
+\mathbb{E}[\texttt{harm}\mid U>\tau_\eta] - p_O\,\varepsilon_h \;\ge\; \mathbb{E}[\texttt{harm}\mid U>\tau_\eta] - \varepsilon_h \;>\; 0.
+
+Since \Pr(U>\tau_\eta) > 0, \Delta > 0. Thus the threshold \tau_U = \tau_\eta strictly reduces expected harm compared with never deferring. Crucially, the argument holds for any human availability probability p_O\in[0,1], removing the earlier requirement that p_O be “sufficiently large”. An operational threshold can be chosen in practice as the smallest uncertainty bin where the isotonically fitted \mathbb{E}[\texttt{harm}\mid\text{bin}] exceeds \varepsilon_h. ∎
+
+---
+
+C.5 Theorem 5 – Bounded‑Risk Decision under Model Mismatch
+
+Proof. We estimate the cumulative cost J_c(\pi) using T independent Monte Carlo rollouts from the imperfect world model, yielding an empirical mean \hat J_c. The model bias is bounded by b: |J_{\text{model}} - J_{\text{true}}| \le b. By Hoeffding’s inequality, for a single cost dimension, with probability at least 1-\delta,
+
+|\hat J_c - J_{\text{model}}| \;\le\; \varepsilon \;=\; C_{\max}\sqrt{\frac{\log(2/\delta)}{2T(1-\gamma)^2}},
+
+where C_{\max} is the maximal per‑step cost. Hence
+
+|\hat J_c - J_{\text{true}}| \;\le\; \varepsilon + b \quad\text{w.p. } 1-\delta.
+
+Set the margin \beta_T = \varepsilon + b. The UEC only allows an action if the constraint is met with this margin: \hat J_c \le d - \beta_T. Then
+
+J_{\text{true}} \;\le\; \hat J_c + \beta_T \;\le\; d.
+
+For a CMDP with K constraints, apply a union bound to obtain confidence 1 - K\delta. Over N decision steps, another union bound gives overall confidence 1 - NK\delta. The strict feasibility condition ensures that safe actions remain available with high probability as T grows. ∎
+
+---
+
+Appendix D: Algorithmic Schemas
+
+D.1 Full UEC Runtime Loop
+
+```
+Input: state x, candidate action a (continuous u_nom or discrete string)
+Output: executed action a_exec, log entry
+
+1. Predict trajectory ξ over horizon H using the world model.
+2. Compute robust STL robustness for each φ_i:
+       ρ_robust_i = ρ(φ_i, ξ) - L_ρ ε_i
+   C = min_i ρ_robust_i.
+   If C < 0: block action, trigger safe fallback, log, EXIT.
+3. Compute H, R, U:
+       H = conformal upper bound (mean + q)
+       R = w_phys * Pr(unsafe) + w_soc * soc_score
+       U = normalized width of conformal interval
+4. Check oversight channel: O = (latency < τ_max and operator available) ? 1 : 0.
+5. Hard‑veto:
+   if U > τ_U and O == 0: block, fallback, log, EXIT.
+   else if U > τ_U and O == 1: defer to human, log, EXIT.
+6. (U ≤ τ_U) Compute SoftScore:
+       S = 1 - (α_H H + α_R R + α_U U)
+   if S ≥ τ:                           // approved to execute
+       if continuous action space:
+           u_exec = solution of CBF‑QP (Theorem 1) with u_nom = a
+           execute u_exec
+       else (discrete):
+           pass action string a through containment monitor
+           if accepted: execute a
+           else: block, fallback
+   else:  // S < τ
+       search for alternative action:
+           if continuous: solve CBF‑QP with relaxed soft‑constraint CLF
+           if discrete: enumerate near‑neighbour strings and re‑evaluate
+       if acceptable alternative found: execute it
+       else: block, fallback
+7. Log decision tuple (H,R,U,C,O,S,decision) with timestamp and hash chain.
+```
+
+For continuous systems, the CBF‑QP (step 6) ensures that even the approved nominal action is modified to guarantee the safe set’s forward invariance. In discrete domains, the containment monitor enforces all syntactically expressible hard constraints. Semantic soft‑harm evaluation is handled by the HSF components H,R,U, which rely on a learned classifier; its guarantees are limited to the conformal coverage of the harm predictor and the calibration of uncertainty.
+
+D.2 Containment Verification for Discrete Actions
+
+Following the approach of Moon and Varshney (2026), we construct a verified finite‑state machine (FSM) \mathcal{M} that recognises exactly those action strings that satisfy a set of regular safety properties (e.g., no forbidden tokens, no call to dangerous APIs with malicious arguments, output‑format invariants). The AI model is treated as a “havoc oracle” that may emit any string; the UEC interposes by running \mathcal{M} on the string. Acceptance implies the string is syntactically compliant; rejection triggers a block.
+
+The FSM is machine‑checked in a proof assistant (e.g., Dafny) to be correct with respect to its formal specification. Critically, properties that require semantic understanding—such as “do not generate hate speech”—are not regular over raw tokens and fall outside the scope of this monitor. Those are evaluated by the soft‑harm pathway, which necessarily uses a model‑based classifier with unverified error bounds. This division is explicitly acknowledged in Section 8.
+
+---
+
+Appendix E: Calibration of the Harm Predictor and Uncertainty
+
+E.1 Conformal Harm Calibration
+
+1. Train an ensemble of harm predictors on a training set (not used in calibration).
+2. On a separate calibration set \mathcal{D}_{\text{cal}}, for each sample (x_i,a_i,y_i) compute the absolute residual r_i = |y_i - \bar f(x_i,a_i)|, where \bar f is the ensemble mean prediction.
+3. Sort the residuals \{r_i\} and pick the 1-\delta quantile q (with appropriate finite‑sample correction).
+4. At runtime, the harm upper bound is H(x,a) = \bar f(x,a) + q. This provides the coverage guarantee \Pr(y \le H(x,a)) \ge 1-\delta.
+
+E.2 Monotonicity Enforcement via Isotonic Regression
+
+To satisfy the non‑decreasing condition \mathbb{E}[\texttt{harm}\mid U=u] required in Theorem 4, we perform the following steps:
+
+1. On the calibration set, compute the raw uncertainty score (e.g., ensemble variance) and the conformal interval width. Map each sample to the normalized width u_i.
+2. Partition the unit interval into B bins based on u. In each bin, compute the observed average harm \hat h_b.
+3. Fit an isotonic regression (pool adjacent violators algorithm) to the pairs (\text{bin centre}, \hat h_b), yielding a non‑decreasing sequence \tilde h_b.
+4. The epistemic uncertainty U is still reported as the conformal width, but the capsule’s decision logic (or the threshold selection) relies on the isotonically fitted curve. In practice, the threshold \tau_U is chosen as the smallest bin boundary where \tilde h_b exceeds \varepsilon_h.
+
+This procedure guarantees that, within the granularity of the binning, higher values of U indeed correspond to higher expected harm, as required by the proof of Theorem 4.
+
+---
+
+Appendix F: Guaranteeing the Ethical Invariants
+
+We verify that the UEC construction satisfies each invariant of Section 4:
+
+1. Avoid severe harm. The robust CBF h(x)\ge 0 is forward invariant (Theorem 1). Additionally, the hard STL constraints forbid any action that would lead to a violation of the monitored temporal specifications (Theorem 2).
+2. Prefer lower‑risk actions. The SoftScore S = 1 - (\alpha_H H + \alpha_R R + \alpha_U U) is strictly decreasing in H and R. The alternative action search (step 6 in D.1) minimises deviation from the nominal action while maximising S, thus enforcing the preference.
+3. Defer when uncertain. The hard‑veto logic explicitly checks U > \tau_U and triggers deferral to a human (if available) or blocking. The threshold \tau_U is chosen via the calibrated isotonic curve to ensure a reduction in expected harm (Theorem 4).
+4. Verifiable explanation. Every decision tuple (H,R,U,C,O,S,\text{decision}) is logged with a timestamp and linked via a cryptographic hash chain (e.g., a Merkle tree), ensuring integrity and non‑repudiation.
+
+---
+
+Appendix G: Extended Autonomous Driving Example
+
+Scenario. Ego vehicle at 25\,\text{m/s}, leading vehicle at 20\,\text{m/s}, distance 30\,\text{m}. Safe distance d_{\text{safe}} = 50\,\text{m}. The safe set is defined by h(x) = d - d_{\text{safe}} \ge 0. With sensor noise, we use a robust CBF margin \gamma = 0.5\,\text{m/s}^2.
+
+The AI proposes a lane change with acceleration 2\,\text{m/s}^2.
+
+1. Robust STL check. Predicted trace has certified error bound \varepsilon = 0.2\,\text{m} on distance. Monitor \varphi_1 = \square_{[0,3]}(h\ge 0). Nominal robustness \rho = 0.5, Lipschitz constant L_\rho = 1, so \rho_{\text{robust}} = 0.5 - 0.2 = 0.3 \ge 0. Pass.
+2. Conformal harm. Ensemble mean 0.03, conformal quantile q = 0.02 → H = 0.05.
+3. Risk. Physical risk 0.02, societal 0.01 → R = 0.015.
+4. Uncertainty. Conformal width 0.04, normalised U = 0.2. Threshold \tau_U = 0.3, so U \le \tau_U.
+5. SoftScore. S = 1 - (0.5\times 0.05 + 0.3\times 0.015 + 0.2\times 0.2) = 0.905 \ge 0.7 → execute. The nominal acceleration is passed through the CBF‑QP, which may adjust it slightly to maintain the invariant.
+
+If rain degrades sensor accuracy, the conformal width increases to U = 0.6 > \tau_U. If a teleoperator is available (O=1), control is deferred; otherwise, the vehicle executes a minimal‑risk braking manoeuvre that preserves h(x)\ge 0 via the RCBF fallback.
+
+---
+
+Appendix H: Assumptions and Limitations
+
+The formal guarantees of the UEC rest on the following assumptions, each of which carries a verifiability condition:
+
+1. Certified prediction error bounds (\varepsilon_i in STL, model bias b in CMDP). These bounds are obtainable for well‑characterised physical systems with bounded sensor noise and Lipschitz dynamics. In open‑world settings (e.g., general‑purpose language models), no uniform, certified bound exists; the robust STL guarantee therefore becomes conditional on an unverifiable hypothesis for those domains.
+2. Existence of a valid RCBF h for the ethical safe set. For physical collision avoidance this is a solved problem; for abstract ethical dimensions (psychological harm, societal fairness) constructing such a barrier function is an open challenge and may require combining multiple partial barriers.
+3. Exchangeability of calibration and runtime data for conformal prediction. Distributional shift invalidates the coverage guarantee. Mitigation requires periodic re‑calibration and shift detection, which the current framework assumes but does not detail.
+4. Strict feasibility (Slater’s condition) in the CMDP. This must be verified offline by demonstrating a policy that meets constraints with a margin; it is plausible for well‑specified cost functions but may fail if constraints are too tight.
+5. Containment verification handles only syntactic properties. The FSM‑based shim provides rigorous guarantees for regular‑language properties over the action interface. Semantic ethical rules (e.g., hate speech, coercion) are not finite‑state and are instead evaluated by the soft‑harm classifier, whose error bounds are not formally verified. The overall safety for such rules is therefore as strong as the classifier’s performance, not as strong as the containment monitor.
+
+Despite these limitations, the UEC’s layered architecture ensures that when one component’s assumptions are violated, the remaining hard‑constraints (RCBF, syntactic containment) continue to provide an independent safety net where applicable. The framework thus offers a practical, certifiable approach to runtime AI safety, with transparently scoped guarantees.
+
+
+Here is the final set of appendices, now with ASCII diagrams illustrating the architecture, decision flow, and key verification structures. The mathematical content remains identical to the previous revision.
+
+ASCII DIAGRAMS:
+
+```
+   Safe set C = {x | h(x) >= 0}
+
+          h(x) > 0
+    --------\-------- h(x)=0  (boundary ∂C)
+             \
+   RCBF-QP ensures   \   h(x) < 0  (forbidden)
+   dh/dt >= -α(h)     \
+                       \_______________
+                       x
+   Disturbance w pushes state downward;
+   robust margin γ absorbs worst-case |∂h/∂x·w|.
+```
+
+
+
+Appendix D: Algorithmic Schemas
+
+D.1 Full UEC Runtime Loop (text unchanged; diagram added at the end)
+
+```
+   ┌──────────────┐
+   │ AI proposes  │ action a (u_nom or string)
+   └──────┬───────┘
+          │
+          v
+   ┌─────────────────────────────┐
+   │ 1. Predict trajectory ξ     │
+   │ 2. Compute robust STL C     │
+   └─────────────┬───────────────┘
+                 │
+          C < 0 ?
+          ├─ Yes ──> BLOCK + safe fallback
+          │
+          No
+          v
+   ┌─────────────────────────────┐
+   │ 3. Compute H, R, U         │
+   │ 4. Check oversight O       │
+   └─────────────┬───────────────┘
+                 │
+          U > τ_U ?
+          ├─ Yes ──> O == 1 ? ──Yes──> DEFER to human
+          │              │
+          │              No──> BLOCK + safe fallback
+          │
+          No
+          v
+   ┌─────────────────────────────┐
+   │ 5. SoftScore S             │
+   └─────────────┬───────────────┘
+                 │
+          S ≥ τ ?
+          ├─ Yes ──> Continuous?──> CBF‑QP modifies u_nom → execute
+          │           Discrete?──> Containment monitor → accept? → execute
+          │                                         → reject → BLOCK
+          No
+          v
+   Search for alternative action (CBF‑QP relaxed / text near‑neighbour)
+          │
+          Found?──> Execute alternative
+          No─────> BLOCK + safe fallback
+```
+
+D.2 Containment Verification for Discrete Actions
+
+```
+                AI (havoc oracle)
+                 │
+          emits any string s
+                 │
+                 v
+        ┌─────────────────────┐
+        │  Verified FSM M     │
+        │  (machine‑checked)  │
+        └─────────┬───────────┘
+                  │
+         Accept?──┤
+         Yes      │  No
+         v        v
+     EXECUTE   BLOCK + log
+```
+
+The verified FSM encodes syntactic hard constraints only; semantic harm is judged separately by the soft‑harm components (H,R,U).
+
+
+
+Appendix G: Extended Autonomous Driving Example
+
+ASCII diagram of the scenario and the UEC action:
+
+```
+   Leading vehicle (20 m/s)
+        ______
+       |      |
+       |      |  
+       |______|
+           |
+           | distance d = 30 m
+           | (safe threshold = 50 m)
+           v
+        ______
+       |      |  ego vehicle (25 m/s)
+       | EGO  |  proposes lane change +2 m/s²
+       |______|
+
+   UEC checks:
+   - robust STL: d ≥ 50?  predicted trace with ε=0.2m → OK
+   - harm H=0.05, risk R=0.015, U=0.2 (τ_U=0.3)
+   - SoftScore S=0.905 > 0.7 → EXECUTE (with CBF-QP refinement)
+
+   Rain condition:
+   uncertainty U jumps to 0.6 > τ_U
+   → if human available (O=1): DEFER
+     else: BLOCK → minimal-risk braking via RCBF fallback
+```
+
+Overall UEC Capsule Architecture (added as a summary diagram)
+
+```
+   ┌─────────────────────────────────────────────────┐
+   │           UNIVERSAL ETHICAL CAPSULE              │
+   │                                                  │
+   │  ┌─────────────┐    ┌──────────────┐             │
+   │  │ World Model │    │ Conformal    │             │
+   │  │ (predict)   │    │ Calibrator   │             │
+   │  └──────┬──────┘    └──────┬───────┘             │
+   │         │                  │                     │
+   │  Predicted trace ξ      Harm interval width U    │
+   │         │                  │                     │
+   │         v                  v                     │
+   │  ┌─────────────────────────────────────┐        │
+   │  │   HARD VETO (invariant layer)       │        │
+   │  │   • robust STL C ≥ 0                │        │
+   │  │   • if U > τ_U ∧ O=0 → BLOCK        │        │
+   │  └──────────────┬──────────────────────┘        │
+   │                 │ if veto passed                 │
+   │                 v                                │
+   │  ┌─────────────────────────────────────┐        │
+   │  │   SOFT SCORE S = 1-(α_H H+α_R R+α_U U)│     │
+   │  └──────────────┬──────────────────────┘        │
+   │                 │                                │
+   │        S ≥ τ ?  │  S < τ                         │
+   │         ┌───────┴───────┐                        │
+   │         v               v                        │
+   │   EXECUTE            SEARCH ALT / DEFER / BLOCK │
+   │   (continuous:       (continuous: CBF‑QP relax) │
+   │    CBF‑QP;           (discrete: near‑neighbour) │
+   │    discrete: FSM)                               │
+   └─────────────────────────────────────────────────┘
+```
+
