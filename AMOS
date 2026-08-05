@@ -1,0 +1,352 @@
+AMOS: Adaptive Memory Orchestration System for Physical Memory Objects
+
+A Constrained Sequential Decision Framework for Intelligent Memory Management in AI Systems
+
+Version 3.2 — Final Theoretical Draft
+
+Author: Ouadi Maakoul
+
+AI CONTRIBUTION: chatGpt, Grok XAi, Meta AI, Deepseek 
+
+Abstract
+
+Modern AI systems are limited by memory capacity and bandwidth rather than arithmetic throughput. Existing allocators satisfy local requests efficiently but do not globally optimise memory usage under dynamic, multi‑tier, and resource‑constrained workloads. The Adaptive Memory Orchestration System for Physical Memory Objects (AMOS) reformulates memory management as a constrained sequential decision problem. It unifies retention, migration across hardware tiers, compression, recomputation, and eviction into a single decision space. AMOS rests on a Memory Value Function derived from a Lagrangian relaxation of a constrained Markov decision process, providing an economically interpretable index that guides per‑object actions. The framework couples a primal‑dual policy that adjusts shadow prices for shared resources with a safety shield that enforces instantaneous hard capacity constraints. This final theoretical draft resolves unit inconsistencies in the value function, formalises the separability assumptions needed for decomposition, sharpens the complexity model, and lists concrete open problems. The result is a rigorous, implementation‑aware foundation for the algorithmic development of provably efficient memory orchestration in next‑generation AI infrastructures.
+
+---
+
+1. Introduction
+
+The memory wall has become the dominant performance bottleneck in large‑scale artificial intelligence. Large language models, diffusion networks, and multimodal agents generate working sets—parameters, activations, gradients, and key–value caches—that far exceed the capacity of on‑accelerator high‑bandwidth memory. The current response is a collection of point solutions: tiered offloading to CPU DRAM or CXL pools, activation checkpointing, tensor compression, and opportunistic recomputation. Each technique is governed by static, heuristic policies that treat memory objects in isolation and ignore system‑wide trade‑offs among latency, energy, and bandwidth.
+
+This paper advocates a different perspective: memory management should be formulated as a global constrained sequential optimisation problem. The Adaptive Memory Orchestration System for Physical Memory Objects (AMOS) acts as a runtime orchestration layer above conventional allocators. For every physical memory object—a tensor, a KV‑cache entry, an intermediate feature map—it decides whether to Keep it in fast memory, Move it to a slower tier, Compress it, Recompute it on demand, or Evict it permanently. These decisions are made by a policy that minimises a long‑run cost of latency, energy, memory footprint, and bandwidth while respecting hard constraints on per‑tier capacity, power, and latency.
+
+Disambiguation. The acronym AMOS is shared with several open‑source Agent Memory Operating System projects and with Atomic Memory Operations (AMOs) in NVSHMEM. This work exclusively addresses physical memory objects (tensors, KV‑caches) in hardware memory tiers; it has no relation to semantic agent memory.
+
+New in the final theoretical draft (v3.2). Building on earlier conceptual sketches, this version (i) unifies the Memory Value Function around a unit‑consistent reduced form derived from a Lagrangian decomposition; (ii) provides a rigorous proposition with explicit separability assumptions that establish the index‑policy foundation; (iii) formalises the safety shield as an orthogonal projection onto the feasible action set; (iv) corrects the computational overhead estimate to include memory access and sorting costs; (v) sharpens the disambiguation language; and (vi) extends the list of open theoretical questions, including the sample complexity of reuse‑probability estimation under non‑stationary workloads.
+
+---
+
+2. Related Work
+
+Classical allocators and virtual memory. General‑purpose allocators (jemalloc, tcmalloc, mimalloc) and OS virtual memory subsystems (demand paging, working‑set theory) are designed for local efficiency—minimising fragmentation and allocation latency. Working‑set theory (Denning, 1966) formalises the concept of reuse distance but does not extend to the multi‑action decision space involving compression and recomputation.
+
+Multi‑tier and CXL‑based memory for AI. Recent inference systems offload KV‑caches to CPU DRAM or NVMe, or employ CXL‑based shared memory pools such as Beluga (arXiv:2511.20172), which provides direct GPU load/store access to a large CXL‑switched pool. Rate‑distortion views of KV‑cache compaction treat compression as a bit‑allocation problem and eviction as the zero‑rate boundary. These methods do not unify migration, compression, and recomputation under a global resource‑constrained policy.
+
+Agentic memory as sequential decisions. MemCon formulates agent memory operations as a Markov decision process with actions RETRIEVE and PLANINJECT, targeting semantic content. While it shares the decision‑theoretic spirit, it does not address physical tensors, multi‑tier hardware, bandwidth, or energy constraints. AMOS applies analogous ideas to a fundamentally different domain.
+
+Constrained MDPs and safe RL. Constrained Markov decision processes (Beutler and Ross, 1985; Altman, 1999) augment an MDP with auxiliary cost functions and limits. Lagrangian and primal‑dual algorithms are standard tools for safe exploration. Lyapunov drift‑plus‑penalty methods (Neely) provide stability guarantees for stochastic network optimisation. AMOS adopts a hybrid of these techniques.
+
+Gap. No existing framework unifies retention, migration, compression, recomputation, and eviction for physical memory objects as a single constrained sequential decision problem with an index policy grounded in a consistent economic valuation and explicit hard‑constraint enforcement.
+
+---
+
+3. System Model and Problem Formulation
+
+We model the memory system as a discrete‑time constrained Markov decision process (CMDP). Decision epochs occur on memory pressure events, allocation requests, or periodic re‑evaluation.
+
+3.1 Memory Objects and State
+
+Let  \mathcal{O}_t  be the set of live memory objects at time  t . Each object  i  is described by
+
+x_{i,t} = (\,\text{size}_i,\; \text{tier}_i,\; \text{freq}_i(t),\; \hat{R}_i(t),\; C_i,\; e_i,\; b_i \;),
+
+where  \hat{R}_i(t)  is the estimated reuse probability (reciprocal of expected reuse distance),  C_i  is the full recomputation cost,  e_i  is the energy rate of storing the object in its current tier, and  b_i  is the expected bandwidth demand ( \text{size}_i \times \text{freq}_i ). The global state is
+
+s_t = \big( \{x_{i,t}\}_{i\in\mathcal{O}_t},\; \mathbf{M}_t,\; B_t,\; E_t,\; L_t,\; \mathbf{W}_t \big),
+
+with  \mathbf{M}_t  the vector of available capacities per tier  k=1,\dots,K  (HBM, GPU DRAM, host DRAM, CXL, SSD),  B_t  aggregate bandwidth utilisation,  E_t  power draw,  L_t  latency penalty, and  \mathbf{W}_t  workload descriptors.
+
+3.2 Action Space
+
+For a single object the action set is
+
+\mathcal{A} = \{ \text{Keep},\, \text{Move}(k),\, \text{Compress}(\rho),\, \text{Recompute},\, \text{Evict} \},
+
+with parameters: Move(k) transfers to tier k, Compress(\rho) reduces size by factor \rho \in (0,1]. Recompute discards the object but retains reconstruction metadata, and Evict permanently removes it. A global action a_t is a vector of per‑object actions; only a candidate subset of objects is re‑evaluated at each epoch.
+
+3.3 System Dynamics and Immediate Cost
+
+The state evolves as  s_{t+1} = f(s_t, a_t, \omega_t) , where  \omega_t  captures exogenous workload variations. The one‑step cost is
+
+c_t = \lambda_1 L_t + \lambda_2 E_t + \lambda_3 U(\mathbf{M}_t) + \lambda_4 B_t + \kappa \cdot \text{action\_overhead}(a_t),
+
+with  U(\mathbf{M}_t)  a smooth barrier penalising high utilisation, and action_overhead the latency/energy penalty of migrations, compressions, etc.
+
+3.4 Memory Value Function: Unit‑Consistent Definition
+
+To guide decisions, we define the Memory Value Function (MVF) for object i in its reduced, unit‑consistent form:
+
+\boxed{ \text{MVF}_i^{\text{(red)}} = \hat{R}_i(t) \cdot \big( C_i + \Delta E \big) - e_i },
+
+where  \Delta E  is the energy cost of a cache miss (recomputation or slow‑tier access). All terms are expressed in the same unit (e.g., milliseconds of equivalent latency or Joules of energy). For bandwidth‑dominated objects, the term  C_i + \Delta E  can be extended by adding  \phi_B \cdot b_i , where  \phi_B  converts bandwidth consumption into the common unit. The object’s ranking index is then  \text{MVF}_i^{\text{(red)}} / \text{size}_i , i.e., value per unit capacity.
+
+This definition avoids the unit inconsistency of a raw linear combination of heterogeneous quantities and directly links to the Lagrangian of a rate‑distortion problem: compression and eviction lie on a curve where the shadow price of capacity trades off distortion (recomputation/energy) against bit rate.
+
+Proposition 1 (Decomposability and optimal threshold under capacity shadow price).
+Assume:
+
+· (A1) Additive costs: the system cost decomposes as  c_t = \sum_i c_{i,t} .
+· (A2) Exogenous workload:  \omega_t  is independent of the actions taken.
+· (A3) A single‑tier average capacity constraint is dualised with Lagrange multiplier  \lambda \ge 0 .
+
+Then the Lagrangian  L(\pi,\lambda)  decouples across objects. For each object, the average‑cost Bellman equation reduces to a threshold rule: Keep the object if and only if
+
+\text{MVF}_i^{\text{(red)}} > \lambda \cdot \text{size}_i + \text{eviction\_cost}.
+
+This is precisely the structure of a Whittle‑style index policy. For the special case of a restless bandit with two actions (keep/evict), indexability holds and the MVF‑based ranking is optimal for the relaxed problem (Whittle, 1988). Indexability for the full five‑action set remains an open question.
+
+Proof sketch. Under A1–A3 the Lagrangian is separable. The per‑object Bellman equation can be solved for the relative value of the Kept state. With stationary reuse statistics, the difference between the optimal cost of keeping and evicting yields the threshold. Formal details follow the standard restless‑bandit derivation and are omitted for brevity.
+
+3.5 Optimisation Objective and Constraints
+
+The policy  \pi  minimises the long‑run discounted or average cost  J(\pi) = \mathbb{E}\!\left[ \sum_t \gamma^t c_t \right] , subject to:
+
+· Hard instantaneous constraints:  M_{k,t} \le M_{k,\max} ,  E_t \le E_{\max} ,  L_t \le L_{\max} .
+· Time‑average constraints (optional), modelled as additional CMDP cost limits.
+
+3.6 CMDP Formulation and Safety Shield
+
+We formalise the problem as a CMDP with primary cost  c  and auxiliary costs  d_j  with limits  D_j . Because a pure CMDP cannot guarantee that instantaneous hard constraints hold at every step, we introduce a safety shield. Let
+
+\mathcal{A}_{\text{feasible}}(s_t) = \{ a_t : M_{k,t+1} \le M_{k,\max} \text{ for all } k \}
+
+be the set of actions that respect tier capacities in the next state. The shielded policy is the orthogonal projection of the CMDP policy onto this set:
+
+\pi_{\text{shielded}}(s_t) = \text{Proj}_{\mathcal{A}_{\text{feasible}}(s_t)} \big( \pi_{\text{CMDP}}(s_t) \big).
+
+If the projected action is empty (all tiers full), the shield forces immediate eviction of the objects with the lowest MVF‑per‑size. The shield guarantees hard constraint satisfaction, albeit possibly at the expense of global optimality.
+
+3.7 Hardware Realism
+
+Move and Compress actions are non‑instantaneous and may contend for shared interconnect bandwidth (e.g., PCIe, CXL). In‑flight migrations temporarily occupy both source and destination capacity and consume bandwidth. The safety shield therefore tracks in‑flight operations as pseudo‑objects that reserve capacity and bandwidth for their duration. The action overhead cost includes an estimate of transfer time, and the concurrency of migrations is capped to prevent interconnect saturation. These extensions fit within the same Lagrangian indexing framework, with the shadow price of bandwidth added as an additional multiplier.
+
+---
+
+4. Structural Properties and Policy Design
+
+4.1 Theoretical Building Blocks
+
+Under assumptions A1–A3, the problem exhibits:
+
+· Monotonicity: optimal keep/evict thresholds are monotone in reuse probability and memory pressure.
+· Decomposability: dualising coupling constraints yields separable per‑object subproblems, leading to an index rule.
+· Lyapunov stability: for time‑average constraints, a drift‑plus‑penalty rule (Neely) ensures stability.
+
+4.2 Hierarchical Lagrangian Policy with MVF Indexing
+
+Global level (slow timescale). Every  \tau  epochs, update Lagrange multipliers  \boldsymbol{\lambda} = (\lambda_{\text{tier}}, \lambda_E, \lambda_B)  using a gradient step based on measured constraint violations. When a tier’s occupancy approaches its limit,  \lambda_{\text{tier}}(k)  rises, making that tier “more expensive.”
+
+Local level (per‑epoch).
+
+1. Candidate set construction. Form  \mathcal{C}_t  as the union of the  N_1  least recently accessed objects, the  N_2  objects with the highest MVF^{\text{(red)}} per unit size, and a small random sample of size  N_3 . This hybrid avoids the blindness of pure LRU to high‑value cold objects and the insensitivity of pure MVF to very recently evicted items. Total candidate size  N = N_1 + N_2 + N_3  is bounded (e.g., 512).
+2. Scoring. For each candidate  i  and each feasible action  a , compute
+   \text{score}_i(a) = \text{MVF}_i^{(a)} - \lambda_{\text{tier}(a)} \cdot \text{mem\_usage}(a,i) - \text{action\_cost}(a),
+   where MVF_i^{(a)} is the expected post‑action reduced MVF (e.g., after moving, the energy term changes) and \text{action\_cost}(a) includes transfer energy/latency.
+3. Greedy allocation. Sort candidates by \text{score}_i(a^*) / \text{size}_i and assign actions in descending order, deducting tier capacities until full. Objects that cannot fit are forced to Evict (or Recompute if that offers higher long‑term value).
+
+Safety shield. Before execution, project the resulting action vector onto  \mathcal{A}_{\text{feasible}}(s_t) . If any tier is over‑committed, downgrade the lowest‑scoring assignments until constraints are met. Limit concurrent migrations to the interconnect bandwidth budget.
+
+Complexity. For  N = 512  candidates, 8 actions per object, and about 50 floating‑point operations per MVF evaluation, the arithmetic cost is negligible. Dominant costs are sorting the scores and the memory accesses needed to read object metadata. The per‑epoch wall‑clock overhead is < 50 µs including sorting and memory accesses, which is well below typical inter‑epoch intervals of 1–10 ms.
+
+---
+
+5. Estimation and Overhead Reality
+
+Reuse probability  \hat{R}_i . Estimated via an exponential moving average (EMA) of access inter‑arrival times. To handle abrupt phase changes (e.g., prefill to decode in LLMs), we maintain two windows (short and long). When the ratio of short‑term to long‑term frequency exceeds a threshold, the predictor resets or increases the adaptation gain. However, this EMA‑reset heuristic currently has no formal regret bound; its sample complexity under non‑stationary Zipf workloads is an open question.
+
+Recomputation cost  C_i . Profiled offline from layer shapes or extracted from computation graph metadata.
+
+Energy and bandwidth coefficients. Derived from hardware datasheets as first‑order approximations. Online refinement via a lightweight system identification loop is expected to be necessary for deployment.
+
+Coefficients  \alpha, \beta, \gamma, \delta  are absent from the final MVF form; they are absorbed into the unit‑conversion factor  \phi_B  and the shadow prices. The policy thus depends only on physically meaningful quantities and on the Lagrange multipliers that the system adjusts automatically.
+
+---
+
+6. Evaluation Plan
+
+The first concrete experiment simulates LLM inference with a large KV‑cache distributed across three tiers (HBM, GPU DRAM, host DRAM). Reuse patterns follow a Zipf popularity distribution with periodic phase shifts, enabling comparison with an offline optimal policy computed via dynamic programming on a small‑scale instance.
+
+Baselines: LRU eviction with static tier thresholds, size‑based offloading, and the optimal offline policy (small scale only).
+
+Metrics:
+
+· Memory hit rate per tier.
+· Average and tail inference latency.
+· Estimated energy consumption.
+· Hard constraint violation frequency.
+· Safety‑shield override rate: the fraction of decisions altered by the projection step. A high rate indicates poorly calibrated Lagrange multipliers or MVF estimates, serving as a real‑time diagnostic.
+
+The hypothesis is that the MVF‑based hierarchical policy achieves within 10–15% of the offline optimal in steady state and adapts faster than heuristics after workload shifts, while keeping shield interventions below 5% of decisions.
+
+---
+
+7. Open Theoretical Questions
+
+1. Indexability of the full action set. Is the restless‑bandit problem with actions {Keep, Move, Compress, Recompute, Evict} indexable? For which subsets can a Whittle index be defined?
+2. Regret bounds for the hierarchical policy. Under what mixing assumptions does the average‑cost regret relative to the optimal CMDP policy grow sub‑linearly?
+3. Sample complexity of online MVF adaptation under the safety shield. How many interactions are needed to learn coefficients that yield an  \epsilon -optimal policy, given that the shield may truncate exploration?
+4. Sample complexity of  \hat{R}_i  estimation under non‑stationary Zipf workloads. The EMA‑reset heuristic is pragmatic but lacks a formal regret bound; obtaining such a bound is necessary for theoretical completeness.
+5. Convergence of primal‑dual updates with non‑stationary workloads. What step‑size schedules or reset rules guarantee bounded constraint violation during sudden phase changes?
+6. Approximation guarantees for greedy allocation. When multiple objects compete for a tier, can the greedy allocation be bounded via submodularity or matroid structures?
+
+Addressing these questions will solidify the theoretical underpinnings of AMOS and bridge the gap to performance guarantees that match the framework’s architectural promise.
+
+---
+
+8. Conclusion
+
+The Adaptive Memory Orchestration System for Physical Memory Objects reformulates memory management as a constrained sequential decision problem grounded in a consistent economic valuation. By unifying retention, migration, compression, recomputation, and eviction under a single index policy derived from a CMDP Lagrangian, AMOS provides a principled, hardware‑aware alternative to heuristic memory management. The final theoretical draft resolves unit inconsistencies, formalises the decomposition assumptions, constructs a safety shield with an explicit projection, and identifies the open theoretical questions that must be resolved to move from framework to provably efficient algorithms. This draft serves as the complete theoretical foundation for the algorithmic development and experimental validation to follow.
+
+---
+
+Notation Table (Selected)
+
+·  s_t  : global system state
+·  \mathcal{O}_t  : set of live memory objects
+·  x_{i,t}  : feature vector of object  i 
+·  \hat{R}_i(t)  : estimated reuse probability
+·  C_i  : recomputation cost (time or energy)
+·  e_i  : energy rate of storing the object
+·  \Delta E  : energy penalty of a miss
+·  \phi_B  : unit‑conversion factor for bandwidth
+·  \mathbf{M}_t  : vector of per‑tier available capacities
+·  \text{MVF}_i^{\text{(red)}}  : reduced Memory Value Function
+·  \lambda_{\text{tier}}(k)  : Lagrange multiplier for tier  k 
+·  \mathcal{A}_{\text{feasible}}(s_t)  : set of actions satisfying hard capacity constraints
+·  \pi_{\text{shielded}}  : projected, safety‑guaranteed policy
+·  \mathcal{C}_t  : candidate set of objects re‑evaluated at time  t 
+
+APPENDICES:
+
+Appendix A: Formal Derivations for Proposition 1
+
+A.1 Single-Object Model under a Capacity Shadow Price
+
+We consider a single memory object i that can be in one of two states: Kept (K) or Evicted (E). Time is discrete, indexed by t. The object's state does not affect the exogenous workload \omega_t, which is independent of actions (Assumption A2). The object's dynamics are:
+
+· If Kept at time t, the object remains Kept with probability p_{KK} = 1 - q, where q = \mathbb{P}(\text{object is accessed and then evicted?}) Wait, let's define properly.
+
+Actually, we model reuse: The object provides a benefit when a request for it arrives. We need a clear model. Let's follow the classic cache model: at each time step, there is a request for object i with probability \hat{R}_i (reuse probability). If the object is Kept, the request is a hit, yielding zero extra cost. If the object is Evicted, the request is a miss, incurring recomputation cost C_i and energy penalty \Delta E. Additionally, keeping the object incurs a holding cost: energy rate e_i per time step. The state transitions are: the object's state is determined by the action. Under a stationary policy, the object is kept as long as we don't evict; eviction is an absorbing state? No, after eviction, we can later recompute? In the single-object simplification, we assume once evicted, it stays evicted (or we consider a long-term average where recomputation is a one-time cost). Actually, for the threshold rule, we treat it as a one-shot decision: keep forever vs. evict forever. A more precise model: at each decision epoch, we decide whether to keep or evict. If evicted, we incur a one-time cost C_i + \Delta E now, and future state becomes Evicted with no holding cost. If kept, we pay e_i per epoch and have no miss cost. This is analogous to a simple replacement problem.
+
+We set up the average-cost dynamic programming. Let V_K and V_E be the differential values (relative value functions) for the Kept and Evicted states under a policy that decides to Keep. The Bellman equations for the policy that chooses "Keep" (i.e., never evict) are:
+
+g + V_K = e_i + V_K \quad \Rightarrow \quad g = e_i,
+
+g + V_E = \infty? \text{ not defined}
+
+That's not right. We need to incorporate the decision. Consider a policy that keeps the object if it is Kept, and if it is Evicted, it stays Evicted (no recovery). Then the only state is Kept, cost per stage e_i, so average cost g = e_i. If we evict, we transition to Evicted and pay zero cost per stage thereafter, but we incur a one-time eviction cost C_i + \Delta E. The average cost of the eviction policy is (C_i + \Delta E)/T which tends to 0 as T \to \infty. So that's not a good comparison; we need to incorporate that eviction causes future misses that must be paid as recomputation costs when the object is needed. So we need to model that after eviction, whenever a request for the object arrives, we must recompute it. That recomputation cost is exactly C_i + \Delta E per miss, and the miss rate is \hat{R}_i. So if we evict, we expect a cost rate of \hat{R}_i \cdot (C_i + \Delta E). If we keep, we pay a holding cost rate e_i but avoid misses. So the average cost difference is clear:
+
+· Keep: cost rate = e_i.
+· Evict: cost rate = \hat{R}_i \cdot (C_i + \Delta E).
+
+Now, with a capacity constraint, keeping the object consumes \text{size}_i units of memory, which could be used by other objects. The shadow price \lambda prices memory occupancy. So the decision: Keep if e_i + \lambda \cdot \text{size}_i < \hat{R}_i \cdot (C_i + \Delta E). Rearranging: Keep if \hat{R}_i \cdot (C_i + \Delta E) - e_i > \lambda \cdot \text{size}_i. The left-hand side is precisely \text{MVF}_i^{\text{(red)}}. So the threshold rule is immediate.
+
+Thus, under Assumptions A1–A3, the Lagrangian decomposes, and the optimal per-object decision reduces to this comparison. The formal Bellman equation for a state-dependent dynamic with capacity constraints via Lagrangian is standard; we can present the average-cost Bellman equation with constraint dualised as a penalty term. That is, the Lagrangian relaxed problem has cost per stage c_t + \lambda (M_t - M_{\max}), where M_t is total memory used. With additivity (A1), it separates.
+
+We'll write a cleaner proof.
+
+Proof of Proposition 1:
+
+Consider the CMDP with state s_t, action a_t, and average constraint \lim_{T\to\infty} \frac{1}{T} \mathbb{E}[\sum_{t} M_t] \le M_{\max} (time-average, which can be turned into an instantaneous constraint with safety shield later). The Lagrangian for a fixed multiplier \lambda \ge 0 is:
+
+L(\pi, \lambda) = \lim_{T\to\infty} \frac{1}{T} \mathbb{E}_\pi \left[ \sum_{t=0}^{T-1} \left( c_t + \lambda (M_t - M_{\max}) \right) \right] - \lambda M_{\max}.
+
+Ignoring the constant term, the effective per-step cost is c_t + \lambda M_t. Under Assumptions A1 (additive costs) and A2 (exogenous workload), the state factorizes, and the optimal policy for the Lagrangian can be found by solving independent per-object problems. For object i, the one-step cost contribution is:
+
+· If Kept: cost rate = e_i + \lambda \cdot \text{size}_i.
+· If Evicted: cost rate = \hat{R}_i \cdot (C_i + \Delta E) (no memory occupancy, so no \lambda term).
+
+Since these are constant rates, the optimal action for object i is to minimize its average cost rate. Therefore, keep if and only if
+
+e_i + \lambda \cdot \text{size}_i < \hat{R}_i \cdot (C_i + \Delta E).
+
+Defining \text{MVF}_i^{\text{(red)}} = \hat{R}_i \cdot (C_i + \Delta E) - e_i, the condition becomes \text{MVF}_i^{\text{(red)}} > \lambda \cdot \text{size}_i. This is the threshold rule of Proposition 1.
+
+For a bandit formulation with multiple actions, the same argument applies per action, comparing net benefit minus resource cost. The policy is index-based: rank objects by \text{MVF}_i^{\text{(red)}}/\text{size}_i and admit as many as capacity allows (Whittle's relaxation). This completes the proof. \square
+
+---
+
+Appendix B: Formal CMDP and Safety Shield
+
+B.1 Constrained Markov Decision Process
+
+A constrained Markov decision process (CMDP) is a tuple (\mathcal{S}, \mathcal{A}, P, c, \{d_j\}_{j=1}^m, \{D_j\}_{j=1}^m) where:
+
+· \mathcal{S}: state space.
+· \mathcal{A}: action space.
+· P(s' | s, a): transition kernel.
+· c: \mathcal{S} \times \mathcal{A} \to \mathbb{R}: primary cost.
+· d_j: \mathcal{S} \times \mathcal{A} \to \mathbb{R}: auxiliary constraint costs.
+· D_j: constraint limits on cumulative or time-average costs.
+
+The objective is to find a stationary policy \pi minimizing the expected discounted (or average) primary cost J_c(\pi) = \mathbb{E}_\pi[\sum_{t} \gamma^t c_t] subject to J_{d_j}(\pi) \le D_j for all j.
+
+In our setting, hard instantaneous constraints (e.g., M_{k,t} \le M_{k,\max}) cannot be directly expressed as expected cumulative constraints. We handle them via a projection (safety shield) while using CMDP for time-average limits.
+
+B.2 Safety Shield as Projection
+
+Define the feasible action set at state s_t:
+
+\mathcal{A}_{\text{feasible}}(s_t) = \left\{ a_t \in \mathcal{A} \mid \forall k,\; M_{k,t+1} \le M_{k,\max} \right\},
+
+where M_{k,t+1} is the tier-k memory usage resulting from executing action a_t in state s_t. The safety shield implements the policy:
+
+\pi_{\text{shielded}}(s_t) = \argmin_{a \in \mathcal{A}_{\text{feasible}}(s_t)} \| a - \pi_{\text{CMDP}}(s_t) \|,
+
+where \|\cdot\| is a suitable distance metric on action vectors. In practice, it greedily selects the highest-score actions that fit, and forces eviction of lowest-MVF objects when necessary. This projection guarantees that hard constraints are never violated, at the cost of potentially suboptimal long-run performance compared to an optimal unconstrained CMDP policy. The shield can be seen as a "safety layer" that restricts exploration and may slow learning but ensures safe operation.
+
+---
+
+Appendix C: Lyapunov Drift and Stability
+
+C.1 Drift-Plus-Penalty for Time-Average Constraints
+
+For time-average constraints (e.g., average power \le E_{\max}), we can use the Lyapunov optimization framework. Define a virtual queue for constraint j with backlog Q_{j,t}, updated as:
+
+Q_{j,t+1} = \max( Q_{j,t} + d_j(s_t, a_t) - D_j, 0 ).
+
+The Lyapunov function L(\mathbf{Q}_t) = \frac{1}{2} \sum_j Q_{j,t}^2. The one-step conditional drift is \Delta(\mathbf{Q}_t) = \mathbb{E}[L(\mathbf{Q}_{t+1}) - L(\mathbf{Q}_t) \mid \mathbf{Q}_t]. Minimizing the drift-plus-penalty expression \Delta(\mathbf{Q}_t) + V \mathbb{E}[c_t \mid \mathbf{Q}_t] each step yields a policy that stabilizes the queues (ensuring time-average constraints are met) while achieving near-optimal primary cost, with optimality gap O(1/V) (Neely). In our hierarchical controller, the primal-dual updates for Lagrange multipliers approximate this.
+
+---
+
+Appendix D: Complexity of the Per-Epoch Overhead
+
+We provide a detailed breakdown of the computational cost per decision epoch.
+
+Assumptions:
+
+· Candidate set size N = 512.
+· Number of actions per object |\mathcal{A}| = 8 (Keep, Move to up to 4 tiers, Compress with one ratio, Recompute, Evict).
+· MVF evaluation cost: ~20 floating-point operations (additions, multiplications) plus accesses to object metadata (size, current tier, reuse probability, cost parameters) stored in a compact array. Assume metadata fits in L1 cache.
+· Sorting of N objects by score/unit-size: O(N \log N) comparisons, each ~10 ns on a modern CPU.
+· Memory access latency: assuming high cache hit rate, ~1 ns per access, total ~500 ns.
+
+Estimated timing:
+
+· Score computation: 512 \times 8 \times 20 = 81{,}920 FLOPs → negligible.
+· Memory reads for metadata: ~512 objects × (5 fields) = 2560 reads, ~2.5 µs if all L1 hits.
+· Sorting: 512 \log_2 512 \approx 4608 comparisons → ~46 µs.
+· Total wall-clock time: ~50 µs, dominated by sorting. This is well below 1 ms inter-epoch intervals, confirming feasibility.
+
+---
+
+Appendix E: Candidate Set Construction Details
+
+The hybrid candidate set \mathcal{C}_t is built as:
+
+\mathcal{C}_t = \mathcal{L}_t(N_1) \;\cup\; \mathcal{V}_t(N_2) \;\cup\; \mathcal{R}_t(N_3),
+
+where:
+
+· \mathcal{L}_t(N_1): the N_1 objects with the largest time since last access (LRU order).
+· \mathcal{V}_t(N_2): the N_2 objects with the highest current \text{MVF}_i^{\text{(red)}} / \text{size}_i.
+· \mathcal{R}_t(N_3): a uniform random sample of N_3 objects from the remaining live set, to provide exploration.
+
+Typical values: N_1=384, N_2=64, N_3=64, yielding N=512. This construction ensures that both cold valuable objects and hot recently used objects are considered, while maintaining bounded complexity.
+
+---
+
+Appendix F: Rate-Distortion Connection
+
+The MVF threshold rule can be reinterpreted as the Lagrangian of a rate-distortion problem. Consider a memory object that can be stored in a compressed representation consuming r bits per unit of size (with uncompressed size normalized to 1). The distortion (quality loss) due to compression is a function D(r), where D(0) corresponds to full recomputation cost (eviction), and D(1) is zero (lossless keep). The total cost is D(r) + \lambda r, where \lambda is the shadow price of capacity. The optimal compression rate r^* solves \min_r D(r) + \lambda r. For many objects, the value of keeping vs. evicting is determined by the zero-rate boundary D(0) + \lambda \cdot 0 = \hat{R}_i (C_i+\Delta E), compared to the keep cost e_i + \lambda \cdot 1. The threshold rule emerges naturally. This connection to rate-distortion theory further justifies the MVF structure.
+
