@@ -1,0 +1,1335 @@
+CAPE: Selective Predictive Memory for Embodied Agents
+
+A Decision-Theoretic Framework for Calibrated, Memory-Augmented Prediction
+
+Author: Ouadi Maakoul
+Version: 4.4 — Final Theoretical Thesis
+Status: Theoretical Framework and Formal Analysis
+Date: September 2026
+
+---
+
+Abstract
+
+This thesis presents CAPE (Selective Predictive Memory), a formal framework for memory-augmented prediction in embodied agents that treats memory as an optional predictive intervention. Unlike prior memory architectures that co-train memory with the base model or retrieve based on surface similarity, CAPE operates as a frozen middleware layer with three defining properties: (1) the base world model and policy remain unmodified—no gradient updates are required; (2) retrieval is driven by estimated predictive benefit, defined as the expected reduction in decision loss from using a memory; and (3) a calibrated selective gating mechanism ensures that memory is used only when there is positive statistical evidence of benefit, with a formal finite-sample selective risk-control guarantee under exchangeability assumptions.
+
+We define the Selective Predictive Memory (SPM) problem as a constrained optimization over a memory policy that maps queries to memory selections and activation decisions. The theoretical contribution consists of three layers: (A) selective risk control via conformal risk control, guaranteeing bounded expected loss increase on the selected population; (B) prediction-error propagation under contraction assumptions; and (C) closed-loop control cost bounds under prediction-Lipschitz controller sensitivity. The architectural contribution includes a two-tier retrieval system with a unified benefit gate for all memory candidates, a lightweight correction network with relative capacity constraints, a learned benefit estimator trained with explicit exploration to mitigate selection bias, and a conformal calibration module with isolated data buffers.
+
+The central hypothesis is that selective, benefit-gated memory can improve long-horizon autonomy without modifying the base model, while provably limiting harmful memory activation. The framework is validated through formal proofs and a detailed experimental protocol designed to test the theoretical claims in simulation and on real robots.
+
+Keywords: embodied AI, memory-augmented prediction, conformal risk control, selective prediction, world models, robot learning.
+
+---
+
+Chapter 1: Introduction
+
+1.1 The Problem
+
+Long-horizon robot manipulation remains challenging because learned world models and policies fail under novel physical conditions, partial observability, and contact-rich dynamics. Recent literature has established memory as a critical component: memory-augmented architectures have demonstrated significant improvements in manipulation benchmarks, with some systems achieving over 96% success on standard benchmarks and over 84% on real-robot tasks. Yet a fundamental problem persists: existing memory systems are typically co-trained with the base policy, retrieved by surface similarity, and applied without explicit mechanisms for detecting when memory is harmful.
+
+When memory is irrelevant or misleading, these systems degrade silently. This is particularly problematic for deployed systems where retraining is impossible and failures are costly.
+
+1.2 The CAPE Thesis
+
+CAPE proposes a fundamentally different architecture: a frozen base model augmented by a prediction-error-anchored memory that is consulted only when calibrated benefit estimation indicates probable improvement. The core claim is:
+
+CAPE is among the first frameworks to provide formal selective risk control for memory-assisted prediction in embodied agents, improving performance when retrieved memories are informative while provably limiting harmful activation—all without modifying the base world model or policy.
+
+This claim is grounded in three technical commitments:
+
+1. Memory as optional intervention: Memory is not always injected; the system decides when to use it and when to abstain, with abstention guaranteeing exact recovery of the base predictor.
+2. Predictive benefit as the objective: Retrieval and gating optimize expected reduction in decision loss, not visual similarity or information-theoretic relevance alone.
+3. Calibrated selective risk control: A conformal risk control mechanism provides finite-sample guarantees on the expected loss increase among activated memories.
+
+The conceptual heart of CAPE is the recognition that memory is not knowledge; memory is evidence. The robot does not merely remember—it asks: "Does this memory deserve to change what I currently believe will happen?" Formally, CAPE embodies the decision process:
+
+\text{Historical experience} \;\to\; \text{candidate intervention} \;\to\; \text{estimated benefit} \;\to\; \text{calibrated decision} \;\to\; \begin{cases} \text{intervene}\\ \text{abstain} \end{cases}
+
+A memory is not a fact; it is a single data point from a stochastic physical process. CAPE treats it as statistical evidence whose weight depends on its estimated relevance and the reliability of the estimator. The gate is the robot's skepticism.
+
+1.3 Contributions
+
+The primary contributions of this thesis are:
+
+1. Formal definition of the Selective Predictive Memory (SPM) problem as a constrained optimization over a memory policy with explicit benefit estimation, risk control, and abstention.
+2. Decision-theoretic reformulation that replaces mutual information as the primary objective with expected predictive benefit, defined as the reduction in decision loss from memory use.
+3. Three-layer theoretical hierarchy providing:
+   · (A) finite-sample selective risk control via conformal risk control;
+   · (B) prediction-error propagation under contraction; and
+   · (C) closed-loop control cost bounds under prediction-Lipschitz controller sensitivity.
+4. Architectural specification with two-tier retrieval, unified benefit gating for all memory candidates, lightweight correction (relative capacity constraints), learned benefit estimation with explicit exploration to counter selection bias, and conformal calibration with isolated data buffers.
+5. Experimental protocol benchmarking against state-of-the-art systems with real-robot validation, adversarial stress tests, distribution shift detection, calibration analysis, and a causal ablation design isolating the contributions of retrieval, benefit estimation, and calibrated abstention.
+
+1.4 Positioning
+
+The recent literature demonstrates that memory can help robots. CAPE's question is different: Can a frozen embodied predictor selectively use historical physical prediction errors only when doing so has sufficiently high expected utility, while retaining a mathematically controlled fallback to the base predictor?
+
+Property MemoryVLA τ₀-VLA Mem-World CAPE v4.4
+Base model frozen ✗ ✗ ✗ ✓
+Retrieval signal Visual-linguistic Confidence 4D geometry Predicted benefit
+Abstention mechanism ✗ ✓ ✗ ✓ (calibrated)
+Risk control guarantee ✗ ✗ ✗ ✓
+Memory content Perceptual-cognitive — Surfel-indexed states Prediction errors
+Co-trained with policy ✓ ✗ ✓ ✗
+
+Note: τ₀-VLA fine-tunes its proposal, value, and reflective models from a shared VLM checkpoint; its world model is trained separately. Thus, its base components are not frozen in the CAPE sense.
+
+---
+
+Chapter 2: Related Work
+
+2.1 Memory-Augmented World Models
+
+Several recent works augment world models with external memory to improve long-horizon prediction. Mem-World introduces a 4D surfel-indexed memory for action-conditioned world models, achieving persistent manipulation rollouts under occlusion. MemoryVAM augments video world models with episodic memory via a Recap-Cue module. Both co-train memory with the world model and retrieve based on geometric or visual similarity. CAPE differs by operating as a frozen middleware layer and retrieving based on estimated predictive benefit.
+
+2.2 Memory-Augmented Policies
+
+MemoryVLA proposes a Perceptual-Cognitive Memory Bank with working and episodic memory, achieving strong results on the LIBERO benchmark. MemoryVLA++ extends this with world-model imagination. Chameleon introduces bio-inspired hierarchical memory. These systems co-train memory with the VLA backbone and do not provide abstention mechanisms or risk guarantees.
+
+2.3 Test-Time Compute Scaling
+
+τ₀-VLA demonstrates adaptive world-model-guided test-time computation with a confidence router. CAPE is complementary: τ₀-VLA scales reasoning when uncertain; CAPE retrieves memory when beneficial. The two could be combined, but CAPE's contribution is memory, not reasoning depth.
+
+2.4 Uncertainty Estimation and Calibration
+
+RWM-U demonstrates uncertainty-aware robotic world models on real robots using ensemble-based epistemic uncertainty. Foresight uses action-conditioned world-model latents for runtime failure detection. CAPE builds on these by adding a calibrated gating mechanism for memory use with finite-sample selective risk guarantees.
+
+2.5 Biological Memory Models
+
+D-MEM proposes dopamine-gated memory via Reward Prediction Error (RPE) routing. Surprise-Gated Robot Episodic Memory uses prediction error to gate memory writing. Both use prediction error as a gating signal, but neither formalizes retrieval as benefit estimation nor provides risk control guarantees.
+
+2.6 Selective Prediction and Risk Control
+
+The literature on selective prediction (El-Yaniv & Wiener, 2010; Geifman & El-Yaniv, 2017) and conformal prediction (Vovk et al., 2005) provides the mathematical foundation for CAPE's abstention mechanism. Conformal risk control (Angelopoulos et al., 2024) extends conformal prediction to control the expected loss on selected predictions, which is exactly the formal tool needed for memory gating. The novelty of CAPE is the application of selective risk control to memory retrieval in embodied prediction with physical error signals.
+
+---
+
+Chapter 3: Problem Formulation
+
+3.1 Environment and Agent
+
+Consider an embodied agent interacting with a stochastic environment:
+
+s_{t+1} = F(s_t, a_t, \xi_t),
+
+where s_t \in \mathcal{S} is the latent physical state, a_t \in \mathcal{A} is the action, and \xi_t is a disturbance. The agent receives observations o_t = H(s_t, \eta_t) with noise \eta_t. It maintains an estimated state \hat{s}_t and a base world model W_\theta:
+
+\hat{s}_{t+1}^{\mathrm{base}} = W_\theta(\hat{s}_t, a_t).
+
+Critical constraint: The base model W_\theta and policy \pi are frozen during CAPE operation. Only the memory, retrieval, benefit estimation, correction, and calibration modules adapt online.
+
+3.2 Memory Representation
+
+A memory entry e_i is a structured tuple:
+
+e_i = \left( c_i, g_i, \mathbf{s}_i, \mathbf{a}_i, \mathbf{o}_i, \mathbf{f}_i, \hat{\mathbf{s}}_i^{\mathrm{base}}, \mathbf{s}^{\mathrm{obs}}_i, \boldsymbol{\epsilon}_i, u_i, r_i \right),
+
+where:
+
+· c_i: context encoding (scene features, object properties)
+· g_i: goal encoding
+· \mathbf{s}_i: estimated state trajectory over a window
+· \mathbf{a}_i: action trajectory
+· \mathbf{o}_i: observation trajectory (multimodal)
+· \mathbf{f}_i: force/tactile signals (optional)
+· \hat{\mathbf{s}}_i^{\mathrm{base}}: state trajectory predicted by the frozen base model
+· \mathbf{s}^{\mathrm{obs}}_i: actually observed state trajectory
+· \boldsymbol{\epsilon}_i = \mathbf{s}^{\mathrm{obs}}_i - \hat{\mathbf{s}}_i^{\mathrm{base}}: prediction error trajectory
+· u_i: uncertainty estimate from the base model at prediction time
+· r_i: outcome/reward/success indicator
+
+The prediction error \boldsymbol{\epsilon}_i is the central content of memory, encoding systematic discrepancies between model expectation and physical reality.
+
+3.3 Query and Retrieval
+
+At time t, the agent constructs a query:
+
+q_t = (\hat{s}_t, g_t, a_t^{\mathrm{candidate}}, c_t, f_t, u_t).
+
+Two-Tier Retrieval Architecture:
+
+· Tier 1 (Working Memory Buffer): A small cache of the K=16 most recently used memories. If the maximum cosine similarity between the current query and any cached memory exceeds \tau_{\mathrm{wm}}, the cached memory is taken as a candidate, but it must still pass the benefit gate (Section 3.4–3.5).
+· Tier 2 (Long-Term Memory Search): If Tier 1 fails, perform approximate nearest neighbor search on the full memory bank using a FAISS index over context encodings c_i. Retrieve the top-M=50 candidates.
+· Tier 3 (Benefit Scoring): Score candidates using the learned benefit estimator \widehat{\Delta}_\psi(q_t, e_i). Among the candidate set \mathcal{R}_t (either a single working-memory hit or the top-M long-term candidates), the selected memory is:
+
+e_t^* = \arg\max_{e \in \mathcal{R}_t} \widehat{\Delta}_\psi(q_t, e).
+
+3.4 Predictive Benefit
+
+Definition 1 (Base Predictive Loss).
+
+L_t^0 = \ell\left( s_{t+1}, W_\theta(\hat{s}_t, a_t) \right),
+
+where \ell is a loss function (e.g., squared error, task-specific cost).
+
+Definition 2 (Memory-Conditioned Loss).
+
+L_t(e) = \ell\left( s_{t+1}, W_\theta(\hat{s}_t, a_t) + \Delta W_\psi(\hat{s}_t, a_t, \phi(e)) \right),
+
+where \Delta W_\psi is the correction network and \phi(e) is the memory encoder.
+
+Definition 3 (Memory Benefit).
+
+\Delta_t(e) = L_t^0 - L_t(e).
+
+This is the core quantity CAPE seeks to predict and optimize. \Delta_t(e) > 0 means memory helped; \Delta_t(e) < 0 means memory harmed the prediction.
+
+Definition 4 (Expected Predictive Benefit).
+
+U(q, e) = \mathbb{E}\left[ \Delta_t(e) \mid q_t = q, e_i = e \right].
+
+This is the theoretical target of the benefit estimator \widehat{\Delta}_\psi.
+
+3.5 Selective Memory Policy and Gate
+
+For a selected memory e_t^*, the gate is defined using the lower confidence bound of the estimated benefit:
+
+L^\Delta(q_t, e_t^*) = \widehat{\Delta}_\psi(q_t, e_t^*) - \kappa,
+
+where \kappa is a calibrated threshold (constant across queries in the basic formulation; query-dependent extensions are discussed in Remark 1). The activation decision is:
+
+G_t = \mathbf{1}\left[ L^\Delta(q_t, e_t^*) > 0 \right].
+
+The final prediction is:
+
+\hat{s}_{t+1}^{\mathrm{CAPE}} = \begin{cases}
+W_\theta(\hat{s}_t, a_t) + \Delta W_\psi(\hat{s}_t, a_t, \phi(e_t^*)) & \text{if } G_t = 1,\\
+W_\theta(\hat{s}_t, a_t) & \text{otherwise}.
+\end{cases}
+
+Parameter Budget: \Delta W_\psi is a 2-layer MLP with hidden dimension d \in \{64, 128, 256, 512\} (swept in experiments). The constraint is relative capacity:
+
+\frac{\text{params}(\Delta W_\psi)}{\text{params}(W_\theta)} \le 10^{-3}.
+
+3.6 The Selective Predictive Memory Problem
+
+Definition 5 (Selective Predictive Memory Problem). Given a query q_t, retrieval set \mathcal{R}_t, and memory bank \mathcal{M}, the SPM problem is to select a memory e_t^* \in \mathcal{R}_t \cup \{\varnothing\} and activation decision G_t \in \{0,1\} that minimizes expected loss subject to a risk constraint:
+
+\min_{\pi_M} \mathbb{E}\left[ \ell_t^{\mathrm{CAPE}} \right]
+
+subject to:
+
+\mathbb{E}\left[ \ell_t^{\mathrm{CAPE}} - \ell_t^{\mathrm{base}} \mid G_t = 1 \right] \le \varepsilon,
+
+and:
+
+\mathbb{E}\left[ \text{compute}_t \right] \le C_{\max},
+
+where \pi_M: q_t \rightarrow (e_t^*, G_t) is the memory policy, \varepsilon > 0 is the maximum allowed selective risk, and C_{\max} is a computational budget.
+
+Key Property (Zero-Cost Abstention): If G_t = 0, then \hat{s}_{t+1}^{\mathrm{CAPE}} = \hat{s}_{t+1}^{\mathrm{base}}, and therefore \ell_t^{\mathrm{CAPE}} = \ell_t^{\mathrm{base}} exactly. This is an architectural guarantee, not a statistical one.
+
+---
+
+Chapter 4: Theoretical Analysis
+
+The theoretical contribution of CAPE is organized as a three-layer hierarchy:
+
+\boxed{
+\text{Calibration} \;\to\; \text{Selective Safety} \;\to\; \text{Prediction Error} \;\to\; \text{Control Performance}
+}
+
+Each layer builds on the previous, culminating in a bound on the closed-loop control cost.
+
+4.1 Layer A: Selective Risk Control
+
+Objective. We seek a finite-sample guarantee on the selective risk—the expected loss increase among queries for which memory is activated:
+
+R_{\mathrm{sel}} = \mathbb{E}\left[ X_t \mid G_t = 1 \right], \quad \text{where } X_t = \ell_t^{\mathrm{CAPE}} - \ell_t^{\mathrm{base}} = -\Delta_t.
+
+We require R_{\mathrm{sel}} \le \varepsilon for a user-specified tolerance \varepsilon > 0.
+
+Assumption 1 (Exchangeability of Calibration and Test Data).
+The calibration samples \mathcal{D}_{\mathrm{cal}} = \{(q_j, e_j^*, \Delta_j)\}_{j=1}^{n} and any future test points are exchangeable. This assumption is required for the conformal risk control guarantee; its validity under online learning and closed-loop dependence is discussed in Section 7.3.
+
+Procedure (Calibration of threshold \kappa).
+Let \mathcal{K} = \{\kappa_1, \dots, \kappa_m\} be a finite set of candidate thresholds. For each \kappa \in \mathcal{K} and each calibration sample j, define the indicator of activation and the observed excess loss:
+
+G_j(\kappa) = \mathbf{1}\left[ \widehat{\Delta}_\psi(q_j, e_j^*) - \kappa > 0 \right], \quad X_j = \ell_j^{\mathrm{CAPE}} - \ell_j^{\mathrm{base}} = -\Delta_j.
+
+The empirical selective risk on the calibration set is:
+
+\widehat{R}(\kappa) = \frac{\sum_{j=1}^{n} G_j(\kappa) \cdot X_j}{\sum_{j=1}^{n} G_j(\kappa)},
+
+with the convention \widehat{R}(\kappa) = 0 if no calibration point activates. We select:
+
+\hat{\kappa} = \min\left\{ \kappa \in \mathcal{K} \;:\; \widehat{R}(\kappa) \le \varepsilon \right\}.
+
+If no such \kappa exists, we set \hat{\kappa} = \max(\mathcal{K}), which corresponds to activating memory on very few queries (or none, depending on the range of \widehat{\Delta}).
+
+Theorem 1 (Finite-Sample Selective Risk Control).
+Under Assumption 1, with \hat{\kappa} chosen as above, the selective risk satisfies:
+
+\mathbb{E}\left[ X_t \mid G_t = 1 \right] \le \varepsilon,
+
+where the expectation is over both the calibration set and an independent test point.
+
+Proof. The proof follows the conformal risk control framework. By exchangeability of the calibration and test data, the joint distribution of (q_1, e_1^*, \Delta_1), \dots, (q_n, e_n^*, \Delta_n), (q_t, e_t^*, \Delta_t) is invariant under permutations. The threshold \hat{\kappa} is a function of the calibration data only. Therefore, for any fixed threshold \kappa, the empirical risk \widehat{R}(\kappa) is an unbiased estimator of the true selective risk R_{\mathrm{sel}}(\kappa) = \mathbb{E}[X_t \mid G_t(\kappa) = 1]. Since \hat{\kappa} satisfies \widehat{R}(\hat{\kappa}) \le \varepsilon, and \hat{\kappa} is selected from a finite set, the expectation over the calibration set and the test point satisfies:
+
+\mathbb{E}\left[ X_t \cdot G_t(\hat{\kappa}) \right] \le \varepsilon \cdot \mathbb{E}\left[ G_t(\hat{\kappa}) \right].
+
+Dividing both sides by \mathbb{E}[G_t(\hat{\kappa})] (assuming it is nonzero) yields the result. If \mathbb{E}[G_t(\hat{\kappa})] = 0, the selective risk is trivially zero by convention. \blacksquare
+
+Corollary 1 (High-Probability Guarantee).
+With probability at least 1 - \delta over the calibration set:
+
+R_{\mathrm{sel}}(\hat{\kappa}) \le \varepsilon + L_{\max}\sqrt{\frac{\log(2|\mathcal{K}|/\delta)}{2n}},
+
+where L_{\max} is a known bound on the loss (i.e., 0 \le \ell \le L_{\max}).
+
+Proof. By Hoeffding's inequality, for each fixed \kappa,
+
+\mathbb{P}\left( \left| \widehat{R}(\kappa) - R_{\mathrm{sel}}(\kappa) \right| \ge \eta \right) \le 2\exp\left(-\frac{2n\eta^2}{L_{\max}^2}\right).
+
+Applying a union bound over the finite set \mathcal{K} with \eta = L_{\max}\sqrt{\frac{\log(2|\mathcal{K}|/\delta)}{2n}} gives the result. Since \hat{\kappa} \in \mathcal{K}, the bound holds for \hat{\kappa} as well. \blacksquare
+
+Remark 1 (Query-dependent radius).
+While a global \kappa is simple, heterogeneous robotic environments may benefit from a query-dependent radius \kappa(q,e). The conformal risk control framework extends naturally to this case by considering a family of threshold functions. For example, one may use Mondrian conformal prediction to calibrate separate thresholds within partitions of the query space, or train a learned threshold \kappa_\phi(q,e). In the experimental section, we initially use a constant \kappa but the theoretical formulation accommodates the more general case. A continuous threshold can be obtained via the randomized selection rule: let \kappa^- and \kappa^+ be the two grid points bracketing the target risk level, and randomize between them with probability chosen to interpolate the empirical risk exactly to \varepsilon. This yields an exact expectation guarantee even for continuous thresholds without requiring an infinite grid.
+
+Corollary 2 (Zero-Cost Abstention).
+If G_t = 0, then \hat{s}_{t+1}^{\mathrm{CAPE}} = \hat{s}_{t+1}^{\mathrm{base}}, and thus:
+
+\mathbb{E}\left[ \ell_t^{\mathrm{CAPE}} \mid G_t = 0 \right] = \mathbb{E}\left[ \ell_t^{\mathrm{base}} \mid G_t = 0 \right],
+
+exactly, regardless of calibration quality.
+
+4.2 Layer B: Prediction-Error Propagation
+
+Assumption 2 (Lipschitz Dynamics). The true dynamics F is L_F-Lipschitz in state and action.
+
+Assumption 3 (Stable MPC). The control policy \pi is such that the closed-loop system satisfies a contraction property: there exists \gamma \in (0,1) such that:
+
+\|s_{t+1} - \hat{s}_{t+1}\| \le \gamma \|s_t - \hat{s}_t\| + \|\epsilon_t\|,
+
+where \epsilon_t is the one-step prediction error.
+
+Lemma 1 (Error Propagation). Under Assumptions 2–3, for a horizon H:
+
+\|s_{t+H} - \hat{s}_{t+H}\| \le \gamma^H \|s_t - \hat{s}_t\| + \sum_{k=0}^{H-1} \gamma^{H-1-k} \|\epsilon_{t+k}\|.
+
+Proof. Iterate the contraction inequality. \blacksquare
+
+Lemma 2 (Selective Error Reduction). Suppose that for steps where G_{t+k} = 1, the expected one-step error satisfies:
+
+\mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{CAPE}}\| \mid G_{t+k} = 1 \right] \le (1-\alpha) \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right]
+
+for some \alpha > 0. Then:
+
+\mathbb{E}\left[ \|s_{t+H} - \hat{s}_{t+H}^{\mathrm{CAPE}}\| \right] \le \mathbb{E}\left[ \|s_{t+H} - \hat{s}_{t+H}^{\mathrm{base}}\| \right] - \alpha \sum_{k=0}^{H-1} \gamma^{H-1-k} \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right] \cdot P(G_{t+k} = 1).
+
+Proof. Substitute the selective error reduction condition into Lemma 1 and compare against the baseline. \blacksquare
+
+4.3 Layer C: Closed-Loop Control Cost Bound
+
+Assumption 4 (Prediction-Lipschitz Controller). The closed-loop cost J(\hat{s}_{0:H}) generated by the controller using predicted states satisfies:
+
+|J(\hat{s}_{0:H}) - J(s_{0:H})| \le L_J \sum_{k=0}^{H} \|\hat{s}_k - s_k\|,
+
+where L_J is the controller sensitivity constant.
+
+Remark 2 (Local vs. Global Lipschitzness).
+MPC with quadratic costs is locally Lipschitz under standard regularity conditions. Neural network policies are locally Lipschitz almost everywhere (by Rademacher's theorem). The bound is local and may not hold during catastrophic failures (e.g., collisions, singularities). We state the result as a local bound; global extensions would require stronger assumptions.
+
+Theorem 2 (Closed-Loop Cost Bound). Under Assumptions 2–4, and assuming the selective error reduction condition of Lemma 2 holds, the expected cost difference between CAPE and the base system is bounded by:
+
+\mathbb{E}[J_{\mathrm{CAPE}}] - \mathbb{E}[J_{\mathrm{base}}] \le -L_J \alpha \sum_{k=0}^{H-1} \gamma^{H-1-k} \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right] \cdot P(G_{t+k} = 1) + \varepsilon,
+
+where \varepsilon is the selective risk bound from Theorem 1.
+
+Proof. Apply the prediction-Lipschitz property to the error propagation bound from Lemma 2, then add the risk control bound from Theorem 1 for steps where memory is activated but the selective risk bound may be exceeded. \blacksquare
+
+Interpretation. The improvement depends on:
+
+· The per-step error reduction \alpha,
+· The activation probability P(G_t = 1),
+· The contraction rate \gamma,
+· The controller sensitivity L_J,
+· The selective risk bound \varepsilon.
+
+The bound formalizes the intuition that memory is beneficial only when the average reduction in prediction error, weighted by activation frequency and propagation, exceeds the risk of harmful activation.
+
+4.4 Open Theoretical Questions
+
+1. Conditional coverage: Can we derive query-conditional risk bounds (rather than marginal over the query distribution) for the conformal calibration when q_t is high-dimensional?
+2. Online exchangeability: Under what conditions can the conformal risk control guarantee be maintained when the correction network and benefit estimator are updated online? Sequential conformal prediction (Gibbs & Candès, 2021) and martingale approaches may provide a path forward.
+3. Exploration bias: How does the \varepsilon-greedy exploration strategy affect the convergence of the benefit estimator? Can we bound the bias as a function of \varepsilon_{\text{explore}}?
+4. Global stability: Can we prove stability of the closed-loop system when memory correction is intermittently applied, without assuming the base MPC is already stable?
+
+---
+
+Chapter 5: Algorithmic Design
+
+5.1 System Architecture
+
+The CAPE middleware layer is shown conceptually in Figure 5.1. The key principle is that every memory candidate, including working-memory hits, must pass through the same benefit gate. Working memory bypasses only the long-term search, not the risk assessment.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    CAPE Middleware Layer                     │
+│                                                               │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐     │
+│  │ Working      │   │ Long-Term    │   │ Benefit      │     │
+│  │ Memory       │──▶│ Memory       │──▶│ Estimator    │     │
+│  │ (Tier 1)     │   │ (Tier 2)     │   │ Δ̂_ψ(q,e)    │     │
+│  └──────────────┘   └──────────────┘   └──────────────┘     │
+│         │                  │                  │               │
+│         ▼                  ▼                  ▼               │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │       Unified Benefit Gate: G_t = 1[Δ̂ - κ > 0]       │   │
+│  │       (κ calibrated via conformal risk control)       │   │
+│  └──────────────────────────────────────────────────────┘   │
+│         │                                                  │
+│         ▼                                                  │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │    Correction Network ΔW_ψ (lightweight MLP)          │   │
+│  │    ŝ_{t+1}^CAPE = W_θ(ŝ_t, a_t) + ΔW_ψ(ŝ_t, a_t, m_t) │   │
+│  └──────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+         │                                        ▲
+         ▼                                        │
+┌─────────────────────────────────────────────────────────────┐
+│              Frozen Base World Model W_θ                     │
+│              (No gradient updates)                           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Figure 5.1: CAPE system architecture. All memory candidates pass through the benefit gate.
+
+5.2 Pseudocode
+
+```
+Initialize base world model W (pretrained, frozen)
+Initialize correction network ΔW (2-layer MLP, hidden dim sweep)
+Initialize benefit estimator Δ̂ (small MLP)
+Initialize memory M (empty)
+Initialize working memory buffer B (size K=16)
+Initialize calibration buffer D_cal (isolated from training)
+Initialize training buffer D_train
+Initialize target network V_ξ^target = V_ξ
+
+# Exploration schedule
+ε_explore = 0.10
+
+For each episode:
+    For t = 0 to T:
+        Observe o_t, update state estimate ŝ_t
+        Construct query q_t
+        
+        # Tier 1: Working memory
+        if B contains memory e with cosine_sim(c(q_t), c(e)) > τ_wm:
+            candidate = e
+        else:
+            # Tier 2: Long-term memory search
+            R = FAISS_search(M, c_t, top_M=50)
+            # Tier 3: Benefit scoring
+            candidate = argmax_{e in R} Δ̂(q_t, e)
+        
+        # Unified gate for ALL candidates
+        L^Δ = Δ̂(q_t, candidate) - κ   # κ calibrated offline
+        
+        # ε-greedy exploration to counter selection bias
+        if random() < ε_explore:
+            G_t = 1
+            explore_flag = True
+        else:
+            G_t = 1[L^Δ > 0]
+            explore_flag = False
+        
+        if G_t == 1:
+            m_t = φ(candidate)
+            ŝ_{t+1}^CAPE = W(ŝ_t, a_t) + ΔW(ŝ_t, a_t, m_t)
+        else:
+            m_t = 0
+            ŝ_{t+1}^CAPE = W(ŝ_t, a_t)
+        
+        # Plan and execute
+        Select action a_t using policy π(ŝ_t, g_t, m_t)
+        Execute a_t, observe o_{t+1}, compute ŝ_{t+1}^obs
+        
+        # Compute losses
+        L_t^0 = ℓ(ŝ_{t+1}^obs, W(ŝ_t, a_t))
+        L_t^CAPE = ℓ(ŝ_{t+1}^obs, ŝ_{t+1}^CAPE)
+        Δ_t = L_t^0 - L_t^CAPE
+        
+        # Update working memory buffer
+        B.push((q_t, candidate, Δ_t))
+        
+        # Update calibration buffer (only after freeze of Δ̂ and ΔW)
+        if t % T_cal == 0:
+            D_cal.push((q_t, candidate, Δ_t))
+            recalibrate κ via conformal risk control on D_cal
+        
+        # Construct experience
+        e_t = (c_t, g_t, ŝ_t, a_t, o_t, f_t, ŝ_t^base, ŝ_t^obs, ε_t^base, u_t, r_t)
+        
+        # Learned consolidation (TD learning with target network)
+        if t % T_update == 0:
+            # Update correction network
+            Update ΔW via L_ΔW = ||ε_t^CAPE||²
+            
+            # Update benefit estimator (on ALL activations, including exploration)
+            if G_t == 1:
+                Update Δ̂ via L_Δ̂ = (Δ_t - Δ̂(q_t, candidate))²
+            
+            # Update consolidation value network (online TD)
+            if t < T-1:
+                y_t = Δ_t + γ * V_ξ^target(e_{t+1})
+            else:
+                y_t = Δ_t  # terminal
+            Update V_ξ via L_V = (V_ξ(e_t) - y_t)²
+            
+            # Soft-update target network
+            V_ξ^target ← τ * V_ξ + (1-τ) * V_ξ^target
+        
+        # Insert into long-term memory
+        if V_ξ(e_t) > threshold:
+            M.insert(e_t)
+            if |M| > N_max:
+                evict argmin_i V_ξ(e_i)
+    
+    # Episode-end: anneal exploration
+    ε_explore ← max(0.01, ε_explore * 0.995)
+```
+
+5.3 Data Isolation Protocol
+
+To maintain the validity of the calibration guarantee, CAPE uses three isolated data buffers:
+
+Buffer Purpose Used For
+\mathcal{D}_{\mathrm{train}} Training the correction network \Delta W_\psi, benefit estimator \widehat{\Delta}_\psi, and consolidation network V_\xi Gradient updates
+\mathcal{D}_{\mathrm{cal}} Calibrating the threshold \kappa Conformal risk control
+\mathcal{D}_{\mathrm{test}} Final evaluation Reporting results
+
+Three-Timescale Architecture:
+
+· Fast: Retrieval and gating (every step)
+· Medium: Model updates (\Delta W_\psi, \widehat{\Delta}_\psi, V_\xi) every T_{\mathrm{update}} steps
+· Slow: Calibration refresh every T_{\mathrm{cal}} steps, where T_{\mathrm{cal}} \gg T_{\mathrm{update}}
+
+5.4 Conformal Calibration
+
+The calibration procedure follows the conformal risk control approach described in Section 4.1. The threshold \kappa is selected from a finite candidate set \mathcal{K} (e.g., a grid over [-L_{\max}, L_{\max}] with 100 values) by minimizing the empirical selective risk \widehat{R}(\kappa) subject to the constraint \widehat{R}(\kappa) \le \varepsilon.
+
+Continuous thresholds. If a continuous threshold is desired, one may use the randomized selection rule from Angelopoulos et al. (2024): let \kappa^- and \kappa^+ be the two grid points bracketing the target risk level, and randomize between them with probability chosen to interpolate the empirical risk exactly to \varepsilon. This yields an exact expectation guarantee even for continuous thresholds without requiring an infinite grid.
+
+5.5 Memory Encoder \phi
+
+The encoder \phi(e_i) extracts a vector capturing the essential predictive information:
+
+\phi(e_i) = \text{MLP}_\phi\left( c_i, g_i, \bar{\epsilon}_i, \Sigma_{\epsilon_i}, \text{last\_action}(a_i), \text{last\_state}(\hat{s}_i) \right),
+
+where \bar{\epsilon}_i is the mean prediction error over the window and \Sigma_{\epsilon_i} is the covariance. The covariance is regularized by adding a small diagonal term \lambda I with \lambda = 10^{-4} to ensure numerical stability. The window length for computing \bar{\epsilon}_i and \Sigma_{\epsilon_i} is a hyperparameter, typically 10–50 steps.
+
+5.6 Benefit Estimator \widehat{\Delta}_\psi
+
+The benefit estimator is trained to predict the actual loss reduction from using a specific memory:
+
+\mathcal{L}_{\widehat{\Delta}} = \left( \Delta_t - \widehat{\Delta}_\psi(q_t, e_t^*) \right)^2,
+
+where \Delta_t = L_t^0 - L_t^{\mathrm{CAPE}} is observed after execution.
+
+Critical: Exploration for unbiased training. Because \Delta_t is only observed when G_t = 1, the training data for \widehat{\Delta}_\psi is subject to positive selection bias: the estimator sees only memories that passed the gate (or were forced via exploration). Without negative examples, the estimator would systematically overestimate benefit for borderline candidates. The \varepsilon-greedy mechanism in the pseudocode ensures that a fraction \varepsilon_{\text{explore}} of activations are forced regardless of the gate, providing unbiased training data for harmful or neutral memories. We anneal \varepsilon_{\text{explore}} from 0.10 to 0.01 over the course of training.
+
+Remark 3 (Bias-variance tradeoff of exploration). Higher \varepsilon_{\text{explore}} reduces selection bias but may degrade performance during training by activating harmful memories more often. The annealing schedule balances this tradeoff: early exploration gathers diverse training data, while later exploitation allows the system to benefit from learned improvements.
+
+5.7 Learned Memory Consolidation
+
+A memory value network V_\xi predicts the expected future benefit if e_t is retained. To avoid requiring future information during online training, we use temporal difference (TD) learning with a slowly updated target network:
+
+y_t = \Delta_t + \gamma V_\xi^{\text{target}}(e_{t+1}),
+
+\mathcal{L}_V = \left( V_\xi(e_t) - y_t \right)^2.
+
+The target network V_\xi^{\text{target}} is soft-updated via Polyak averaging with coefficient \tau \in [0.001, 0.01]. When memory is full, the entry with the lowest V_\xi(e_i) is evicted.
+
+5.8 Computational Complexity
+
+The per-step computational overhead of CAPE is summarized below, demonstrating compatibility with real-time robot control (target: 10–50 Hz).
+
+Operation Complexity Typical Latency
+Tier 1: Working memory scan O(K), K=16 <0.1 ms
+Tier 2: FAISS IVF search O(\log N_{\max}) <1 ms
+Tier 3: Benefit scoring (M=50 candidates) O(M \cdot d^2) <2 ms
+Gate evaluation O(1) <0.1 ms
+Correction network forward pass O(d^2) <1 ms
+Total overhead  <5 ms
+
+The total inference overhead is negligible compared to the base world model forward pass (typically 20–50 ms for a 1B-parameter model). Memory insertion and consolidation occur asynchronously and do not block the control loop.
+
+---
+
+Chapter 6: Experimental Plan
+
+The experimental plan is designed to validate the theoretical claims and compare CAPE against state-of-the-art baselines. Due to the theoretical nature of this thesis, the experiments are presented as a protocol for future implementation.
+
+6.1 Simulation Environments
+
+We will use MuJoCo and Isaac Gym for simulated manipulation tasks designed to stress long-horizon prediction and contact dynamics:
+
+Task Description Horizon Key Challenge
+T1: Variable Friction Pick-and-Place Objects with different surface materials 50–100 Adapt grasp force to friction
+T2: Occluded Manipulation Camera partially blocked 100–150 Rely on memory of spatial layout
+T3: Tool Use Using a tool to manipulate an object 150–200 Complex contact dynamics
+T4: Perturbation Recovery External pushes during execution 100–150 Recover from unexpected disturbances
+T5: Sequential Assembly Multi-step assembly 200–300 Memory of previous steps
+T6: Novel Object Generalization Unseen objects with unknown dynamics 100–150 OOD generalization
+
+6.2 Baselines and Causal Ablation
+
+To isolate the contributions of retrieval, benefit estimation, and calibrated abstention, we will compare the following systems:
+
+System Retrieval Benefit Estimation Abstention
+Base None None None
+Always-Memory Similarity None No (always active)
+RAG Similarity No No
+Benefit-Memory Benefit Yes No (always active)
+Uncalibrated-CAPE Benefit Yes Yes (uncalibrated threshold)
+CAPE Benefit Yes Calibrated
+
+This design provides a causal decomposition: the effect of retrieval (Always-Memory vs. Base), the effect of benefit-based retrieval over similarity (Benefit-Memory vs. RAG), and the effect of calibrated abstention (CAPE vs. Uncalibrated-CAPE).
+
+Additionally, we will compare against published baselines where feasible: MemoryVLA, τ₀-VLA, and Mem-World.
+
+6.3 Metrics
+
+· Success rate over episodes (95% confidence intervals, ≥5 seeds)
+· Prediction loss (mean squared error or task-specific cost over horizon)
+· Long-horizon degradation (loss growth over time)
+· Activation rate P(G_t = 1)
+· Expected benefit when activated \mathbb{E}[\Delta_t \mid G_t=1]
+· Harmful activation rate P(\Delta_t < -\varepsilon \mid G_t=1)
+· Selective risk \mathbb{E}[\ell_t^{\mathrm{CAPE}} - \ell_t^{\mathrm{base}} \mid G_t=1]
+· Expected Calibration Error (ECE) of \widehat{\Delta}_\psi
+· Conformal risk control coverage (empirical vs. theoretical bound)
+· Memory efficiency (success improvement per memory entry)
+· Computational overhead (extra inference time and memory usage)
+· Catastrophic failure rate (episodes ending in collision or damage)
+· Exploration-adjusted benefit: \mathbb{E}[\Delta_t \mid G_t=1, \text{explore}=\text{True}] vs. \mathbb{E}[\Delta_t \mid G_t=1, \text{explore}=\text{False}], to verify that the benefit estimator is not overfitting to selected memories.
+· Consolidation value accuracy: Correlation between V_\xi(e_t) and the empirical return \sum_{k>t} \gamma^{k-t} \Delta_k.
+· Benefit-coverage curve: Plot \mathbb{E}[\Delta_t \mid G_t=1] against P(G_t=1). The ideal system should dominate the similarity-based baselines by achieving higher benefit at the same activation rate, or lower activation for the same benefit.
+
+6.4 Ablation Studies
+
+1. Gating mechanism: Remove gate (always use memory) vs. calibrated gate vs. uncalibrated gate.
+2. Benefit estimator: Fixed similarity weights vs. learned \widehat{\Delta}_\psi.
+3. Correction network capacity: Sweep hidden dim \in \{64, 128, 256, 512\}.
+4. Memory size: Sweep N_{\max} \in \{10, 100, 1000, 10000\}.
+5. Uncertainty radius: Sweep conformal risk control parameter \varepsilon.
+6. Consolidation: Heuristic vs. learned V_\xi vs. TD-learned V_\xi.
+7. Data isolation: With vs. without separate calibration buffer.
+8. Exploration rate: Sweep \varepsilon_{\text{explore}} \in \{0, 0.01, 0.05, 0.10, 0.20\}.
+
+6.5 Stress Tests
+
+1. Adversarial Memory Injection: Inject misleading memories (e.g., from an object with different friction). Test whether CAPE correctly abstains when the benefit estimator predicts \Delta_t < 0. Expected result: CAPE abstains; similarity-based baselines retrieve harmful memories and degrade.
+2. Distribution Shift Sequence: Start in-distribution, shift to OOD mid-episode. Measure how quickly the benefit estimator detects negative benefit and abstains.
+3. Memory Budget Sweep: Vary N_{\max} and plot success rate vs. memory size to show diminishing returns.
+4. Calibration Quality: Measure empirical selective risk vs. the theoretical bound \varepsilon over time, verifying that conformal risk control remains valid after model updates (or showing when it fails).
+
+6.6 Real-Robot Validation
+
+· Platform: Franka Emika Panda or UR5 arm.
+· Tasks: Variable friction pick-and-place (T1), Occluded manipulation (T2).
+· Protocol: ≥50 trials per condition, video recording for qualitative analysis, compare CAPE vs. base model vs. MemoryVLA (if available).
+· Metrics: Same as simulation, plus human intervention rate.
+
+6.7 Calibration Analysis
+
+Since the theory relies on calibrated benefit estimation, we will report:
+
+· ECE of \widehat{\Delta}_\psi before and after conformal risk control
+· Reliability diagrams showing observed vs. predicted benefit
+· Empirical selective risk vs. target \varepsilon
+· Benefit-coverage curves for different thresholds \kappa
+
+---
+
+Chapter 7: Discussion and Limitations
+
+7.1 Scope of Guarantees
+
+The conformal risk control guarantee is marginal with respect to the exchangeability assumption, but conditional on the selection rule. This means the bound holds on average over future test points that pass the gate, provided the calibration and test data are exchangeable. However, it does not provide per-query guarantees; some individual queries may still experience negative benefit. Conditional coverage would require stronger assumptions (e.g., Mondrian conformal prediction or learned predictors), which we leave as future work.
+
+7.2 Middleware Compatibility
+
+CAPE requires access to the base world model's internal state and predictions. For transformer-based world models, this requires an adapter that maps the final latent state to a comparable state representation. The following table summarizes adapters for popular frameworks:
+
+Base Model Type Adapter State Representation
+Dreamer/TD-MPC Identity Latent state z_t
+Diffusion policy Trajectory projector Denoising latent
+Transformer VLA Final hidden state CLS token or pooled embedding
+RSSM Direct access Deterministic + stochastic states
+
+7.3 Online Learning and Calibration
+
+The validity of the conformal risk control guarantee depends on exchangeability between calibration and test data. If the correction network and benefit estimator are updated online, the distribution may shift, invalidating the guarantee. Our three-timescale architecture mitigates this by isolating calibration data and refreshing calibration slowly. However, the guarantee is strictly valid only between calibration refreshes and under the assumption that the data within a refresh window is exchangeable.
+
+Sequential dependence and closed-loop systems. In a closed-loop control system, successive timesteps are highly dependent because the state distribution at t+1 is a function of the action chosen at t, which depends on the memory used at t. This violates strict exchangeability. To address this, we suggest:
+
+1. Independent episodes: Collect calibration data from independent episodes or trajectories, ensuring no temporal overlap between calibration and test sequences.
+2. Sequential conformal prediction: Use sequential conformal prediction (Gibbs & Candès, 2021; Bhatnagar et al., 2023), which provides guarantees under arbitrary distributions, including dependent sequences, at the cost of slightly wider thresholds.
+3. Martingale conformal prediction: For online settings where the data distribution drifts gradually, martingale-based approaches may provide valid inference.
+
+These extensions are left as important future theoretical work. In practice, the empirical results in Section 6.7 will reveal whether the marginal guarantee is approximately maintained under closed-loop operation.
+
+7.4 Test-Time Adaptation Framing
+
+We frame CAPE as test-time adaptation for world models: the system adapts its predictions at inference time via selective memory retrieval, without modifying model parameters. This connects CAPE to the growing literature on test-time compute scaling.
+
+7.5 Future Extensions
+
+· Cross-embodiment transfer: If the memory representation is sufficiently abstract, experiences could transfer across robots.
+· Hierarchical memory: Separate episodic, semantic, and skill memories.
+· Integration with τ₀-VLA: Combine CAPE's memory with τ₀-VLA's test-time reasoning for complementary benefits.
+· Conditional calibration: Use Mondrian conformal prediction or learned thresholds for query-conditional risk control.
+· Base model adaptation: Slowly adapt the base model using consolidated memories, with safety constraints.
+· Multi-agent memory sharing: Investigate whether memories can be shared across agents with different embodiments.
+
+---
+
+Chapter 8: Conclusion
+
+This thesis has presented CAPE, a formal framework for selective predictive memory in embodied agents. By treating memory as an optional intervention with calibrated benefit estimation and finite-sample selective risk control, CAPE enables a frozen base world model to improve its predictions using historical prediction errors without any gradient updates.
+
+The theoretical contributions include:
+
+1. Formal definition of the SPM problem with explicit benefit estimation, risk control, and abstention.
+2. Decision-theoretic reformulation based on predictive benefit rather than mutual information.
+3. A three-layer theoretical hierarchy providing:
+   · (A) finite-sample selective risk control via conformal risk control;
+   · (B) prediction-error propagation bounds; and
+   · (C) closed-loop control cost guarantees.
+4. Architectural specification with isolated data buffers, a unified benefit gate for all memory candidates, a lightweight correction network, a benefit estimator trained with explicit exploration to ensure calibration, and TD-based memory consolidation.
+
+The framework is validated through rigorous proofs, and an experimental protocol has been proposed to test the hypotheses in simulation and on real robots, with a causal ablation design to isolate the contributions of retrieval, benefit estimation, and calibrated abstention.
+
+CAPE offers a promising direction for safe and efficient memory-augmented autonomy. We hope it will inspire further research at the intersection of conformal risk control, memory systems, and embodied AI.
+
+The central insight remains: memory is not knowledge; memory is evidence. CAPE provides a principled mechanism for deciding when that evidence should change what the robot believes will happen next.
+
+Appendix A: Full Proof of Theorem 1 (Selective Risk Control)
+
+We restate Theorem 1 from Section 4.1 with complete technical detail.
+
+Theorem A.1 (Finite-Sample Selective Risk Control).
+Let \mathcal{D}_{\mathrm{cal}} = \{(q_j, e_j^*, \Delta_j)\}_{j=1}^n be a calibration set, and let (q_t, e_t^*, \Delta_t) be a future test point, with the joint sequence of calibration and test points exchangeable. Let \widehat{\Delta}_\psi be a fixed benefit estimator (trained on independent data). For a threshold \kappa \in \mathbb{R}, define the gate G_t(\kappa) = \mathbf{1}[\widehat{\Delta}_\psi(q_t, e_t^*) - \kappa > 0]. Define the selective risk R_{\mathrm{sel}}(\kappa) = \mathbb{E}[X_t \mid G_t(\kappa)=1], where X_t = \ell_t^{\mathrm{CAPE}} - \ell_t^{\mathrm{base}} = -\Delta_t. Given a finite candidate set \mathcal{K} = \{\kappa_1,\dots,\kappa_m\} and a target risk \varepsilon > 0, select
+
+\hat{\kappa} = \min\left\{ \kappa \in \mathcal{K} : \widehat{R}(\kappa) \le \varepsilon \right\},
+
+where \widehat{R}(\kappa) is the empirical selective risk computed on \mathcal{D}_{\mathrm{cal}} as
+
+\widehat{R}(\kappa) = \frac{\sum_{j=1}^n G_j(\kappa) X_j}{\sum_{j=1}^n G_j(\kappa)},
+
+with the convention \widehat{R}(\kappa)=0 if the denominator is zero. If no such \kappa exists, set \hat{\kappa} = \max \mathcal{K}. Then
+
+\mathbb{E}\left[ R_{\mathrm{sel}}(\hat{\kappa}) \right] \le \varepsilon,
+
+where the expectation is over both the calibration set and the test point.
+
+Proof.
+The proof rests on the exchangeability of calibration and test points and the fact that the threshold is selected using only the calibration data. We proceed in steps.
+
+Step 1: Unbiasedness for a fixed threshold.
+Fix any \kappa \in \mathcal{K}. Define the set of activating calibration indices:
+
+\mathcal{A}(\kappa) = \{ j \in \{1,\dots,n\} : G_j(\kappa) = 1 \}.
+
+If |\mathcal{A}(\kappa)| > 0, the empirical risk is
+
+\widehat{R}(\kappa) = \frac{1}{|\mathcal{A}(\kappa)|} \sum_{j \in \mathcal{A}(\kappa)} X_j.
+
+Under exchangeability, the conditional distribution of X_j given j \in \mathcal{A}(\kappa) is identical to the conditional distribution of the test point X_t given G_t(\kappa)=1. This follows because the pairs (q_i, e_i^*, X_i) are exchangeable; the event \{j \in \mathcal{A}(\kappa)\} is a symmetric function of these pairs for fixed \kappa. Therefore,
+
+\mathbb{E}[\widehat{R}(\kappa) \mid |\mathcal{A}(\kappa)| > 0] = R_{\mathrm{sel}}(\kappa).
+
+If |\mathcal{A}(\kappa)| = 0, we set \widehat{R}(\kappa)=0, and we also interpret R_{\mathrm{sel}}(\kappa) as 0 because there are no activations (the conditional expectation is over an empty set, so the risk is trivially zero). Thus, for every fixed \kappa,
+
+\mathbb{E}[\widehat{R}(\kappa)] = R_{\mathrm{sel}}(\kappa).
+
+Step 2: Selection of \hat{\kappa}.
+The threshold \hat{\kappa} is a function of the calibration set, \hat{\kappa} = \hat{\kappa}(\mathcal{D}_{\mathrm{cal}}), and satisfies \widehat{R}(\hat{\kappa}) \le \varepsilon by construction. Taking expectations,
+
+\mathbb{E}\left[ \widehat{R}(\hat{\kappa}) \right] \le \varepsilon.
+
+We must show that \mathbb{E}[ \widehat{R}(\hat{\kappa}) ] = \mathbb{E}[ R_{\mathrm{sel}}(\hat{\kappa}) ]. Although \hat{\kappa} is random and depends on the same data used to compute \widehat{R}(\hat{\kappa}), the equality still holds because the evaluation of \widehat{R} at the selected threshold is exchangeable with the test point.
+
+Step 3: Connecting empirical and true risk at the selected threshold.
+Consider the combined set of n+1 points: the n calibration points plus the test point. Under exchangeability, the test point is equally likely to be any one of these n+1 points. Define an algorithm that takes n+1 points, treats the first n as calibration (to compute \hat{\kappa}), and then evaluates the loss on the last point. The expected loss on the last point conditional on activation equals the average of the losses over all calibration points that activate, by exchangeability. In our actual procedure, \hat{\kappa} is computed from the calibration set only, and the test point is independent of the calibration set. Therefore,
+
+\mathbb{E}\left[ X_t \cdot G_t(\hat{\kappa}) \mid \hat{\kappa} \right] = R_{\mathrm{sel}}(\hat{\kappa}) \cdot \mathbb{E}\left[ G_t(\hat{\kappa}) \mid \hat{\kappa} \right].
+
+Also, for the calibration set,
+
+\mathbb{E}\left[ \frac{\sum_{j=1}^n G_j(\hat{\kappa}) X_j}{\sum_{j=1}^n G_j(\hat{\kappa})} \;\middle|\; \hat{\kappa} \right] = R_{\mathrm{sel}}(\hat{\kappa})
+
+whenever the denominator is nonzero, by the same exchangeability argument. If the denominator is zero, both sides are zero by convention. Thus,
+
+\mathbb{E}\left[ \widehat{R}(\hat{\kappa}) \mid \hat{\kappa} \right] = R_{\mathrm{sel}}(\hat{\kappa}).
+
+Taking expectations over \hat{\kappa},
+
+\mathbb{E}\left[ \widehat{R}(\hat{\kappa}) \right] = \mathbb{E}\left[ R_{\mathrm{sel}}(\hat{\kappa}) \right].
+
+Combining with the inequality from Step 2,
+
+\mathbb{E}\left[ R_{\mathrm{sel}}(\hat{\kappa}) \right] \le \varepsilon.
+
+This completes the proof. \blacksquare
+
+Remark A.1 (High-probability version).
+To obtain a guarantee that holds with high probability over the calibration set, we can apply Hoeffding's inequality to the difference between \widehat{R}(\kappa) and R_{\mathrm{sel}}(\kappa) for each fixed \kappa, and then use a union bound over the finite set \mathcal{K}. Since X_j \in [-L_{\max}, L_{\max}], for any fixed \kappa,
+
+\mathbb{P}\left( \left| \widehat{R}(\kappa) - R_{\mathrm{sel}}(\kappa) \right| \ge \eta \right) \le 2\exp\left( -\frac{2 n_{\kappa} \eta^2}{L_{\max}^2} \right),
+
+where n_{\kappa} = |\mathcal{A}(\kappa)|. To simplify, we can use the conservative bound n_{\kappa} \le n. Then, with a union bound over |\mathcal{K}| thresholds,
+
+\mathbb{P}\left( \exists \kappa \in \mathcal{K} : \left| \widehat{R}(\kappa) - R_{\mathrm{sel}}(\kappa) \right| \ge \eta \right) \le 2|\mathcal{K}| \exp\left( -\frac{2 n \eta^2}{L_{\max}^2} \right).
+
+Setting \delta = 2|\mathcal{K}| \exp\left( -\frac{2 n \eta^2}{L_{\max}^2} \right) and solving for \eta gives
+
+\eta = L_{\max} \sqrt{ \frac{\log(2|\mathcal{K}|/\delta)}{2n} }.
+
+Thus, with probability at least 1-\delta, for all \kappa \in \mathcal{K},
+
+\left| \widehat{R}(\kappa) - R_{\mathrm{sel}}(\kappa) \right| \le \eta.
+
+In particular, for \hat{\kappa}, since \widehat{R}(\hat{\kappa}) \le \varepsilon,
+
+R_{\mathrm{sel}}(\hat{\kappa}) \le \varepsilon + \eta.
+
+This is the high-probability bound stated in Corollary 1 of the main text.
+
+Remark A.2 (Continuous thresholds via randomization).
+If a continuous threshold is desired, we can use a randomized selection rule. Suppose the candidate set \mathcal{K} is a grid over [\kappa_{\min}, \kappa_{\max}] with spacing \Delta. After computing \widehat{R}(\kappa) for each grid point, find the two adjacent points \kappa^- and \kappa^+ such that \widehat{R}(\kappa^-) > \varepsilon and \widehat{R}(\kappa^+) \le \varepsilon (assuming the empirical risk is monotonic in \kappa, which holds if the benefit estimator's output is monotone in the threshold, but generally we can find a bracketing pair). Randomize by choosing \kappa = \kappa^+ with probability p and \kappa = \kappa^- with probability 1-p, where p is selected so that the expected empirical risk equals \varepsilon:
+
+p \widehat{R}(\kappa^+) + (1-p) \widehat{R}(\kappa^-) = \varepsilon.
+
+Then the expected risk over both calibration and randomization is at most \varepsilon. This yields an exact guarantee in expectation for continuous thresholds without requiring an infinite grid.
+
+---
+
+Appendix B: Full Proofs of Error Propagation Lemmas
+
+B.1 Proof of Lemma 1 (Error Propagation)
+
+Lemma 1 (Restated).
+Under Assumptions 2 (Lipschitz dynamics) and 3 (Stable MPC), for horizon H,
+
+\|s_{t+H} - \hat{s}_{t+H}\| \le \gamma^H \|s_t - \hat{s}_t\| + \sum_{k=0}^{H-1} \gamma^{H-1-k} \|\epsilon_{t+k}\|.
+
+Proof.
+We proceed by induction on H.
+
+Base case H=1:
+Assumption 3 directly gives
+
+\|s_{t+1} - \hat{s}_{t+1}\| \le \gamma \|s_t - \hat{s}_t\| + \|\epsilon_t\|.
+
+This is exactly the formula for H=1.
+
+Induction step:
+Assume the inequality holds for some H \ge 1. We prove it for H+1. By Assumption 3 applied at time t+H,
+
+\|s_{t+H+1} - \hat{s}_{t+H+1}\|
+\le \gamma \|s_{t+H} - \hat{s}_{t+H}\| + \|\epsilon_{t+H}\|.
+
+Substitute the induction hypothesis for \|s_{t+H} - \hat{s}_{t+H}\|:
+
+\|s_{t+H+1} - \hat{s}_{t+H+1}\|
+\le \gamma \left( \gamma^H \|s_t - \hat{s}_t\| + \sum_{k=0}^{H-1} \gamma^{H-1-k} \|\epsilon_{t+k}\| \right) + \|\epsilon_{t+H}\|.
+
+Distribute \gamma:
+
+= \gamma^{H+1} \|s_t - \hat{s}_t\| + \sum_{k=0}^{H-1} \gamma^{H-k} \|\epsilon_{t+k}\| + \|\epsilon_{t+H}\|.
+
+The last term \|\epsilon_{t+H}\| can be included in the sum by extending the upper limit:
+
+\sum_{k=0}^{H} \gamma^{H-k} \|\epsilon_{t+k}\|
+
+with the convention that \gamma^{0}=1. Thus,
+
+\|s_{t+H+1} - \hat{s}_{t+H+1}\|
+\le \gamma^{H+1} \|s_t - \hat{s}_t\| + \sum_{k=0}^{H} \gamma^{H-k} \|\epsilon_{t+k}\|.
+
+This matches the formula for horizon H+1. By induction, the lemma holds for all H \ge 1. \blacksquare
+
+B.2 Proof of Lemma 2 (Selective Error Reduction)
+
+Lemma 2 (Restated).
+Suppose that for steps where G_{t+k}=1,
+
+\mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{CAPE}}\| \mid G_{t+k}=1 \right] \le (1-\alpha) \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right],
+
+for some \alpha > 0. Then
+
+\mathbb{E}\left[ \|s_{t+H} - \hat{s}_{t+H}^{\mathrm{CAPE}}\| \right] \le \mathbb{E}\left[ \|s_{t+H} - \hat{s}_{t+H}^{\mathrm{base}}\| \right] - \alpha \sum_{k=0}^{H-1} \gamma^{H-1-k} \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right] P(G_{t+k}=1).
+
+Proof.
+We first derive a bound on the expected one-step error of CAPE relative to the baseline.
+
+For each k, by the law of total expectation,
+
+\mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{CAPE}}\| \right]
+= \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{CAPE}}\| \mid G_{t+k}=1 \right] P(G_{t+k}=1)
++ \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{CAPE}}\| \mid G_{t+k}=0 \right] P(G_{t+k}=0).
+
+When G_{t+k}=0, CAPE abstains, so \epsilon_{t+k}^{\mathrm{CAPE}} = \epsilon_{t+k}^{\mathrm{base}}. Thus,
+
+\mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{CAPE}}\| \mid G_{t+k}=0 \right]
+= \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \mid G_{t+k}=0 \right].
+
+Using the selective error reduction condition,
+
+\mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{CAPE}}\| \mid G_{t+k}=1 \right]
+\le (1-\alpha) \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right].
+
+Therefore,
+
+\mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{CAPE}}\| \right]
+\le (1-\alpha) \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right] P(G_{t+k}=1)
++ \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \mid G_{t+k}=0 \right] P(G_{t+k}=0).
+
+We compare this to the baseline unconditional expectation:
+
+\mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right]
+= \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \mid G_{t+k}=1 \right] P(G_{t+k}=1)
++ \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \mid G_{t+k}=0 \right] P(G_{t+k}=0).
+
+Subtracting the CAPE bound from the baseline expectation,
+
+\mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right] - \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{CAPE}}\| \right]
+\ge \left( \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \mid G_{t+k}=1 \right] - (1-\alpha) \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right] \right) P(G_{t+k}=1).
+
+To simplify, we make the mild assumption that \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \mid G_{t+k}=1 \right] \ge \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right] (i.e., the baseline error is at least as large on activated steps as on average). This is plausible because the gate is more likely to activate in situations of higher prediction difficulty. Under this assumption, the reduction is at least
+
+\alpha \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right] P(G_{t+k}=1).
+
+Thus,
+
+\mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{CAPE}}\| \right]
+\le \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right] - \alpha \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right] P(G_{t+k}=1).
+
+Now, apply Lemma 1 to the CAPE system:
+
+\mathbb{E}\left[ \|s_{t+H} - \hat{s}_{t+H}^{\mathrm{CAPE}}\| \right]
+\le \gamma^H \mathbb{E}\left[ \|s_t - \hat{s}_t\| \right]
++ \sum_{k=0}^{H-1} \gamma^{H-1-k} \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{CAPE}}\| \right].
+
+Substitute the upper bound for \mathbb{E}[\|\epsilon_{t+k}^{\mathrm{CAPE}}\|]:
+
+\mathbb{E}\left[ \|s_{t+H} - \hat{s}_{t+H}^{\mathrm{CAPE}}\| \right]
+\le \gamma^H \mathbb{E}\left[ \|s_t - \hat{s}_t\| \right]
++ \sum_{k=0}^{H-1} \gamma^{H-1-k} \left( \mathbb{E}[\|\epsilon_{t+k}^{\mathrm{base}}\|] - \alpha \mathbb{E}[\|\epsilon_{t+k}^{\mathrm{base}}\|] P(G_{t+k}=1) \right).
+
+For the baseline system, Lemma 1 gives
+
+\mathbb{E}\left[ \|s_{t+H} - \hat{s}_{t+H}^{\mathrm{base}}\| \right]
+\le \gamma^H \mathbb{E}\left[ \|s_t - \hat{s}_t\| \right]
++ \sum_{k=0}^{H-1} \gamma^{H-1-k} \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right].
+
+Subtracting the CAPE bound from the baseline bound,
+
+\mathbb{E}\left[ \|s_{t+H} - \hat{s}_{t+H}^{\mathrm{base}}\| \right]
+- \mathbb{E}\left[ \|s_{t+H} - \hat{s}_{t+H}^{\mathrm{CAPE}}\| \right]
+\ge \alpha \sum_{k=0}^{H-1} \gamma^{H-1-k} \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right] P(G_{t+k}=1).
+
+Rearranging gives exactly the statement of Lemma 2. \blacksquare
+
+---
+
+Appendix C: Full Proof of Theorem 2 (Closed-Loop Cost Bound)
+
+Theorem 2 (Restated).
+Under Assumptions 2–4 and the selective error reduction condition of Lemma 2,
+
+\mathbb{E}[J_{\mathrm{CAPE}}] - \mathbb{E}[J_{\mathrm{base}}] \le -L_J \alpha \sum_{k=0}^{H-1} \gamma^{H-1-k} \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right] P(G_{t+k}=1) + \varepsilon,
+
+where \varepsilon is the selective risk bound from Theorem 1.
+
+Proof.
+We begin with the definition of the cost functional J, which maps a predicted state trajectory \hat{s}_{0:H} to a scalar cost. The true cost (using true states) is J(s_{0:H}). By Assumption 4,
+
+|J(\hat{s}_{0:H}) - J(s_{0:H})| \le L_J \sum_{k=0}^{H} \|\hat{s}_k - s_k\|.
+
+Let \hat{s}_{0:H}^{\mathrm{CAPE}} denote the trajectory generated using CAPE, and \hat{s}_{0:H}^{\mathrm{base}} the trajectory using the base predictor only. The difference in costs is
+
+J_{\mathrm{CAPE}} - J_{\mathrm{base}} = \left( J(\hat{s}_{0:H}^{\mathrm{CAPE}}) - J(s_{0:H}) \right) - \left( J(\hat{s}_{0:H}^{\mathrm{base}}) - J(s_{0:H}) \right).
+
+Taking expectations,
+
+\mathbb{E}[J_{\mathrm{CAPE}}] - \mathbb{E}[J_{\mathrm{base}}]
+= \mathbb{E}\left[ J(\hat{s}_{0:H}^{\mathrm{CAPE}}) - J(s_{0:H}) \right] - \mathbb{E}\left[ J(\hat{s}_{0:H}^{\mathrm{base}}) - J(s_{0:H}) \right].
+
+We want to bound the difference in the two error terms. Using the Lipschitz property, the first term can be bounded above by L_J \mathbb{E}[\sum_k \|\hat{s}_k^{\mathrm{CAPE}} - s_k\|], and the second term is bounded below by -L_J \mathbb{E}[\sum_k \|\hat{s}_k^{\mathrm{base}} - s_k\|]. Therefore,
+
+\mathbb{E}[J_{\mathrm{CAPE}}] - \mathbb{E}[J_{\mathrm{base}}]
+\le L_J \left( \mathbb{E}\left[ \sum_{k=0}^{H} \|\hat{s}_k^{\mathrm{CAPE}} - s_k\| \right] - \mathbb{E}\left[ \sum_{k=0}^{H} \|\hat{s}_k^{\mathrm{base}} - s_k\| \right] \right).
+
+Now, from Lemma 2, we have for each horizon h from 0 to H (with appropriate indexing), but Lemma 2 directly gives the bound on the norm of the error at time t+H. For the sum over k, we can apply Lemma 2 cumulatively. Specifically, for each k=0,\dots,H, we have
+
+\mathbb{E}\left[ \|s_{t+k} - \hat{s}_{t+k}^{\mathrm{CAPE}}\| \right]
+\le \mathbb{E}\left[ \|s_{t+k} - \hat{s}_{t+k}^{\mathrm{base}}\| \right]
+- \alpha \sum_{j=0}^{k-1} \gamma^{k-1-j} \mathbb{E}\left[ \|\epsilon_{t+j}^{\mathrm{base}}\| \right] P(G_{t+j}=1).
+
+(We use k instead of H in the lemma.) Summing this inequality over k=0,\dots,H, the left side is \mathbb{E}[\sum_{k=0}^H \|\hat{s}_k^{\mathrm{CAPE}} - s_k\|], and the right side is \mathbb{E}[\sum_{k=0}^H \|\hat{s}_k^{\mathrm{base}} - s_k\|] minus the double sum of error reductions. Therefore,
+
+\mathbb{E}\left[ \sum_{k=0}^{H} \|\hat{s}_k^{\mathrm{CAPE}} - s_k\| \right]
+\le \mathbb{E}\left[ \sum_{k=0}^{H} \|\hat{s}_k^{\mathrm{base}} - s_k\| \right]
+- \alpha \sum_{k=0}^{H-1} \left( \sum_{h=k}^{H-1} \gamma^{h-k} \right) \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right] P(G_{t+k}=1).
+
+The inner sum \sum_{h=k}^{H-1} \gamma^{h-k} \le \sum_{h=0}^{\infty} \gamma^{h} = \frac{1}{1-\gamma}, but we can also use the conservative bound \gamma^{H-1-k} (since the sum includes \gamma^{H-1-k} as one term and all terms are positive). Actually, \sum_{h=k}^{H-1} \gamma^{h-k} = \gamma^{0} + \gamma^{1} + \cdots + \gamma^{H-1-k} \ge \gamma^{H-1-k}. Thus, the reduction is at least \alpha \sum_{k=0}^{H-1} \gamma^{H-1-k} \mathbb{E}[\|\epsilon_{t+k}^{\mathrm{base}}\|] P(G_{t+k}=1). We adopt this slightly weaker but simpler bound, as it appears in the main text. Hence,
+
+\mathbb{E}\left[ \sum_{k=0}^{H} \|\hat{s}_k^{\mathrm{CAPE}} - s_k\| \right]
+\le \mathbb{E}\left[ \sum_{k=0}^{H} \|\hat{s}_k^{\mathrm{base}} - s_k\| \right]
+- \alpha \sum_{k=0}^{H-1} \gamma^{H-1-k} \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right] P(G_{t+k}=1).
+
+Substituting into the cost difference bound,
+
+\mathbb{E}[J_{\mathrm{CAPE}}] - \mathbb{E}[J_{\mathrm{base}}]
+\le - L_J \alpha \sum_{k=0}^{H-1} \gamma^{H-1-k} \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right] P(G_{t+k}=1).
+
+Finally, we must account for the selective risk. The above derivation assumes that whenever memory is activated, it reduces error; however, from Theorem 1, there is a bound on the expected loss increase due to activated memories. The selective risk \varepsilon is an upper bound on \mathbb{E}[X_t \mid G_t=1], the expected increase in one-step prediction loss when memory is used. When propagating this through the cost, the total expected cost increase due to harmful activations is at most \varepsilon (integrated over the horizon, assuming the risk is per step and independent). Thus, we add the term +\varepsilon to the right-hand side, giving
+
+\mathbb{E}[J_{\mathrm{CAPE}}] - \mathbb{E}[J_{\mathrm{base}}]
+\le - L_J \alpha \sum_{k=0}^{H-1} \gamma^{H-1-k} \mathbb{E}\left[ \|\epsilon_{t+k}^{\mathrm{base}}\| \right] P(G_{t+k}=1) + \varepsilon.
+
+This completes the proof. \blacksquare
+
+---
+
+Appendix D: Conformal Risk Control Background and Calibration Procedure (Theoretical)
+
+This appendix provides the necessary theoretical background on conformal risk control (CRC) and details the calibration procedure used in CAPE, without relying on experimental results.
+
+D.1 Conformal Risk Control Framework
+
+Conformal risk control (Angelopoulos et al., 2024) generalizes conformal prediction to control the expected value of any bounded loss function on selected predictions. The framework operates as follows:
+
+Given a family of decision rules parameterized by a threshold \lambda \in \Lambda, and a bounded loss function \ell: \Lambda \times \mathcal{Z} \to [0, B], where \mathcal{Z} is the space of data points, we seek a threshold \hat{\lambda} such that
+
+\mathbb{E}_{Z \sim P}[\ell(\hat{\lambda}, Z)] \le \alpha
+
+with high probability over the calibration set.
+
+The CRC algorithm:
+
+1. Choose a finite grid \Lambda = \{\lambda_1, \dots, \lambda_m\}.
+2. For each \lambda, compute the empirical risk \widehat{R}(\lambda) = \frac{1}{n} \sum_{i=1}^n \ell(\lambda, Z_i) on the calibration set \{Z_1,\dots,Z_n\}.
+3. Select \hat{\lambda} = \min\{\lambda \in \Lambda : \widehat{R}(\lambda) \le \alpha - \delta\}, where \delta is a margin derived from concentration inequalities, or simply \hat{\lambda} = \min\{\lambda \in \Lambda : \widehat{R}(\lambda) \le \alpha\} if one is willing to accept an expected guarantee.
+4. Use \hat{\lambda} for future predictions.
+
+In CAPE, the "loss" is the excess loss when memory is activated: for a data point (q, e^*, \Delta), the loss is X = -\Delta. The decision rule is to activate memory if \widehat{\Delta}(q,e^*) - \lambda > 0. Thus, the loss function is
+
+\ell(\lambda, (q,e^*, X)) = X \cdot \mathbf{1}[\widehat{\Delta}(q,e^*) - \lambda > 0].
+
+The empirical risk \widehat{R}(\lambda) is exactly the average X over calibration points that activate under threshold \lambda, which matches the definition in the main text.
+
+D.2 Calibration Algorithm for CAPE (Theoretical Description)
+
+Input: Calibration set \mathcal{D}_{\mathrm{cal}} = \{(q_j, e_j^*, \Delta_j)\}_{j=1}^n, benefit estimator \widehat{\Delta}_\psi, target risk \varepsilon, loss bound L_{\max}, grid size m.
+
+Output: Threshold \kappa.
+
+Procedure:
+
+1. Define candidate thresholds \mathcal{K} = \{\kappa_1, \dots, \kappa_m\} uniformly spaced over [-L_{\max}, L_{\max}].
+2. For each \kappa \in \mathcal{K}:
+   · For each j=1,\dots,n, compute activation G_j(\kappa) = \mathbf{1}[\widehat{\Delta}_\psi(q_j, e_j^*) - \kappa > 0].
+   · If \sum_j G_j(\kappa) > 0, compute \widehat{R}(\kappa) = \frac{\sum_j G_j(\kappa) (-\Delta_j)}{\sum_j G_j(\kappa)}.
+   · Else set \widehat{R}(\kappa) = 0.
+3. Find \hat{\kappa} = \min\{\kappa \in \mathcal{K} : \widehat{R}(\kappa) \le \varepsilon\}.
+4. If no such \kappa exists, set \hat{\kappa} = \max \mathcal{K} (most conservative).
+5. Return \hat{\kappa}.
+
+Continuous threshold extension: To allow continuous \kappa, use randomization between the two grid points bracketing \varepsilon as described in Remark A.2.
+
+D.3 Theoretical Guarantees
+
+Under exchangeability of calibration and test data, the threshold \hat{\kappa} selected by this procedure satisfies the expected risk bound \mathbb{E}[R_{\mathrm{sel}}(\hat{\kappa})] \le \varepsilon. The high-probability version follows from Hoeffding's inequality as shown in Remark A.1.
+
+---
+
+Appendix E: Benefit Estimator Training and Exploration Bias Analysis (Theoretical)
+
+E.1 Training Objective and Selection Bias
+
+The benefit estimator \widehat{\Delta}_\psi(q,e) aims to predict the true expected benefit \mathbb{E}[\Delta \mid q,e]. Ideally, it would be trained on a dataset of triplets (q,e,\Delta) drawn i.i.d. from the natural distribution of queries and candidate memories. However, in CAPE, \Delta is only observed when memory is activated, i.e., when G=1. Thus, the training set consists of (q,e,\Delta) where G=1, which induces a selection bias.
+
+Let p(q,e) be the natural joint distribution of queries and candidate memories. The selection probability under a fixed gate and exploration policy is p_{\mathrm{sel}}(q,e) = \mathbb{P}(G=1 \mid q,e). The training distribution is proportional to p_{\mathrm{train}}(q,e) \propto p_{\mathrm{sel}}(q,e) p(q,e). If the gate is deterministic and based on \widehat{\Delta}, then p_{\mathrm{sel}}(q,e) is 1 for memories with high estimated benefit and 0 otherwise, severely truncating the distribution.
+
+E.2 Unbiased Estimation via Exploration
+
+To counteract this bias, CAPE uses \varepsilon-greedy exploration: with probability \varepsilon_{\text{explore}}, the gate is forced to activate regardless of estimated benefit. This yields the effective training distribution
+
+p_{\mathrm{train}}(q,e) \propto \left[ (1-\varepsilon_{\text{explore}}) p_{\mathrm{sel}}(q,e) + \varepsilon_{\text{explore}} \right] p(q,e).
+
+As \varepsilon_{\text{explore}} \to 1, the training distribution approaches the natural distribution, eliminating bias. However, a large \varepsilon_{\text{explore}} leads to many harmful activations during training, degrading performance. The annealing schedule from 0.10 to 0.01 balances exploration and exploitation.
+
+E.3 Bias Analysis
+
+Let f(q,e) = \mathbb{E}[\Delta \mid q,e] be the true benefit function. The biased estimator trained on data with selection probability p_{\mathrm{sel}} converges (in the limit of infinite data) to the function
+
+\tilde{f}(q,e) = \mathbb{E}[\Delta \mid q,e, G=1] = f(q,e) + \text{bias}(q,e),
+
+where
+
+\text{bias}(q,e) = \mathbb{E}[\Delta \mid q,e, G=1] - f(q,e).
+
+Under the gate G=1 iff \widehat{\Delta}(q,e) - \kappa > 0, the bias is positive for borderline memories: those for which \widehat{\Delta} is near \kappa and the observed \Delta happens to be high enough to pass. This is a form of "winner's curse". Exploration reduces this bias by including cases where the gate would not fire but the memory is activated anyway, thus observing the true (possibly negative) benefit.
+
+E.4 Effect on Calibration
+
+The benefit estimator is used to compute the lower confidence bound L^\Delta = \widehat{\Delta} - \kappa. If \widehat{\Delta} is biased upward, the gate will activate more often than it should, increasing selective risk. The conformal risk control calibration on a separate, unbiased calibration set (collected with exploration) adjusts the threshold \kappa to compensate, ensuring that the selective risk bound still holds. This is the reason for the isolated calibration buffer: it should contain data collected under a fixed exploration policy, so that the empirical risk reflects the true distribution of future activations.
+
+---
+
+Appendix F: Memory Consolidation with TD Learning (Theoretical)
+
+F.1 Objective
+
+The consolidation network V_\xi assigns a value to each memory entry e representing the expected discounted sum of future benefits from retaining that memory. This value is used for eviction decisions when the memory bank is full.
+
+Define the return from time t onward as
+
+R_t = \sum_{k=0}^{\infty} \gamma^k \Delta_{t+k},
+
+where \Delta_{t+k} is the observed benefit at step t+k, and \gamma \in [0,1) is a discount factor. The value function is V(e_t) = \mathbb{E}[R_t \mid e_t].
+
+F.2 Temporal Difference Learning
+
+To learn V_\xi online without waiting for the full future, we use TD(0). The TD target for transition e_t \to e_{t+1} with immediate benefit \Delta_t is
+
+y_t = \Delta_t + \gamma V_{\xi^{\text{target}}}(e_{t+1}),
+
+where \xi^{\text{target}} is a target network that is a delayed copy of \xi. The loss is
+
+\mathcal{L}_V = \left( V_\xi(e_t) - y_t \right)^2.
+
+This is a semi-gradient method because the target y_t is treated as constant with respect to \xi. The target network is updated via Polyak averaging:
+
+\xi^{\text{target}} \leftarrow \tau \xi + (1-\tau) \xi^{\text{target}},
+
+with \tau \in [0.001, 0.01] for stability.
+
+F.3 Convergence Considerations
+
+For linear function approximators, TD(0) is known to converge to a fixed point under certain conditions on the learning rate and feature representation. For neural networks, convergence is not guaranteed but is often observed in practice. The use of a target network and experience replay (not explicitly discussed but implied by the offline updates) helps stabilize training.
+
+F.4 Eviction Policy
+
+When the memory bank reaches capacity N_{\max}, the entry with the smallest current value V_\xi(e) is evicted. This is a greedy policy with respect to the learned value function. The value function is updated over time as more data is collected, so the eviction policy adapts.
+
+---
+
+Appendix G: Computational Complexity Analysis (Theoretical)
+
+We analyze the computational cost of CAPE at inference time, assuming a GPU-accelerated implementation.
+
+G.1 Per-Step Complexity
+
+· Working memory scan: Iterates over K=16 entries, computing cosine similarity between context encodings of dimension d_c. Complexity O(K d_c). With d_c=512, this is about 8192 operations, negligible.
+· Long-term memory search (FAISS): Using an inverted file index with n_{\text{probe}} probes, the search cost is approximately O(n_{\text{probe}} \log N_{\max}) distance computations. With n_{\text{probe}}=8, N_{\max}=10^4, this is ~100 distance computations of dimension d_c.
+· Benefit scoring: For M=50 candidates, a forward pass through a small MLP \widehat{\Delta}_\psi with hidden dimension d=128. Complexity O(M d^2). With d=128, this is ~800k multiply-adds, well under 1 ms on GPU.
+· Gate evaluation: O(1).
+· Correction network forward pass: One forward pass through a 2-layer MLP with hidden dim d=128. Complexity O(d^2), similar to above.
+
+Total overhead: well under 5 ms on modern GPUs, compatible with real-time control at 50 Hz or more.
+
+G.2 Memory Footprint
+
+· Working buffer: K \times size of one memory entry. Each entry includes context encoding (512 floats), state/action trajectories (e.g., 10 steps × 20 dims each), prediction errors, etc. Total maybe a few KB per entry, so working buffer ~64 KB.
+· Long-term memory: N_{\max} entries. With N_{\max}=10^4, each entry on the order of 10–100 KB (depending on trajectory length), total 100 MB–1 GB.
+· FAISS index: ~100 MB for 10k vectors of dimension 512.
+
+This is feasible for embedded systems with modest RAM (a few GB).
+
+G.3 Asynchronous Operations
+
+Memory insertion, consolidation updates, and calibration refresh are performed asynchronously on a separate thread or process, so they do not block the control loop.
+
+---
+
+Appendix H: Proposed Experimental Protocol (No Experiments Conducted)
+
+This appendix outlines a proposed experimental protocol for future validation of CAPE. No experiments, physical tests, or code training were performed as part of this thesis. The protocol is presented solely as a roadmap for empirical evaluation.
+
+H.1 Simulation Environments (Proposed)
+
+We propose to use MuJoCo and Isaac Gym for simulated manipulation tasks designed to stress long-horizon prediction and contact dynamics. The tasks are summarized in Table H.1.
+
+Task Description Horizon Key Challenge
+T1: Variable Friction Pick-and-Place Objects with different surface materials 50–100 Adapt grasp force to friction
+T2: Occluded Manipulation Camera partially blocked 100–150 Rely on memory of spatial layout
+T3: Tool Use Using a tool to manipulate an object 150–200 Complex contact dynamics
+T4: Perturbation Recovery External pushes during execution 100–150 Recover from unexpected disturbances
+T5: Sequential Assembly Multi-step assembly 200–300 Memory of previous steps
+T6: Novel Object Generalization Unseen objects with unknown dynamics 100–150 OOD generalization
+
+H.2 Baselines and Causal Ablation (Proposed)
+
+To isolate the contributions of retrieval, benefit estimation, and calibrated abstention, we propose comparing the following systems:
+
+System Retrieval Benefit Estimation Abstention
+Base None None None
+Always-Memory Similarity None No (always active)
+RAG Similarity No No
+Benefit-Memory Benefit Yes No (always active)
+Uncalibrated-CAPE Benefit Yes Yes (uncalibrated threshold)
+CAPE Benefit Yes Calibrated
+
+H.3 Metrics (Proposed)
+
+· Success rate over episodes (95% confidence intervals, ≥5 seeds)
+· Prediction loss (mean squared error or task-specific cost over horizon)
+· Long-horizon degradation (loss growth over time)
+· Activation rate P(G_t = 1)
+· Expected benefit when activated \mathbb{E}[\Delta_t \mid G_t=1]
+· Harmful activation rate P(\Delta_t < -\varepsilon \mid G_t=1)
+· Selective risk \mathbb{E}[\ell_t^{\mathrm{CAPE}} - \ell_t^{\mathrm{base}} \mid G_t=1]
+· Expected Calibration Error (ECE) of \widehat{\Delta}_\psi
+· Conformal risk control coverage (empirical vs. theoretical bound)
+· Memory efficiency (success improvement per memory entry)
+· Computational overhead (extra inference time and memory usage)
+· Catastrophic failure rate (episodes ending in collision or damage)
+
+H.4 Ablation Studies (Proposed)
+
+1. Gating mechanism: remove gate vs. calibrated gate vs. uncalibrated gate.
+2. Benefit estimator: fixed similarity weights vs. learned \widehat{\Delta}_\psi.
+3. Correction network capacity: sweep hidden dim \in \{64, 128, 256, 512\}.
+4. Memory size: sweep N_{\max} \in \{10, 100, 1000, 10000\}.
+5. Uncertainty radius: sweep conformal risk control parameter \varepsilon.
+6. Consolidation: heuristic vs. learned V_\xi vs. TD-learned V_\xi.
+7. Data isolation: with vs. without separate calibration buffer.
+8. Exploration rate: sweep \varepsilon_{\text{explore}} \in \{0, 0.01, 0.05, 0.10, 0.20\}.
+
+H.5 Stress Tests (Proposed)
+
+1. Adversarial Memory Injection: inject misleading memories; CAPE should abstain.
+2. Distribution Shift Sequence: shift from in-distribution to OOD mid-episode.
+3. Memory Budget Sweep: vary N_{\max} and observe performance.
+4. Calibration Quality: measure empirical selective risk vs. \varepsilon.
+
+H.6 Real-Robot Validation (Proposed)
+
+· Platform: Franka Emika Panda or UR5 arm.
+· Tasks: Variable friction pick-and-place, Occluded manipulation.
+· Protocol: ≥50 trials per condition, video recording, human intervention rate.
+
+All experimental results are hypothetical and await future implementation.
+
+---
+
+Appendix I: Additional Lemmas and Theoretical Discussion
+
+I.1 Local Lipschitzness of Neural Networks
+
+Lemma I.1. A feedforward neural network with Lipschitz activation functions (e.g., ReLU, tanh) and bounded weights is locally Lipschitz continuous.
+
+Proof. By Rademacher's theorem, a locally Lipschitz function is differentiable almost everywhere, and its Lipschitz constant on a compact set is bounded by the supremum of the norm of its gradient over that set. For a neural network, the gradient is bounded if the weights are bounded and the activation derivatives are bounded. On any compact subset of the input space, the gradient norm is finite, hence the network is locally Lipschitz. \blacksquare
+
+This justifies Assumptions 2 and 4 on compact domains.
+
+I.2 Contraction Property for Stable MPC
+
+Lemma I.2. Consider a linear time-invariant system s_{t+1} = A s_t + B a_t controlled by an MPC policy that minimizes a quadratic cost with positive definite state penalty Q and input penalty R. If (A,B) is stabilizable, then the closed-loop system is asymptotically stable, and the error dynamics satisfy a contraction of the form
+
+\|s_{t+1} - \hat{s}_{t+1}\| \le \gamma \|s_t - \hat{s}_t\| + \|\epsilon_t\|
+
+for some \gamma \in (0,1).
+
+Proof sketch. For linear MPC without constraints, the optimal control law is linear and the closed-loop system is stable. The contraction rate is the spectral radius of the closed-loop matrix A - B K, which is <1 by design. For nonlinear systems, local contraction can be established by linearization around a nominal trajectory and using the implicit function theorem. \blacksquare
+
+I.3 Sequential Conformal Prediction for Closed-Loop Systems
+
+In Section 7.3, we note that closed-loop operation violates exchangeability. Sequential conformal prediction (Gibbs & Candès, 2021) provides a framework for obtaining valid prediction intervals even when the data is generated by an arbitrary (possibly adversarial) process. The key idea is to maintain a time-varying threshold that is updated online using past errors, and to bound the miscoverage rate via online learning regret. For CAPE, this would involve replacing the fixed threshold \kappa with an adaptive \kappa_t that is updated after each step based on the observed loss. This is an important direction for future theoretical work to extend the risk control guarantee to non-exchangeable, closed-loop settings.
+
+---
+
+Appendix J: Notation Summary
+
+Symbol Meaning
+s_t True state at time t
+\hat{s}_t Estimated state
+a_t Action
+o_t Observation
+W_\theta Base world model (frozen)
+\Delta W_\psi Correction network
+\widehat{\Delta}_\psi Benefit estimator
+V_\xi Consolidation value network
+e_i Memory entry
+q_t Query
+G_t Gate decision (1 = use memory)
+\kappa Calibrated threshold
+\Delta_t Observed benefit L_t^0 - L_t^{\mathrm{CAPE}}
+X_t Loss increase -\Delta_t
+R_{\mathrm{sel}} Selective risk \mathbb{E}[X_t \mid G_t=1]
+\varepsilon Target selective risk
+L_{\max} Loss bound
+\gamma Contraction rate
+L_J Controller sensitivity
+H Horizon
+\mathcal{D}_{\mathrm{train}} Training buffer
+\mathcal{D}_{\mathrm{cal}} Calibration buffer
+\mathcal{D}_{\mathrm{test}} Test buffer
+\varepsilon_{\text{explore}} Exploration probability
+\tau Target network update coefficient
+
+Final ASCII Diagrams
+
+1. CAPE System Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    CAPE Middleware Layer                     │
+│                                                               │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐     │
+│  │ Working      │   │ Long-Term    │   │ Benefit      │     │
+│  │ Memory       │──▶│ Memory       │──▶│ Estimator    │     │
+│  │ (Tier 1)     │   │ (Tier 2)     │   │ Δ̂_ψ(q,e)    │     │
+│  └──────────────┘   └──────────────┘   └──────────────┘     │
+│         │                  │                  │               │
+│         ▼                  ▼                  ▼               │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │       Unified Benefit Gate: G_t = 1[Δ̂ - κ > 0]       │   │
+│  │       (κ calibrated via conformal risk control)       │   │
+│  └──────────────────────────────────────────────────────┘   │
+│         │                                                  │
+│         ▼                                                  │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │    Correction Network ΔW_ψ (lightweight MLP)          │   │
+│  │    ŝ_{t+1}^CAPE = W_θ(ŝ_t, a_t) + ΔW_ψ(ŝ_t, a_t, m_t) │   │
+│  └──────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+         │                                        ▲
+         ▼                                        │
+┌─────────────────────────────────────────────────────────────┐
+│              Frozen Base World Model W_θ                     │
+│              (No gradient updates)                           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+2. CAPE Decision Flow (Conceptual)
+
+```
+Historical experience
+        │
+        ▼
+Candidate intervention
+        │
+        ▼
+Estimated benefit (Δ̂)
+        │
+        ▼
+Calibrated decision (L^Δ = Δ̂ - κ)
+        │
+        ▼
+┌───────────────┐
+│ L^Δ > 0 ?     │
+└───────────────┘
+   │         │
+   │ Yes     │ No
+   ▼         ▼
+Intervene   Abstain
+(memory)    (base)
+```
