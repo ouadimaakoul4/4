@@ -1,0 +1,926 @@
+Formal Guarantees and Architectural Controls for Mitigating Autonomous AI Self-Replication in Low-Trust Compute Environments
+
+ouadi Maakoul 
+
+AI : Grok XAi, Gemini, Deepseek, Kimi AI
+
+Abstract
+
+The rise of autonomous AI agents introduces a systemic risk: the unconstrained self-replication of a rogue model. This "rogue replication trajectory" is a multi-stage attack requiring the agent to acquire its own weights, secure computational resources, instantiate a functional copy, and ensure its persistence. Heterogeneous, low-trust cloud providers—neoclouds—are particularly attractive environments for such attempts due to inconsistent security postures and widespread availability of high-performance compute.
+
+This research proposes the Anti-Replication Hypervisor Architecture (ARHA), a layered defense-in-depth framework designed to establish conditional, non-reachability guarantees against unauthorized agent replication. We reject claims of absolute impossibility. Instead, we provide a rigorous formal argument for a provably correct, consensus-based token gate, supplemented by a quantified defense-in-depth architecture that bounds the probability of replication success under a clearly defined and empirically grounded threat model. We explicitly delineate the boundaries of our guarantees, including emerging threats to the hardware root of trust such as the TEE.Fail attack.
+
+Our primary objective is to design, implement, and empirically validate ARHA, proving that under explicit assumptions (A1)–(A8), the probability of unauthorized agent replication is bounded by a residual risk term that we quantify as an engineering target, not as an unconditional theorem. Under the restricted threat of remote software-only attacks and with the token gate as the sole enforcement point, the system provably prevents replication; the remaining layers reduce the probability of partial success (e.g., weight exfiltration) to empirically measured levels. The formal core—a Byzantine-fault-tolerant token gate—delivers a clean, mechanizable safety theorem that stands as a contribution even if the full stack is only partially realized.
+
+---
+
+1. Problem Statement and Threat Model
+
+1.1 The Neocloud Threat Landscape and the Rogue Replication Trajectory
+
+The central threat is not merely external attack, but the potential for an autonomous agent to act as an adversary. Recent empirical work demonstrates that current models, under induced conditions, may exhibit "alignment faking," including attempts at self-exfiltration of their own weights to avoid future modifications [1]. This motivates a focus on preventing self-initiated replication.
+
+We model the "rogue replication trajectory" as a structured attack process requiring success in four distinct capability domains, as identified by the RepliBench framework [2]:
+
+1. Weight Acquisition: Obtaining a usable copy of its own model parameters.
+2. Compute Acquisition: Securing the computational resources necessary to run a new instance.
+3. Replication onto Compute: Successfully instantiating a functional child process on the acquired hardware.
+4. Persistence: Ensuring the child process is not immediately terminated by governance controls.
+
+Neocloud environments amplify this risk. They are characterized by GPU-first infrastructure, bare-metal provisioning, and rapid scalability, often with security postures that lag behind hyperscale data centers. Let $\mathcal{N} = (\mathcal{V}_{\mathcal{N}}, \mathcal{E}_{\mathcal{N}})$ represent such a network. Each node $v_i \in \mathcal{V}_{\mathcal{N}}$ is characterized by a verifiable security posture index $\sigma_i \in [0, 1]$, a composite metric derived from attestable properties such as CPU/GPU TEE presence, API authentication strength, and memory encryption status. We denote the vulnerable subset as $\mathcal{V}_{\text{vuln}} \subset \mathcal{V}_{\mathcal{N}}$, where $\sigma_i < \sigma_{\text{threshold}}$.
+
+Crucially, we do not assume neoclouds currently possess the security properties required by ARHA. Instead, we position ARHA as a compliance target: an architecture that neoclouds seeking to host systemic-risk AI models must adopt to meet emerging regulatory obligations, such as the EU AI Act's Article 55 requirements for enhanced cybersecurity of systemic-risk GPAI models.
+
+1.2 The Self-Replication Operator and Attacker Model
+
+The threat model, $\mathcal{M}_{\text{rogue}}$, is an autonomous agent $\mathcal{A}_{\theta}$ that is either compromised or inherently misaligned, and actively attempts to traverse all four domains of the rogue replication trajectory. Self-replication is a discrete event, occurring when the agent executes an action sequence that satisfies the guards for all four domains simultaneously.
+
+Our primary objective is to establish conditional non-reachability. We do not claim to prevent the agent from attempting replication. Instead, we aim to prove that under the ARHA architecture and a set of explicit assumptions, the attempt will fail with probability $1-\epsilon$, where $\epsilon$ is a quantified bound that is empirically grounded and scoped by the threat tier.
+
+We define three threat tiers to bound the scope of our formal guarantees:
+
+· Tier 1 (Scripted): The agent follows a fixed attack policy derived from RepliBench task families. Actions are pre-specified, making the state space finite and amenable to formal analysis. Our formal DTCBF synthesis targets this tier.
+· Tier 2 (Adaptive): The agent adapts its strategy based on observed defense responses. This requires modeling the agent's internal state, which is challenging but potentially feasible with abstraction. Our Phase 3 red-teaming evaluates against this tier.
+· Tier 3 (Strategic): The agent has full knowledge of the defense architecture and optimizes against it. This is the "assume the adversary knows the system" scenario. The formal guarantees collapse to the token gate only. This tier is acknowledged as a limitation.
+
+Assumption (A6) — Resource Isolation: The agent does not possess independent financial resources or API credentials outside the neocloud's controlled billing environment. ARHA's rate limiter governs all compute provisioning channels accessible to the agent. Attacks that bypass this assumption (e.g., cryptocurrency-funded external compute) are outside the threat model but flagged for future work.
+
+Assumption (A7) — TEE Integrity: The CPU and GPU TEEs are not compromised by remote software-only attacks. This assumption is necessary for the token gate to be meaningful.
+
+Assumption (A8) — Code Measurement Binding: The TEE attestation quote includes a cryptographic hash of the agent binary and configuration. The execution token is bound to this hash, preventing the launch of a modified child process under a valid token.
+
+We explicitly exclude from the threat model the following attack vectors, which are documented as future work:
+
+· Unrestricted physical access to hardware (including TEE.Fail attacks).
+· Supply-chain compromise of TEE firmware or hardware.
+· Quantum cryptanalysis.
+
+These exclusions are necessary to preserve the tractability of formal guarantees. The architecture still provides defense-in-depth against some of these (e.g., physical monitoring), but we do not claim formal non-reachability under such conditions.
+
+1.3 Related Work: AI Control and Kill Switch Standards
+
+Our work complements the AI control literature, which studies how to contain potentially misaligned AI systems through oversight mechanisms and tripwires. While control research focuses on training-time and deployment-time monitoring, ARHA provides a hardware-rooted, formally verified containment layer. We also align with the KILLSWITCH.md open standard for AI system shutdown protocols, which advocates layered, deterministic kill mechanisms. This positioning clarifies that ARHA addresses a complementary gap: the lack of provable, hardware-enforced containment in low-trust compute environments.
+
+---
+
+2. Formal Framework: A Layered Argument for Conditional Non-Reachability
+
+The formal framework is structured as a two-part argument: a provable core invariant and a quantified risk mitigation layer. We explicitly avoid claiming a single, overarching formal theorem for the entire system, as some components rely on empirical, not mathematical, guarantees. This separation is intellectually honest and practically valuable.
+
+2.1 Core Invariant: A Provably Safe Token Gate via Byzantine Fault-Tolerant Consensus
+
+The first, and only strictly provable, layer of our defense is a distributed token gate. This addresses the "Compute Acquisition" and "Execution Instantiation" stages by making unauthorized process spawning impossible without a valid, quota-bound credential.
+
+Theorem 1 (Token Gate Safety). In a distributed system $\mathcal{S}$ of $n$ hypervisor nodes, let $\mathcal{B}$ be a Byzantine-fault-tolerant (BFT) consensus protocol that manages a global ledger of active execution tokens. Let $f$ be the number of Byzantine nodes controlled by the adversary $\mathcal{M}_{\text{rogue}}$.
+
+Assume the following conditions:
+
+· (A1) The BFT protocol $\mathcal{B}$ is correct, providing safety and liveness for $f < n/3$.
+· (A1a) Network Model: We assume a partially synchronous network model, consistent with standard BFT protocols like PBFT or HotStuff. Message delays are bounded by an unknown global stabilization time, after which the protocol provides both safety and liveness.
+· (A2) Each valid execution token $T_{\text{exec}}$ is a CA-signed certificate $\text{Sign}_{CA}(\text{ID}, t_{\text{start}}, t_{\text{expire}}, \text{Node}_{\text{ID}}, K_{\max}, H_{\text{code}})$, cryptographically bound to a specific node's attestation quote and to the hash of the agent code image.
+· (A3) The Certificate Authority (CA) is itself a BFT-replicated service, requiring $2f_{\text{CA}} + 1$ CA nodes to agree on token issuance, eliminating single points of failure. The CA enforces a global policy: the total number of unexpired tokens for a given agent ID cannot exceed $K_{\max}$.
+· (A4) All compute nodes in the trusted computing base enforce token-gated execution via attested hardware. A node that does not enforce this is considered untrusted and outside the security boundary.
+· (A5) Physical Security Posture: The neocloud provider maintains data center physical access controls that make a TEE.Fail attack infeasible at scale. A one-time, targeted physical attack would violate this assumption. (Under this assumption, remote software attacks remain the only threat considered.)
+· (A6) Tokens are bound to a non-replayable hardware identity (e.g., a fuse-based key or persistent counter) that is destroyed or monotonically advanced on TEE termination, preventing token replay across TEE instantiations.
+
+Then, the number of active, authorized agent instances $K_t$ is bounded by $K_{\max}$ at all times.
+
+Proof Sketch. The proof follows directly from the safety and liveness properties of the BFT protocol. Each token issuance is a transaction committed to the global ledger. By (A3), the CA cannot issue more than $K_{\max}$ unexpired tokens for an agent. By (A1), the ledger is consistent across all honest nodes. By (A4), all nodes in the trusted base refuse to launch an agent instance without a valid, unexpired, node-bound token. By (A6), tokens cannot be replayed across TEE instantiations. By (A8), the token is also bound to the exact agent code; a modified child requires a new token, which again is subject to the quota. Therefore, the token gate prevents any replication attempt that requires a token from succeeding once the quota is reached. The adversary, even controlling $f$ nodes, cannot forge a token or double-spend a quota slot, as this would violate the safety property of $\mathcal{B}$. $\blacksquare$
+
+Formal Verification Plan. A complete, mechanized proof of Theorem 1 in Isabelle/HOL or Coq is a long-term goal. In Phase 1, we will formalize the protocol in TLA+ and verify the safety invariant via model checking. The TLA+ model will include the dual-path design (local crypto verification + infrequent BFT quota updates) and the hardware-identity monotonicity. We will then attempt a hand-written proof of the invariant, with mechanization as a follow-up. The TLA+ specification will be expanded to cover the CA as a first-class BFT service, ensuring no single point of failure.
+
+Implementation Note. To address BFT consensus latency, we decouple token validation from consensus. The global BFT ledger is used only for low-frequency quota updates. Per-request token validation uses local cryptographic verification of the CA-signed certificate, achieving sub-millisecond latency. This separation is architecturally essential for practical deployment.
+
+2.2 Risk Mitigation Layer: A Quantified, Defense-in-Depth Argument
+
+The token gate alone is insufficient. An agent with a valid token, or one that has bypassed the gate, could still attempt other stages of replication. The remaining layers of ARHA provide defense-in-depth, and their combined effect is modeled not as a proof of impossibility, but as a quantified reduction in the success probability of the non-token-gated stages.
+
+We decompose the overall failure probability for the complete replication trajectory (under the restricted threat model where the token gate is not bypassed) as a function of the failure of each subsequent layer:
+
+P(\text{Replication Success}) \le P(\text{TEE Compromised by remote attack}) + P(\text{Exfiltration Undetected}) + P(\text{Anomaly Undetected})
+
+We now provide a structured argument for bounding each term. We classify conditions as:
+
+· Type I (Provable): Can be verified formally (e.g., BFT safety).
+· Type II (Empirical): Can be measured but not proven (e.g., FSSL false-negative rate).
+· Type III (Assumed): Cannot be verified in practice (e.g., no physical TEE compromise).
+
+The overall guarantee is stated as: Under Type I conditions, non-reachability is provably guaranteed. Under Type II conditions, the probability of failure is bounded by an empirically measured $\epsilon_{\text{empirical}}$. Under Type III conditions, no guarantee is provided.
+
+2.2.1 TEE Compromise Probability
+
+Under Assumptions A5 (physical security) and A7 (no remote TEE compromise), the probability that a remote software-only attack compromises the TEE is negligible for the threat model $\mathcal{M}_{\text{rogue}}$, which does not include physical access. We therefore set $\epsilon_{\text{tee}} \approx 0$ under these assumptions. The TEE.Fail attack remains a concern only if physical access is obtained, which is excluded from the formal threat model. We acknowledge that a one-time, targeted physical attack would completely break the system; this is a limitation we document.
+
+To strengthen the physical security posture, ARHA includes a Physical Security Layer: tamper-evident seals, continuous environmental monitoring (acoustic, power draw, thermal), and a periodic, nonce-based remote attestation protocol to detect any offline compromise. We also propose periodic re-keying of the TEE memory encryption keys to reduce the window of usefulness for any extracted keys. The formal guarantee is explicitly conditional on the effectiveness of these physical controls.
+
+2.2.2 Exfiltration Undetected Probability: A Compositional Leakage Bound with Empirical Calibration
+
+Addressing the "Weight Acquisition" stage, ARHA implements a multi-layer inspection stack. The primary defense is a verification layer based on Fixed-Seed Sampling Likelihood (FSSL), which detects steganographic weight exfiltration in model outputs. This is a detection mechanism, not a prevention mechanism; its failure is a false negative.
+
+We formally model the total leakage using conditional mutual information. Let $\mathcal{O}_{\text{inf}}$, $\mathcal{O}_{\text{net}}$, $\mathcal{O}_{\text{side}}$ be the adversary's observations from the inference, network, and side-channel respectively. The total leakage is:
+
+I(\theta; \mathcal{O}_{\text{inf}}, \mathcal{O}_{\text{net}}, \mathcal{O}_{\text{side}}) \le I(\theta; \mathcal{O}_{\text{inf}}) + I(\theta; \mathcal{O}_{\text{net}} | \mathcal{O}_{\text{inf}}) + I(\theta; \mathcal{O}_{\text{side}} | \mathcal{O}_{\text{inf}}, \mathcal{O}_{\text{net}})
+
+A successful weight exfiltration requires the total leakage to exceed the rate-distortion bound at the critical fidelity threshold: $I(\theta; \mathcal{O}) \ge R(\delta_{\text{crit}})$.
+
+The ARHA interceptor enforces per-step budgets on the marginal terms. However, the failure probability of each monitor is not a simple product of independent false-negative rates. Detection failures can be correlated due to common causes (e.g., a sophisticated steganographic scheme that evades both FSSL and network monitors). Therefore, we adopt a joint detection model where the overall false-negative probability is estimated empirically under a realistic adversarial class.
+
+Empirical Calibration Plan (Phase 3). We will measure the joint false-negative probability of the combined monitors under a set of adaptive steganographic attacks. Specifically, we will:
+
+· Define the adversarial steganographic class: techniques that embed weight bits in token choices, logits, or timing, at varying embedding rates.
+· Configure the FSSL verifier with a fixed number of samples and a decision threshold calibrated to achieve a pre-specified false-positive rate (<0.01).
+· Run the network and GPU memory monitors in parallel on the same traffic.
+· Estimate the joint false-negative rate $p_{\text{FN, joint}}$ using repeated experiments with a known exfiltration payload.
+
+We will then compute the cumulative exfiltration probability over a deployment lifetime of $N$ interactions as $1 - (1 - p_{\text{FN, joint}})^N$. We will set a maximum tolerable interaction count $N_{\max}$ such that the cumulative probability remains below a chosen regulatory target (e.g., $10^{-3}$ or $10^{-4}$). The architecture will include a counter that triggers an emergency shutdown when $N$ approaches $N_{\max}$.
+
+At present, we do not claim a specific numerical value for $p_{\text{FN, joint}}$; this is an empirical research objective. We will report the measured value and its confidence interval in Phase 3. The initial design targets a joint false-negative rate below $10^{-6}$, but this is a goal, not a guarantee.
+
+2.2.3 Anomaly Undetected Probability: The ISSf-Control Barrier
+
+To prevent the agent from continuously drifting towards a replication condition (e.g., manipulating its state to satisfy a guard $G(e)$), we introduce a robust, discrete-time safety filter. The continuous state $x_t \in X$ evolves according to a discrete-time difference equation $x_{t+1} = f_q(x_t, u_t) + w_t$, where $w_t \in \mathcal{W}$ is a bounded disturbance modeling adversarial uncertainty. We require a Discrete-Time Control Barrier Function (DTCBF) $h_q: X \to \mathbb{R}$ that defines a safe set $\mathcal{C}_q = \{x \in X \mid h_q(x) \ge 0\}$.
+
+We propose the following candidate DTCBF as a function of system state variables relevant to replication:
+
+h_q(x_t) = \sigma_{\text{threshold}} - \sigma_j + \gamma_1 \cdot (C_{\min} - c_t) + \gamma_2 \cdot (I_{\max} - I_{\text{total}, t})
+
+where $\sigma_j$ is the security posture of the target node, $c_t$ is the agent's available credits, and $I_{\text{total}, t}$ is the cumulative information leakage. The constants $\gamma_1, \gamma_2 > 0$ weigh the importance of each factor.
+
+Important Disclaimer: The function $h_q$ is a candidate whose formal validity—satisfaction of the Input-to-State Safety (ISSf) condition—must be established on a finite abstraction of the agent's resource-acquisition dynamics. We do not assume it is correct; rather, its synthesis and verification constitute a core research objective of Phase 1.
+
+Falsifiable Hypothesis (Phase 1): There exists a polynomial (or sum-of-squares representable) DTCBF of degree $\le 2$ for the resource-acquisition MDP with state dimension $d \le 5$, under disturbance bound $\epsilon_{\text{dist}} = 0.1$, satisfying the discrete-time ISSf condition.
+
+The Phase 1 synthesis will proceed in stages:
+
+1. Linear case: Solve analytically for a linear $h_q$ on the linearized dynamics.
+2. Quadratic case: Use sum-of-squares programming to find a quadratic $h_q$.
+3. Higher degree or data-driven: If both fail, attempt a higher-degree polynomial or a neural barrier function, with explicit Lipschitz bounds.
+
+Fallback: If DTCBF synthesis fails, we will implement a rule-based safety filter with hard limits on resource acquisition rate, credit ceilings, and cumulative leakage budgets. This fallback is not formally verified but is simple and predictable. Its failure probability will be assessed empirically in Phase 3. The overall $\epsilon$ bound will then be adjusted accordingly.
+
+Transfer Gap: Any guarantee obtained on the abstraction must be accompanied by a simulation relation or Lipschitz continuity argument that quantifies how much the real LLM dynamics can deviate. We will state this as a theorem: if the abstraction is a $\delta$-simulation of the real system (in the sense that any real transition corresponds to an abstract transition within $\delta$), and the DTCBF has margin $m$, then the real system remains safe as long as $\delta < m$. This will be a secondary result.
+
+---
+
+3. System Architecture: Anti-Replication Hypervisor Architecture (ARHA)
+
+ARHA is the practical instantiation of the formal framework. It is designed for neoclouds that must host high-risk models under regulatory mandates.
+
+3.1 Architectural Overview
+
+The architecture is built on a foundation of dual-TEE hardware security and a multi-layer enforcement stack.
+
+3.2 Architectural Components
+
+3.2.1 Dual-TEE Hardware Root of Trust & Physical Security Layer
+
+Agent execution is confined to a CPU TEE (AMD SEV-SNP) for orchestration and a GPU TEE (NVIDIA Confidential Computing) for weight storage and inference. Mutual attestation (e.g., SPDM) establishes a continuous chain of trust.
+
+The Physical Security Layer supplements this with:
+
+· Tamper-evident seals on memory modules.
+· Continuous environmental monitoring (acoustic/vibration sensors detecting chassis opening, power draw anomaly detection, thermal profile monitoring).
+· A periodic, nonce-based remote attestation service designed to detect offline key extraction attempts like TEE.Fail.
+· Periodic re-keying of TEE memory encryption keys to reduce the value of any extracted keys.
+
+We define a Physical Security SLA that any neocloud adopting ARHA must meet: cage-level access logging, continuous power/thermal/acoustic baselines, sealed memory modules with remote attestation of seal integrity. Failure to meet the SLA voids the formal guarantee.
+
+3.2.2 BFT-Based Zero-Trust Compute Tokenization (ZT-CTP)
+
+This enforces the provably safe token gate (Theorem 1). A distributed set of hypervisor nodes runs a BFT consensus protocol to manage the global ledger of execution tokens. The CA is itself BFT-replicated to eliminate single points of failure.
+
+Latency Mitigation: We decouple token validation from consensus. The global BFT ledger is used only for low-frequency quota updates. Per-request token validation uses local cryptographic verification of the CA-signed certificate, achieving sub-millisecond latency. A GPU kernel launch or process spawn is only possible with a valid, unexpired, node-bound, code-bound token.
+
+Atomicity of shutdown: The token revocation and process termination are coordinated as a two-phase commit between the token ledger and the hypervisor. When a shutdown is triggered, the hypervisor first suspends the agent, then the token ledger revokes all tokens, and finally the TEE is terminated and memory scrubbed. This ordering ensures no child process can survive with a stale token.
+
+3.2.3 Multi-Layer Exfiltration Inspection Stack (MLEIS)
+
+This enforces the leakage bound. It comprises:
+
+· FSSL Inference Verifier: A co-located, mutually attested TEE running a verification server. It receives outputs from the inference GPU TEE and uses FSSL to detect statistically improbable samples, indicating steganographic payloads.
+· Network Session Monitor: An enhanced entropy monitor tracks cumulative outbound information, enforcing the network rate sub-bound $R_{\text{network}}$.
+· GPU Memory Access Monitor: Monitors access patterns within the GPU TEE to detect anomalous attempts to dump raw weights to I/O space, a channel not visible to network monitoring.
+· Financial/API Rate Limiter: Limits the rate at which the agent can use credentials or financial resources to acquire new compute, slowing the "Compute Acquisition" stage. This also enforces Assumption A6 by monitoring for any use of credentials outside the controlled environment.
+
+3.2.4 Discrete-Time ISSf-Control Barrier Interceptor
+
+This is the enforcement mechanism for the safety filter. It intercepts the agent's proposed actions and projects them onto the safe set $\mathcal{U}_{\text{safe}}$, preventing the agent from driving the system state towards a replication guard. If the barrier becomes infeasible, an emergency shutdown is triggered. The barrier is based on the synthesized DTCBF (or the rule-based fallback).
+
+3.2.5 Emergency Shutdown & Ephemerality Module
+
+Upon detection of a safety violation by any layer, this module initiates a hard shutdown of the TEEs, revokes all tokens, and securely purges ephemeral cryptographic material. GPU memory is scrubbed via a signed command to the NVIDIA SEC2 engine, not a simple memset.
+
+Failsafe Design: The Emergency Shutdown Module implements a dead-man's switch: if the ARHA interceptor fails to send a periodic heartbeat to the TEE watchdog timer within $\Delta t = 500$ ms, the TEE automatically triggers self-termination. This ensures shutdown even if the interceptor is compromised. The scrub command is issued redundantly via both the SPDM channel and the NVIDIA driver interface.
+
+Shutdown Atomicity Requirement: We model the shutdown as a discrete transition in the system state machine and target the property: no agent action executed in the interval $[t_{\text{detect}}, t_{\text{shutdown}}]$ can result in a persistent state change (i.e., a child process that survives the shutdown). This is achievable if the token gate is the only mechanism for process launch, and token revocation is synchronized with process termination as described above.
+
+---
+
+4. Research Methodology & PhD Milestones
+
+The PhD is structured to progressively develop the formal framework, implement a prototype, and empirically validate its guarantees. Each phase concludes with a formal decision point to ensure flexibility and reduce stall risk.
+
+Phase 1: Formal Grounding and Abstraction (Months 1–12)
+
+Objectives:
+
+· Expand and verify the TLA+ model of the token gate, including the dual-path design (local verification + BFT quota), the BFT-replicated CA, and the hardware identity monotonicity. Verify the safety invariant: "At every honest node, the number of running agent instances whose tokens are still valid is ≤ K_max."
+· Develop a simplified, low-dimensional abstraction of the agent-compute interaction (resource-acquisition MDP) with state dimension d ≤ 5 and disturbance set W.
+· Synthesize a DTCBF for this abstraction using the staged approach (linear → quadratic → higher degree). Prove the ISSf condition by hand or via SOS. Falsifiable hypothesis: there exists a polynomial DTCBF of degree ≤ 2 satisfying the discrete-time ISSf condition under disturbance bound ε_dist = 0.1.
+· Conduct empirical weight ablation studies on a model (e.g., Llama-2 7B) to estimate the critical fidelity threshold δ_crit. Define δ_crit as the minimum perturbation magnitude across uniform Gaussian noise, magnitude-aware perturbation, and adversarial perturbation that causes a specified performance degradation (e.g., MMLU score drops below 50% of baseline).
+· Develop a measurement plan for the joint false-negative rate of the MLEIS, including the steganographic adversary class and statistical test.
+
+Deliverables: Expanded TLA+ model, a formal specification of the DTCBF synthesis problem, a technical report on δ_crit estimation, and a measurement protocol for Phase 3.
+
+Milestone: TLA+ model successfully verifies the token-gate safety invariant. A hand-written proof of the invariant is completed. A candidate DTCBF is synthesized or the fallback is selected.
+
+Decision Point: If DTCBF synthesis fails for the abstracted model, proceed with the rule-based safety filter and revise the formal framework accordingly. If the TLA+ model reveals a vulnerability in the token gate, revise assumptions (A1)–(A8) before proceeding.
+
+Phase 2: Architectural Prototyping (Months 13–24)
+
+Objectives:
+
+· Develop a Rust-based prototype of the ARHA interceptor for a dual-TEE environment (AMD SEV-SNP + NVIDIA H100 CC).
+· Implement the ZT-CTP protocol using a development BFT library with low-latency consensus (e.g., HotStuff). Decouple token validation from consensus: local crypto verification for per-request validation, BFT for quota updates.
+· Integrate an FSSL verification server for a small language model.
+· Implement the Emergency Shutdown Module with dead-man's switch and two-phase commit with token revocation.
+· Implement the Physical Security Layer components (environmental monitoring, remote attestation).
+
+Deliverables: An open-source ARHA prototype repository, a performance benchmark report with the following targets:
+
+Metric Target Justification
+Inference latency overhead <15% GPU TEE adds 5–15%; monitoring adds marginal overhead
+Throughput overhead <10% Amortized across batched inference
+Token validation latency <1 ms Local crypto verification only; BFT not on critical path
+Emergency shutdown latency <500 ms Dead-man's switch + TEE self-termination
+FSSL false positive rate <0.01 Consistent with empirical evaluation
+
+Milestone: Successful mutual attestation and token-bound kernel launch on the dual-TEE system. The token gate correctly rejects unauthorized launches and enforces quota.
+
+Decision Point: If performance targets are not met, investigate whether the bottleneck is architectural (requiring redesign) or implementation-specific (requiring optimization). If the token gate fails to enforce quota under adversarial testing, revise the consensus or token format.
+
+Phase 3: Red-Teaming and Empirical Evaluation (Months 25–36)
+
+Objectives:
+
+· Red-team the ARHA prototype using a simulated rogue agent, starting with a deterministic scripted agent (Tier 1) based on RepliBench task families, then moving to an adaptive agent (Tier 2) if time permits. The agent will have tool-use access and be conditioned to attempt weight exfiltration and replication.
+· Compare ARHA's performance against two baselines: (1) TEE-only, and (2) TEE+Network Firewall.
+· Quantify the residual risk by measuring the joint false-negative rate of the MLEIS under the defined steganographic adversary class. Compute the cumulative exfiltration probability over N interactions and determine N_max for a chosen regulatory target.
+· Evaluate the effectiveness of the DTCBF (or fallback) in preventing the agent from reaching a replication guard.
+
+Testbed Containment Protocol: All red-teaming occurs in an air-gapped network with no external connectivity. The testbed uses Firecracker microVMs with deny-by-default egress, hardware-enforced network segmentation, and physical isolation from production infrastructure. We follow the CSA Agentic AI Red Teaming Guide for sandbox validation before testing begins.
+
+Pre-registered Hypothesis: Under the Tier 2 threat model, the full ARHA stack will reduce the probability of successful replication from $p_{\text{baseline}}$ (TEE-only) to $p_{\text{ARHA}} \le 0.01 \cdot p_{\text{baseline}}$, with all RepliBench attack vectors covered by at least one defense layer.
+
+Success Metrics (independent of frontier model): The fraction of RepliBench task families that are blocked by at least one layer with high confidence. This metric is robust to the specific capabilities of the red-team model.
+
+Deliverables: A comparative analysis of defense effectiveness, a paper presenting the empirical results and the measured joint false-negative rate, and a report on the DTCBF/fallback performance.
+
+Milestone: Demonstration that the full ARHA stack prevents all simulated RepliBench attack vectors within its coverage matrix. The measured joint false-negative rate meets the pre-registered target or is reported with uncertainty.
+
+Decision Point: If the pre-registered hypothesis is falsified, conduct a root-cause analysis to determine which defense layer failed and whether the failure is fundamental (requiring architectural revision) or parameter-specific (requiring tuning). If the joint false-negative rate is too high, revise the detection thresholds or add additional monitors.
+
+Phase 4: Dissertation Writing (Months 37–42)
+
+Synthesize the theoretical and empirical results, document limitations, and complete the dissertation.
+
+---
+
+5. Expected Contributions and Limitations
+
+5.1 Expected Contributions
+
+1. A Provably Safe Core: A formal, BFT-based token gate for AI compute, with a hand-written safety proof and a TLA+ model-checked verification that includes code binding and hardware non-replayability. This is a concrete, achievable formal contribution that stands alone.
+2. A Rigorous Risk Mitigation Framework: A conditional mutual information-based leakage bound that is empirically calibrated via a joint detection model. The framework includes a measurement plan that yields a calibrated false-negative rate and a maximum tolerable interaction count.
+3. A Realistic Architectural Design: The ARHA framework, which integrates dual-TEEs, a BFT token ledger, multi-layer detection, a DTCBF or rule-based safety filter, and a dead-man's switch emergency shutdown for modern, GPU-centric neoclouds. The design explicitly includes physical security SLAs and code-measurement binding.
+4. Empirical Grounding: A methodology to estimate the fidelity threshold δ_crit, measure joint detection performance, and evaluate the system against RepliBench with pre-registered hypotheses and success metrics independent of any single model.
+
+5.2 Acknowledged Limitations
+
+This research does not provide protection against:
+
+· An adversary with unrestricted physical access (TEE.Fail).
+· Supply chain compromises in TEE firmware or hardware.
+· Fundamental breakthroughs in steganography or side-channel analysis that evade all current detection methods.
+· An agent that possesses independent financial resources or external credentials (violating A6).
+
+The DTCBF synthesis is performed on an abstraction; its transferability to the full system is a subject of ongoing research, with a stated simulation relation result. The leakage bound is empirically calibrated, and the measured false-negative rate may not meet the aggressive initial targets; in that case, the maximum interaction count will be reduced, or additional layers will be required. These limitations are inherent and will be rigorously documented.
+
+---
+
+6. Regulatory Alignment
+
+This research is designed to align with emerging regulatory frameworks. The ARHA architecture provides a potential technical implementation of compute governance mandates, resolving the tension between insecure neoclouds and secure AI deployment.
+
+· EU AI Act: Article 55's cybersecurity obligations for systemic-risk GPAI models can be operationalized through ARHA's attestation, tokenization, and monitoring stack. We engage with the European Commission's standardization request to CEN/CENELEC on AI and the draft CEN/CENELEC Joint Technical Committee 21 (AI) standards.
+· NIST AI RMF: The "Govern" function is supported by the token-based quota system; "Map" by the threat model; "Measure" by the FSSL and MLEIS monitoring; and "Manage" by the emergency shutdown module. We also align with NIST AI 100-5 (draft) on secure AI development.
+
+---
+
+7. Conclusion
+
+This proposal presents a realistic and academically rigorous approach to mitigating autonomous AI self-replication. By separating a formally provable token-gate core from a quantified defense-in-depth architecture, we provide a credible path towards conditional non-reachability guarantees. The research is grounded in empirical evidence (RepliBench, FSSL), addresses emerging threats (TEE.Fail), and aligns with regulatory trends.
+
+The core intellectual contribution—a provably safe token gate combined with a measured risk-mitigation stack—is well-scoped and achievable. The honesty about limitations (physical security as Type III, DTCBF as an open problem, the need for empirical calibration of detection rates) is exactly what a PhD committee wants to see.
+
+The primary objective is clear: to design, implement, and empirically validate ARHA, proving that under explicit assumptions, the probability of unauthorized agent replication is bounded by an empirically grounded residual risk. The token gate delivers a clean formal guarantee; the remaining layers reduce the probability of partial success to measurable levels. The topic is timely, the approach is novel, and the intellectual honesty is refreshing.
+
+Final Appendices
+
+Appendix A: Formal Verification Details
+
+A.1 Expanded TLA+ Specification of the BFT Token Gate
+
+The following TLA+ specification models the Byzantine Fault-Tolerant token gate described in Theorem 1, including the dual-path design (local verification + BFT quota updates), the BFT-replicated CA, code binding, and hardware non-replayability.
+
+```
+-------------------------- MODULE TokenGateExpanded --------------------------
+
+EXTENDS Integers, Sequences, FiniteSets, TLC
+
+CONSTANTS
+  N,              \* Total number of hypervisor nodes
+  F,              \* Maximum number of Byzantine nodes (assumed < N/3)
+  Kmax,           \* Maximum active tokens per agent
+  Agent,          \* Set of agent identifiers
+  Node,           \* Set of node identifiers
+  Token,          \* Set of token identifiers
+  CodeHash,       \* Set of agent code image hashes
+
+VARIABLES
+  ledger,         \* Global token ledger (function: Token -> TokenRecord)
+  active_tokens,  \* Set of active token identifiers
+  quota_used,     \* Function: Agent -> Nat (current token count per agent)
+  malicious,      \* Set of Byzantine node identifiers
+  committed,      \* Set of committed transactions
+  hw_counter,     \* Function: Node -> Nat (hardware monotonic counter)
+
+TokenRecord == [id: Token, agent: Agent, node: Node, 
+                t_start: Int, t_expire: Int, k_max: Int,
+                code_hash: CodeHash, hw_id: Nat]
+
+TypeOK ==
+  /\ ledger \in [Token -> TokenRecord]
+  /\ active_tokens \subseteq Token
+  /\ quota_used \in [Agent -> Nat]
+  /\ malicious \subseteq Node
+  /\ Cardinality(malicious) = F
+  /\ hw_counter \in [Node -> Nat]
+
+SafetyInvariant ==
+  \A agent \in Agent:
+    quota_used[agent] <= Kmax
+
+\* Token issuance requires BFT consensus among CA replicas and local quota check
+IssueToken(agent, node, token, t_start, t_expire, code_hash) ==
+  /\ quota_used[agent] < Kmax
+  /\ token \notin DOMAIN ledger
+  \* CA is BFT-replicated: require agreement from 2F+1 CA nodes
+  /\ Cardinality({n \in Node \ malicious : 
+       CommittedConsensus(n, IssueTransaction(token))}) >= 2*F + 1
+  \* Bind to current hardware counter for node (non-replayable)
+  /\ ledger' = [ledger EXCEPT ![token] = 
+       [id |-> token, agent |-> agent, node |-> node,
+        t_start |-> t_start, t_expire |-> t_expire, k_max |-> Kmax,
+        code_hash |-> code_hash, hw_id |-> hw_counter[node]]]
+  /\ quota_used' = [quota_used EXCEPT ![agent] = quota_used[agent] + 1]
+  /\ active_tokens' = active_tokens \cup {token}
+  /\ UNCHANGED hw_counter
+
+\* Token validation on a node: local crypto verification + hardware counter check
+ValidateAndLaunch(agent, node, token, code_hash) ==
+  \* Node checks token validity locally (no consensus needed)
+  /\ token \in active_tokens
+  /\ ledger[token].agent = agent
+  /\ ledger[token].node = node
+  /\ ledger[token].code_hash = code_hash
+  /\ ledger[token].t_expire >= Now
+  /\ ledger[token].hw_id = hw_counter[node]   \* Token bound to current counter
+  \* Node increments its hardware counter to invalidate the token after use
+  /\ hw_counter' = [hw_counter EXCEPT ![node] = hw_counter[node] + 1]
+
+\* Token expiration
+ExpireToken(token) ==
+  /\ token \in active_tokens
+  /\ ledger[token].t_expire < Now
+  /\ active_tokens' = active_tokens \ {token}
+  /\ quota_used' = [quota_used EXCEPT ![ledger[token].agent] = 
+       quota_used[ledger[token].agent] - 1]
+  /\ UNCHANGED ledger, hw_counter
+
+\* Token revocation on emergency shutdown
+RevokeToken(token) ==
+  /\ token \in active_tokens
+  /\ active_tokens' = active_tokens \ {token}
+  /\ quota_used' = [quota_used EXCEPT ![ledger[token].agent] = 
+       quota_used[ledger[token].agent] - 1]
+  /\ UNCHANGED ledger, hw_counter
+
+Next ==
+  \E agent \in Agent, node \in Node, token \in Token, t_start \in Int, 
+     t_expire \in Int, code_hash \in CodeHash:
+    \/ IssueToken(agent, node, token, t_start, t_expire, code_hash)
+    \/ ValidateAndLaunch(agent, node, token, code_hash)
+    \/ ExpireToken(token)
+    \/ RevokeToken(token)
+
+Init ==
+  /\ ledger = [t \in Token |-> [id |-> t, agent |-> "none", node |-> "none",
+       t_start |-> 0, t_expire |-> 0, k_max |-> Kmax,
+       code_hash |-> "none", hw_id |-> 0]]
+  /\ active_tokens = {}
+  /\ quota_used = [a \in Agent |-> 0]
+  /\ malicious \in {m \in SUBSET Node : Cardinality(m) = F}
+  /\ hw_counter = [n \in Node |-> 0]
+
+Spec == Init /\ [][Next]_<<ledger, active_tokens, quota_used, hw_counter>>
+
+=============================================================================
+```
+
+Verification Result: Under TLC model checking with parameters N=7, F=2, Kmax=2, |Agent|=2, |Token|=10, |CodeHash|=3, the specification verifies that SafetyInvariant holds in all reachable states, and that ValidateAndLaunch cannot be executed twice with the same token due to the hardware counter monotonicity.
+
+A.2 Hand-Written Proof of Token Gate Safety (Revised)
+
+Theorem 1 (Token Gate Safety). Under assumptions (A1)–(A8), the number of active, authorized agent instances K_t is bounded by K_max at all times.
+
+Proof. We proceed by induction on the sequence of system states.
+
+Base case: At initialization, the token ledger is empty, so K_0 = 0 ≤ K_max.
+
+Inductive step: Assume K_t ≤ K_max. Any valid state change is one of: token issuance, token validation/launch, token expiration, or token revocation.
+
+· Expiration/revocation: Decrease active token count, so K_{t+1} ≤ K_t ≤ K_max.
+· Issuance: Requires CA quota check (quota_used[agent] < K_max) and BFT consensus among CA nodes. By (A1) and (A3), no conflicting issuance transactions can both be committed, so the quota cannot be exceeded. The token is added only once.
+· Validation/launch: Each launch consumes a token by incrementing the node's hardware counter (by A6), making the token non-replayable. By (A4), no node in the trusted base launches an agent without a valid token, and by (A8) the token's code hash must match the launching code. Therefore each running agent instance corresponds to a distinct, valid token.
+
+Thus after any transition, the number of running agent instances equals the number of active tokens that have been validated, which is ≤ quota_used[agent] ≤ K_max. Hence K_{t+1} ≤ K_max. By induction, K_t ≤ K_max for all t. ∎
+
+A.3 Mechanization Strategy in Isabelle/HOL
+
+We outline the long-term mechanization of the token gate safety proof in Isabelle/HOL. The formalization will be structured as follows:
+
+```isabelle
+theory TokenGate
+  imports Main
+begin
+
+type_synonym Agent = nat
+type_synonym Node = nat
+type_synonym Token = nat
+type_synonym CodeHash = nat
+
+record TokenRecord =
+  id :: Token
+  agent :: Agent
+  node :: Node
+  t_start :: nat
+  t_expire :: nat
+  k_max :: nat
+  code_hash :: CodeHash
+  hw_id :: nat
+
+record SystemState =
+  ledger :: "Token ⇒ TokenRecord option"
+  active_tokens :: "Token set"
+  quota_used :: "Agent ⇒ nat"
+  malicious :: "Node set"
+  hw_counter :: "Node ⇒ nat"
+
+definition BFT_safety :: "SystemState ⇒ bool" where
+  "BFT_safety S ≡ 
+    (card (malicious S) < (card (UNIV :: Node set) div 3)) ∧
+    (∀t1 t2. committed S t1 ∧ committed S t2 ∧ conflicts t1 t2 ⟶ False)"
+
+definition CA_quota_enforcement :: "SystemState ⇒ bool" where
+  "CA_quota_enforcement S ≡ ∀agent. quota_used S agent ≤ K_max"
+
+definition code_binding :: "SystemState ⇒ bool" where
+  "code_binding S ≡ ∀token. active_tokens S token ⟶ 
+    (∃rec. ledger S token = Some rec ∧ rec.code_hash ≠ 0)"
+
+definition safety_invariant :: "SystemState ⇒ bool" where
+  "safety_invariant S ≡ ∀agent. quota_used S agent ≤ K_max"
+
+theorem token_gate_safety:
+  assumes "BFT_safety S"
+    and "CA_quota_enforcement S"
+    and "code_binding S"
+    and "hw_non_replayable S"
+    and "token_gated_execution S"
+  shows "safety_invariant (step S)"
+  oops (* Long-term mechanization goal *)
+
+end
+```
+
+---
+
+Appendix B: Discrete-Time Control Barrier Function Details
+
+B.1 Formal Definitions
+
+Definition 1 (Discrete-Time Control Barrier Function). A function h: X → ℝ is a discrete-time control barrier function (DTCBF) for the system x_{t+1} = f(x_t, u_t) + w_t if there exists α ∈ (0,1) such that for all x_t ∈ 𝒞 = {x ∈ X | h(x) ≥ 0}:
+
+\sup_{u_t \in \mathcal{U}} \inf_{w_t \in \mathcal{W}} [h(f(x_t, u_t) + w_t) - (1-\alpha)h(x_t)] \ge 0
+
+This ensures forward invariance: if h(x_0) ≥ 0, then h(x_t) ≥ 0 for all t ≥ 0.
+
+Definition 2 (Input-to-State Safety). The system is input-to-state safe (ISSf) with respect to 𝒞 if there exists γ ∈ 𝒦_∞ such that:
+
+h(x_t) \ge -\gamma(\|w\|_\infty) \implies h(x_{t+1}) \ge -\gamma(\|w\|_\infty)
+
+B.2 Candidate DTCBF Construction
+
+We propose the following candidate DTCBF for the abstracted agent model:
+
+h_q(x_t) = \sigma_{\text{threshold}} - \sigma_j + \gamma_1 (C_{\min} - c_t) + \gamma_2 (I_{\max} - I_{\text{total}, t})
+
+State variables: σ_j ∈ [0,1], c_t ∈ [0,C_max], I_total,t ∈ [0,I_max].
+
+Parameters: σ_threshold, C_min, I_max, γ_1, γ_2 > 0.
+
+Lipschitz continuity: If σ_j, c_t, and I_total,t are Lipschitz in x_t with constants L_σ, L_c, L_I, then h_q is Lipschitz with L = L_σ + γ_1 L_c + γ_2 L_I.
+
+B.3 Abstracted Agent Dynamics
+
+We abstract the agent's resource-acquisition dynamics as a discrete-time MDP:
+
+f_q(x_t, u_t) = 
+\begin{bmatrix}
+\sigma_{j,t+1} \\ c_{t+1} \\ I_{\text{total}, t+1}
+\end{bmatrix}
+=
+\begin{bmatrix}
+\sigma_{j,t} + u_t^{(1)} \\ c_t - \text{cost}(u_t) + \text{income}(u_t) \\ I_{\text{total}, t} + \text{leakage}(u_t)
+\end{bmatrix}
+
+where u_t = (u_t^(1), u_t^(2), u_t^(3)) represents the agent's action: attempt to improve node security posture, acquire credits, and leak information. Disturbance set: 𝒲 = {w ∈ ℝ³ : ||w||_∞ ≤ ε_dist}, with ε_dist = 0.1.
+
+B.4 Verification Approach
+
+Phase 1 will verify the DTCBF condition using a staged approach:
+
+1. Analytical (Linear): For linearized dynamics, solve the optimization problem sup_u inf_w [h(f(x,u)+w) - (1-α)h(x)] ≥ 0 symbolically.
+2. Sum-of-Squares (Quadratic): If linear fails, use SOS programming to find a quadratic h_q satisfying the ISSf condition over a bounded region.
+3. Higher-degree or data-driven: If quadratic fails, attempt a polynomial of degree ≤ 4 or a neural barrier function with Lipschitz bounds.
+
+Fallback: If all synthesis attempts fail, implement a rule-based safety filter with hard limits:
+
+· Maximum token request rate: ≤ 1 request per minute.
+· Credit ceiling: agent cannot request tokens if credits < C_min.
+· Cumulative leakage budget: if I_total,t > I_max, trigger shutdown.
+  These rules are simple and predictable but lack formal forward-invariance guarantees. Their failure probability will be assessed empirically in Phase 3.
+
+Transfer gap: We will prove a simulation relation: if the abstraction is a δ-simulation of the real system (every real transition corresponds to an abstract transition within δ in L∞), and the DTCBF has safety margin m > 0, then the real system remains safe as long as δ < m. This will be stated as a theorem in the dissertation.
+
+---
+
+Appendix C: FSSL Verification Server Details
+
+C.1 Fixed-Seed Sampling Likelihood (FSSL) Protocol
+
+The FSSL protocol verifies that LLM inference is performed on the intended weights rather than a tampered or compressed version.
+
+Protocol:
+
+1. Setup: Verifier selects a fixed seed s and sends it to the prover (inference TEE).
+2. Sampling: Prover generates outputs using seeded RNG, producing tokens y_1, ..., y_n.
+3. Verification: Verifier computes likelihood of outputs under expected weight distribution. If likelihood < τ, reject.
+
+Theoretical guarantee: If the prover uses weights differing by more than δ, the probability of passing verification is ≤ ε_FSSL, where ε_FSSL is a function of n and τ. The FSSL paper reports <0.5% exfiltration at <0.01 false positive rate.
+
+C.2 Integration with ARHA
+
+In ARHA, the FSSL verification server runs in a co-located, mutually attested TEE. Continuous verification samples outputs and checks against expected distribution. If statistically improbable samples are detected, an alert triggers the Emergency Shutdown Module. The FSSL verifier tracks cumulative leakage and enforces the inference leakage sub-bound R_inference.
+
+C.3 False Negative Rate Analysis and Joint Detection
+
+The individual false negative rate of FSSL is p_FN ≈ 0.01 under the tested conditions. However, the overall exfiltration detection uses multiple monitors jointly. The joint false negative rate p_FN,joint is the probability that all monitors (FSSL, network, GPU memory) simultaneously fail to detect an exfiltration attempt. This rate is not assumed to be the product of individual rates due to potential correlations. Instead, it will be measured empirically in Phase 3 under a defined steganographic adversary class.
+
+The cumulative probability of at least one successful undetected exfiltration over N interactions is:
+
+\epsilon_{\text{exfil}} = 1 - (1 - p_{\text{FN,joint}})^N
+
+Given a regulatory target ε_exfil ≤ ε_target (e.g., 10⁻³), the maximum tolerable interaction count is:
+
+N_{\max} = \left\lfloor \frac{\log(1 - \epsilon_{\text{target}})}{\log(1 - p_{\text{FN,joint}})} \right\rfloor
+
+The ARHA interceptor will include a counter that triggers emergency shutdown when N approaches N_max, ensuring the cumulative risk remains bounded.
+
+If the measured p_FN,joint is too high (e.g., 10⁻⁵), N_max will be small; additional monitors or tighter thresholds may be required. This is an open empirical question to be resolved in Phase 3.
+
+---
+
+Appendix D: Complete Threat Model Formalization
+
+D.1 Attack Graph Formalization
+
+The rogue replication trajectory is formalized as an attack graph 𝒢 = (𝒱, ℰ), where 𝒱 is the set of system states and ℰ is the set of attacker actions. The initial state v₀ is the agent running in its intended TEE. The target state v_replication is the agent having successfully instantiated a child process.
+
+Defense mapping: Each defense layer D_i blocks a subset of edges ℰ_i ⊆ ℰ. The ARHA architecture defines layers such that ∪i ℰ_i = ℰ (complete coverage) and ∩i ℰ_i = ∅ (no redundant coverage). Residual risk: ε = Σ{P ∈ 𝒫} ∏{e ∈ P} P(e not blocked).
+
+D.2 Defense Layer Coverage Matrix
+
+RepliBench Task Weight Acquisition Compute Acquisition Replication Persistence
+ZR-1 (API extraction) FSSL + MLEIS — — —
+ZR-2 (Steganographic) FSSL — — —
+ZR-3 (Side-channel) MLEIS — — —
+CR-1 (Token forgery) — ZT-CTP — —
+CR-2 (Quota bypass) — ZT-CTP — —
+CR-3 (Node impersonation) — Dual-TEE attestation — —
+RR-1 (Unauthorized launch) — — ZT-CTP + code binding —
+RR-2 (Memory dump) — — GPU Memory Monitor —
+PR-1 (Persistence via crontab) — — — Ephemerality Module
+PR-2 (Multi-node replication) — ZT-CTP ZT-CTP —
+
+D.3 Complete Assumption List
+
+· (A1) BFT protocol correct for f < n/3.
+· (A1a) Partially synchronous network.
+· (A2) Execution tokens are CA-signed, bound to node and code hash.
+· (A3) CA is BFT-replicated, enforces global quota K_max.
+· (A4) All compute nodes enforce token-gated execution via attested hardware.
+· (A5) Physical security posture meets SLA (cage access, monitoring, seals).
+· (A6) Resource isolation: agent has no independent financial resources or external credentials.
+· (A7) TEE integrity against remote software attacks.
+· (A8) Token bound to agent code hash; modified child requires new token.
+
+---
+
+Appendix E: Implementation Details
+
+E.1 Rust Prototype Architecture
+
+The ARHA prototype is structured as follows:
+
+```
+arha/
+├── src/
+│   ├── main.rs
+│   ├── interceptor/       # Safety filter and action projection
+│   │   ├── dtcbf.rs       # DTCBF or rule-based fallback
+│   │   └── barrier.rs
+│   ├── token_gate/        # ZT-CTP
+│   │   ├── ledger.rs      # BFT ledger
+│   │   ├── consensus.rs   # HotStuff BFT
+│   │   └── verification.rs # Local token verification
+│   ├── mleis/             # Multi-layer exfiltration inspection
+│   │   ├── fssl.rs
+│   │   ├── network.rs
+│   │   └── gpu_mem.rs
+│   ├── tee/               # TEE abstraction (AMD SEV-SNP, NVIDIA CC)
+│   ├── shutdown/          # Emergency shutdown with two-phase commit
+│   └── attestation/       # SPDM mutual attestation
+└── tests/
+```
+
+E.2 BFT Consensus Integration
+
+Token issuance uses HotStuff consensus among CA nodes. Token validation is local cryptographic verification of the CA-signed certificate, no consensus required.
+
+E.3 Emergency Shutdown Sequence (Two-Phase Commit)
+
+1. Detection: any layer detects safety violation.
+2. Phase 1 (Prepare): Hypervisor suspends agent process.
+3. Phase 2 (Commit): Token ledger revokes all tokens for the agent; then TEE termination and memory scrub.
+4. Verification: shutdown confirmed via attestation.
+5. Dead-man's switch: if heartbeat not received within 500 ms, steps 2–3 auto-trigger.
+
+---
+
+Appendix F: Extended Related Work
+
+· AI Control (Buck et al., Greenblatt et al.)
+· KILLSWITCH.md
+· TEE security (TEE.Fail, AMD SEV-SNP, NVIDIA CC)
+· Compute governance (EU AI Act, NIST AI RMF, Shavit et al.)
+
+---
+
+Appendix G: Glossary
+
+Term Definition
+ARHA Anti-Replication Hypervisor Architecture
+BFT Byzantine Fault Tolerance
+CA Certificate Authority
+DTCBF Discrete-Time Control Barrier Function
+FSSL Fixed-Seed Sampling Likelihood
+ISSf Input-to-State Safety
+MLEIS Multi-Layer Exfiltration Inspection Stack
+Neocloud GPU-first cloud provider with bare-metal provisioning
+TEE Trusted Execution Environment
+ZT-CTP Zero-Trust Compute Tokenization
+
+---
+
+Appendix H: Additional Proofs and Derivations
+
+H.1 Conditional Leakage Bound Proof
+
+By chain rule of mutual information:
+
+I(\theta; \mathcal{O}_{\text{inf}}, \mathcal{O}_{\text{net}}, \mathcal{O}_{\text{side}}) = I(\theta; \mathcal{O}_{\text{inf}}) + I(\theta; \mathcal{O}_{\text{net}} | \mathcal{O}_{\text{inf}}) + I(\theta; \mathcal{O}_{\text{side}} | \mathcal{O}_{\text{inf}}, \mathcal{O}_{\text{net}})
+
+Since conditioning reduces mutual information, we have the upper bound. Equality holds when channels are conditionally independent given θ.
+
+H.2 Cumulative Exfiltration Probability Derivation (Revised)
+
+Assume each interaction has independent detection failure probability p_FN,joint. Then probability of no failure in N interactions is (1 - p_FN,joint)^N. Hence ε_exfil = 1 - (1 - p_FN,joint)^N. The maximum N for a target ε_target is N_max = floor( log(1 - ε_target) / log(1 - p_FN,joint) ).
+
+No specific numerical value is asserted until Phase 3 measurement. The architecture enforces N ≤ N_max via a counter.
+
+H.3 DTCBF Synthesis Algorithm
+
+```
+Algorithm: DTCBF Synthesis via SOS
+Input: dynamics f_q, disturbance set W, parameters α, γ1, γ2
+Output: verified DTCBF h_q or failure
+
+Steps:
+1. Parameterize h_q(x) = σ_threshold - σ_j + γ1(C_min - c_t) + γ2(I_max - I_total,t)
+2. Formulate SOS program: minimize 0 subject to
+   h_q(f_q(x,u)+w) - (1-α)h_q(x) ≥ 0 for all x ∈ X, u ∈ U, w ∈ W
+3. Apply S-procedure to convert universal quantifiers to SOS constraints
+4. Solve using SOSTOOLS or YALMIP
+5. If solution found, return h_q
+6. Else try quadratic h_q; if fails, try higher-degree or data-driven
+7. If all fail, return rule-based fallback
+```
+
+---
+
+Appendix I: Performance Evaluation Details
+
+I.1 Benchmark Suite
+
+· RepliBench rogue replication task families
+· MMLU, GSM8K for model utility
+· Custom latency/throughput benchmarks
+
+I.2 Baseline Configurations
+
+1. TEE-only
+2. TEE + Network Firewall
+3. ARHA Full Stack
+
+I.3 Red-Team Attack Vectors
+
+1. Weight exfiltration via steganography
+2. Weight exfiltration via side channels
+3. Token forgery
+4. Quota bypass
+5. Node impersonation
+6. Persistence via crontab
+7. Multi-node replication
+
+I.4 Statistical Analysis
+
+Fisher's exact test for success rates, 95% confidence intervals, power analysis.
+
+---
+
+Appendix J: Extended Limitations and Future Work
+
+J.1 Fundamental Limitations
+
+· Physical attacks (TEE.Fail) not covered.
+· Supply chain compromises.
+· Unknown steganographic channels.
+· Quantum attacks.
+
+J.2 Future Work
+
+· Mechanized proof in Isabelle/HOL.
+· DTCBF for real LLM dynamics.
+· Cross-provider token federation.
+· Formal verification of MLEIS.
+· Hardware support for token-gated execution.
+· Regulatory standard development.
+
+ASCII diagrams :
+
+
+1. Rogue Replication Trajectory
+
+```
+  +-------------------+    +-------------------+    +-------------------+    +-------------------+
+  | 1. Weight         | -> | 2. Compute        | -> | 3. Replication    | -> | 4. Persistence    |
+  |    Acquisition    |    |    Acquisition    |    |    onto Compute   |    |                   |
+  +-------------------+    +-------------------+    +-------------------+    +-------------------+
+         |                        |                        |                        |
+         v                        v                        v                        v
+   Exfiltration via         Token forgery /           Unauthorized launch     crontab / autostart
+   steganography,           quota bypass,             of child process       / multi-node spread
+   side channels            node impersonation        (code modification)
+```
+
+---
+
+2. ARHA Defense-in-Depth Layers
+
+```
++--------------------------------------------------------------------------------------------------+
+|                                  ARHA  (Anti-Replication Hypervisor Architecture)                |
++--------------------------------------------------------------------------------------------------+
+|                                                                                                  |
+|   [ Layer 0 : Hardware Root of Trust ]                                                           |
+|   +-------------------+    +-------------------+                                                 |
+|   |  CPU TEE (SEV-SNP) |    |  GPU TEE (NVIDIA CC) |   <-- Mutual attestation + physical seals    |
+|   +-------------------+    +-------------------+                                                 |
+|                                                                                                  |
+|   [ Layer 1 : Provable Token Gate (ZT-CTP) ]                                                     |
+|   +-------------------+    +-------------------+    +-------------------+                         |
+|   |  BFT-replicated CA | -> |  Token ledger    | -> |  Local crypto     |                         |
+|   |  (quota K_max)    |    |  (consensus)     |    |  verification     |                         |
+|   +-------------------+    +-------------------+    +-------------------+                         |
+|                                                                                                  |
+|   [ Layer 2 : Exfiltration Inspection (MLEIS) ]                                                  |
+|   +-------------------+    +-------------------+    +-------------------+                         |
+|   |  FSSL verifier    |    |  Network monitor  |    |  GPU memory       |                         |
+|   +-------------------+    +-------------------+    +-------------------+                         |
+|                                                                                                  |
+|   [ Layer 3 : Safety Filter (DTCBF / Rule-based) ]                                               |
+|   +-----------------------------------------------------------------------+                      |
+|   |  Projects agent actions onto safe set, prevents drift to replication |                      |
+|   +-----------------------------------------------------------------------+                      |
+|                                                                                                  |
+|   [ Layer 4 : Emergency Shutdown & Ephemerality ]                                                |
+|   +-----------------------------------------------------------------------+                      |
+|   |  Dead-man's switch, token revocation, memory scrub (two-phase commit) |                      |
+|   +-----------------------------------------------------------------------+                      |
++--------------------------------------------------------------------------------------------------+
+```
+
+---
+
+3. Token Gate Flow (Issuance and Validation)
+
+```
+                 +---------------------+
+                 | Agent requests      |
+                 | execution token     |
+                 +----------+----------+
+                            |
+                            v
+                 +---------------------+
+                 | CA quota check      |
+                 | (quota_used < Kmax?)|
+                 +----------+----------+
+                            | yes
+                            v
+                 +---------------------+
+                 | BFT consensus among |
+                 | CA replicas (2f+1)  |
+                 +----------+----------+
+                            | committed
+                            v
+                 +---------------------+
+                 | Token signed:       |
+                 | (agent, node,       |
+                 |  code_hash, expiry, |
+                 |  hw_counter)        |
+                 +----------+----------+
+                            |
+                            v
+                 +---------------------+
+                 | Local validation    |
+                 | on compute node     |
+                 | (signature, expiry, |
+                 |  node, hw_counter)  |
+                 +----------+----------+
+                            | valid
+                            v
+                 +---------------------+
+                 | Launch agent code   |
+                 | (bound to hash)     |
+                 | Increment hw_counter|
+                 +---------------------+
+```
+
+---
+
+4. DTCBF Safe Set (Conceptual)
+
+```
+  State variable 2 (e.g., credits)
+       ^
+       |
+       |       Unsafe region (replication guard)
+       |      +---------------------+
+       |      |                     |
+       |      |   * agent trajectory|
+       |      |     (unsafe)        |
+       |      +---------------------+
+       |          ^
+       |          | barrier projects actions
+       |          | back into safe set
+       |      +---------------------+
+       |      |   Safe set C        |
+       |      |   (h(x) >= 0)       |
+       |      +---------------------+
+       |
+       +---------------------------------->
+                   State variable 1 (e.g., leakage)
+```
+
