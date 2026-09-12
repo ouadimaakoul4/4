@@ -1,0 +1,2747 @@
+The Agent Control Plane: A Shield-Aware Constrained MDP Framework for Governed Autonomous Execution
+
+Ouadi Maakoul
+
+Version 3.1 — Revised Theoretical Specification
+
+Status: PhD Dissertation Chapter / Monograph
+
+---
+
+Abstract
+
+Autonomous AI agents execute consequential actions under delegated human authority. The central problem is not agent capability but agent authority: how to guarantee that an agent's actions remain within the bounds of what it has been authorized to do, regardless of what it has learned or been prompted to attempt. This monograph develops the Agent Control Plane (ACP), a formally grounded control layer between agent intention and real-world execution. We make six foundational contributions. First, we introduce the shield-aware constrained MDP (SA-CMDP) with a shield-learnability condition that replaces the value-dominance assumption, ensuring convergence under both tabular and neural policy parameterizations. Second, we formalize distributional shielding for differentiable policy classes, restoring the smoothness conditions required for natural policy gradient convergence. Third, we prove that delegated authority forms a complete product lattice over eight constraint dimensions, with a canonical serialization enabling cryptographically verifiable authorization witnesses. Fourth, we develop a regularized anytime-valid e-process that incorporates abstraction-derived prior knowledge without sacrificing anytime-validity, extending monitoring from marginal to state-dependent safety verification. Fifth, we specify a bifurcated execution architecture with compensability classification, saga-style compensation for reversible actions, and human approval routing for irreversible actions. Sixth, we provide a hardened kernel-level enforcement specification addressing known seccomp-bpf bypass vectors. The thesis defended is that agent intelligence and agent authority are distinct computational objects, and that governing the transition from reasoning to execution requires a control plane with its own formal foundations.
+
+---
+
+1. Introduction
+
+1.1 The Authority Problem
+
+The deployment of LLM-based agents capable of executing code, making purchases, sending messages, and coordinating with other agents creates authorization problems that existing access control frameworks were not designed to handle. Unlike traditional software principals, LLM agents are non-deterministic, prompt-sensitive, and capable of generating novel action sequences. The principle of least privilege establishes that delegated capabilities should be attenuable but not amplifiable.
+
+The Agent Control Plane (ACP) treats authority as a first-class computational object. It is an admission-controlled intermediary that decides, before a tool invocation executes, whether the invocation is cryptographically authorized, procedurally compliant, instantaneously safe, and within acceptable predicted risk.
+
+1.2 Design Axioms
+
+A1. Safety is enforced, not optimized. Optimization shapes policy; the shield enforces it.
+
+A2. Identity, capability, and execution evidence are cryptographically distinct.
+
+A3. Every consequential decision is trace-bound, hash-chained, and replay-verifiable.
+
+A4. Latency budgets are explicit and separated by pipeline stage.
+
+A5. Formal goals are authored, not auto-generated, for high-risk envelopes.
+
+A6. The control plane is on the network path, not beside it.
+
+1.3 Central Invariant
+
+\text{Execute}(q) \;\Longrightarrow\; \text{ValidIdentity} \wedge \text{ValidCapability} \wedge \text{ValidDelegationChain} \wedge \text{Feasible}(q) \wedge \text{AcceptableRisk}
+
+1.4 Central Principle
+
+\text{Agent Intelligence} \neq \text{Agent Authority}
+
+Intelligence proposes. Policy constrains. Humans retain authority over consequential decisions.
+
+1.5 Contributions
+
+1. Shield-aware CMDP with learnability condition: A composite decision process in which the shield is integrated into the transition kernel and into the learning signal, ensuring convergence without relying on value-dominance assumptions.
+2. Distributional shielding for neural policies: A differentiable shield operator acting on policy distributions, restoring smoothness conditions for natural policy gradient convergence.
+3. Complete eight-dimensional capability lattice: A product lattice formalization with canonical serialization, monotone attenuation proofs, and machine-readable denial diagnostics.
+4. Regularized anytime-valid sequential monitoring: A knowledge-augmented e-process that extends marginal safety-rate verification to state-dependent monitoring while preserving anytime-validity.
+5. Compensability-aware bifurcated execution: A two-path admission pipeline with compensability classification, saga-style compensation for reversible actions, and mandatory human approval for irreversible actions.
+6. Hardened kernel-level non-bypassability: A seccomp-bpf specification addressing x32 ABI aliasing, file descriptor remapping, and foreign-ABI bypass vectors.
+
+---
+
+2. Mathematical Foundations
+
+2.1 Constrained MDPs and the Policy–Shield Mismatch
+
+Agent execution is modeled as a constrained MDP:
+
+\mathcal{M}_c = \langle S, \mathcal{A}, P, r, \{c_k\}_{k=1}^K, d, \gamma \rangle
+
+where S is the full context state, \mathcal{A} is the action/tool-call space, P(s' \mid s, a) is the transition kernel, r(s,a) is goal-achievement reward, c_k(s,a) \geq 0 are cost functions, d_k are cumulative thresholds, and \gamma \in [0,1) is the discount factor. The optimization objective is:
+
+\max_\pi\ J_r(\pi) = \mathbb{E}_\pi\!\left[\sum_{t} \gamma^t r(s_t,a_t)\right]
+\quad
+\text{s.t.}\quad
+J_{c_k}(\pi) = \mathbb{E}_\pi\!\left[\sum_t \gamma^t c_k(s_t,a_t)\right] \le d_k,\ \forall k.
+
+Lagrangian relaxation yields the dual:
+
+\mathcal{L}(\pi,\lambda) = J_r(\pi) - \sum_k \lambda_k\big(J_{c_k}(\pi) - d_k\big),\qquad \lambda_k \ge 0
+
+The CMDP is solved under expected cumulative constraints. The shield enforces instantaneous hard constraints. The Lagrangian dual converges to a policy satisfying constraints in expectation, but individual trajectories can violate instantaneous bounds. The shield filters these trajectories, but this filtering changes the effective occupancy measure of the policy. The CMDP's optimal policy \pi^* is optimized for the unshielded environment. When the shield intervenes, the realized trajectory distribution differs from the one the policy was optimized for.
+
+2.2 Shield-Aware CMDP
+
+We resolve the mismatch by integrating the shield into the CMDP dynamics and into the learning signal.
+
+Definition 2.1 (Shield-Aware CMDP). Let \sigma: S \times \mathcal{A} \to \mathcal{A} \cup \{\bot\} be the shield operator. The shield-aware CMDP is:
+
+\mathcal{M}_c^\sigma = \langle S, \mathcal{A}, P^\sigma, r^\sigma, \{c_k^\sigma\}, d, \gamma \rangle
+
+where:
+
+P^\sigma(s' \mid s, a) =
+\begin{cases}
+P(s' \mid s, \sigma(s, a)), & \sigma(s,a) \in \mathcal{A}, \\[4pt]
+\mathbb{1}[s' = s_\bot], & \sigma(s,a) = \bot,
+\end{cases}
+
+r^\sigma(s,a) = r(s, \sigma(s,a)) - \kappa \cdot \mathbb{1}[\sigma(s,a) \neq a], \qquad c_k^\sigma(s,a) = c_k(s, \sigma(s,a))
+
+where \kappa > 0 is an intervention penalty that provides a learning signal to the agent when its proposed action is overridden. This penalty ensures that the agent learns to avoid proposing infeasible actions rather than relying on the shield as a permanent crutch.
+
+Proposition 2.1 (Well-Definedness). The shield-aware CMDP \mathcal{M}_c^\sigma is well-defined: P^\sigma is a valid transition kernel, and r^\sigma, c_k^\sigma are bounded measurable functions.
+
+Proof. (i) For each (s,a) \in S \times \mathcal{A}, the shield produces \sigma(s,a) \in \mathcal{A} \cup \{\bot\}. If \sigma(s,a) \in \mathcal{A}, then \sum_{s'} P(s' \mid s, \sigma(s,a)) = 1. If \sigma(s,a) = \bot, then \sum_{s'} \mathbb{1}[s' = s_\bot] = 1. Non-negativity holds throughout. Measurability follows from the measurability of \sigma and P. (ii) r^\sigma is bounded and measurable because r and \kappa are bounded and \sigma is measurable. (iii) c_k^\sigma inherit boundedness and measurability. \square
+
+Assumption 2.1 (Shield Learnability). There exists \kappa > 0 such that for every policy \pi, every initial state s_0, and every cost function c_k:
+
+V_{c_k}^{\sigma,\pi}(s_0) \le V_{c_k}^{\pi}(s_0) + \kappa \cdot \mathbb{E}_\pi\left[\sum_{t=0}^\infty \gamma^t \mathbb{1}[\sigma(s_t,a_t) \neq a_t]\right].
+
+This condition replaces the value-dominance assumption by accounting for the intervention penalty. It ensures that the shield-induced policy does not increase cumulative costs beyond what the intervention frequency and penalty bound permit.
+
+Lemma 2.1 (Sufficient Condition for Shield Learnability). Suppose the shield satisfies: for all (s,a) and all k,
+
+c_k(s, \sigma(s,a)) \le c_k(s,a)
+\quad\text{and}\quad
+\mathbb{E}_{s' \sim P(\cdot \mid s, \sigma(s,a))}\!\left[V_{c_k}^{\sigma,\pi}(s')\right] \le \mathbb{E}_{s' \sim P(\cdot \mid s, a)}\!\left[V_{c_k}^{\sigma,\pi}(s')\right] + \frac{\kappa}{1-\gamma}.
+
+Then Assumption 2.1 holds.
+
+Proof. By induction on the Bellman operator. The Bellman equation for the shielded cost value function with intervention penalty is:
+
+V_{c_k}^{\sigma,\pi}(s) = \mathbb{E}_{a \sim \pi}\!\left[c_k(s, \sigma(s,a)) + \kappa \cdot \mathbb{1}[\sigma(s,a) \neq a] + \gamma \mathbb{E}_{s' \sim P(\cdot \mid s, \sigma(s,a))}\!\left[V_{c_k}^{\sigma,\pi}(s')\right]\right].
+
+The unshielded value satisfies:
+
+V_{c_k}^{\pi}(s) = \mathbb{E}_{a \sim \pi}\!\left[c_k(s, a) + \gamma \mathbb{E}_{s' \sim P(\cdot \mid s, a)}\!\left[V_{c_k}^{\pi}(s')\right]\right].
+
+Assume for induction that V_{c_k}^{\sigma,\pi}(s') \le V_{c_k}^{\pi}(s') + \frac{\kappa}{1-\gamma} for all s'. Then the conditions of the lemma yield the result. The base case follows from boundedness. \square
+
+Remark 2.1 (Learnability vs. Value-Dominance). The value-dominance condition of the previous specification required V_{c_k}^{\sigma,\pi}(s_0) \le V_{c_k}^{\pi}(s_0). This is overly restrictive and fails for shields that induce trajectory-distribution shifts. The learnability condition permits a bounded increase in cumulative cost proportional to the intervention frequency and the penalty \kappa, which is the correct relaxation. Empirical evidence from shielded Q-learning demonstrates that without a learning signal for overridden actions, the agent gets trapped in infinite loops because it never learns to avoid proposing infeasible actions. The intervention penalty resolves this blind spot.
+
+Theorem 2.1 (Slater Preservation under Learnability). Let the shield be defined by cost-threshold infeasibility:
+
+\mathcal{A}_{\text{feas}}(s) = \{a \in \mathcal{A} \mid \forall k: c_k(s,a) \le d_k^{\text{inst}}\}.
+
+If the unshielded CMDP satisfies Slater's condition (there exists \pi with J_{c_k}(\pi) < d_k for all k) and Assumption 2.1 holds, then \mathcal{M}_c^\sigma satisfies Slater's condition provided that \kappa \cdot \mathbb{E}[\text{intervention frequency}] < \min_k (d_k - J_{c_k}(\pi)).
+
+Proof. Let \pi be a strictly feasible policy with J_{c_k}(\pi) < d_k for all k. Under Assumption 2.1:
+
+J_{c_k}^\sigma(\pi) \le J_{c_k}(\pi) + \kappa \cdot \mathbb{E}_\pi\left[\sum_{t=0}^\infty \gamma^t \mathbb{1}[\sigma(s_t,a_t) \neq a_t]\right] < d_k
+
+provided the intervention frequency bound holds. Therefore \pi is strictly feasible in \mathcal{M}_c^\sigma. \square
+
+2.3 Distributional Shielding for Differentiable Policies
+
+For neural policy networks, the action-level shield is non-differentiable, which breaks the smoothness condition required for natural policy gradient convergence.
+
+Definition 2.2 (Distributional Shield). A distributional shield is a mapping \sigma_{\text{dist}}: S \times \Delta(\mathcal{A}) \to \Delta(\mathcal{A}) that operates on the policy distribution rather than individual actions. The shield \Xi uses the values provided by the critic Q_b and combines it with a backup action to obtain a safe distribution.
+
+Theorem 2.2 (Differentiability Preservation). If the distributional shield \sigma_{\text{dist}} is Lipschitz continuous with respect to the policy parameters w, then the shielded policy class \{\sigma_{\text{dist}} \circ \pi_w : w \in \Theta\} inherits the smoothness properties of the unshielded policy class.
+
+Proof. Let \pi_w be parameterized by w. The shielded policy is \pi_w^\sigma = \sigma_{\text{dist}} \circ \pi_w. For any w, w':
+
+\|\pi_w^\sigma - \pi_{w'}^\sigma\| = \|\sigma_{\text{dist}}(\pi_w) - \sigma_{\text{dist}}(\pi_{w'})\| \le L_\sigma \|\pi_w - \pi_{w'}\|
+
+where L_\sigma is the Lipschitz constant of \sigma_{\text{dist}}. Since the unshielded policy class satisfies \|\pi_w - \pi_{w'}\| \le L_\pi \|w - w'\|, the shielded class satisfies \|\pi_w^\sigma - \pi_{w'}^\sigma\| \le L_\sigma L_\pi \|w - w'\|. Therefore smoothness is preserved. \square
+
+Remark 2.2 (Implementation). The distributional shield can be implemented as a fully differentiable layer after the output of the main actor. This is the architecture adopted by ProSH (Probabilistic Shielding via Risk Augmentation), which augments the CMDP state space with a risk budget and enforces safety by applying the shield to the agent's policy distribution using a learned cost critic.
+
+Theorem 2.3 (Shield-Aware Convergence with Distributional Shield). Under Slater's condition, smooth policy parameterization (preserved by Theorem 2.2), bounded rewards and costs, compact action set, and Lipschitz continuity of the Lagrangian, the shield-aware CMDP \mathcal{M}_c^\sigma admits global convergence of NPG-PD with sublinear rates:
+
+J_r^{\sigma,*} - J_r^\sigma(\pi_T) \le \frac{C_1}{\sqrt{T}}, \qquad
+\big[J_{c_k}^\sigma(\pi_T) - d_k\big]^+ \le \frac{C_2}{\sqrt{T}}.
+
+Proof. The conditions (C1)–(C5) of the NPG-PD convergence theorem are preserved: (C1) Slater's condition holds by Theorem 2.1; (C2) smoothness is preserved by Theorem 2.2; (C3) boundedness holds by Proposition 2.1; (C4) the feasible action set is compact; (C5) the Lagrangian inherits Lipschitz continuity because the distributional shield does not increase the sensitivity of the Lagrangian to parameter changes. \square
+
+2.4 Adaptive Probabilistic Abstraction with Component-Wise PAC Guarantees
+
+Raw state S is uncountable. We introduce an abstraction \phi: S \to \bar{S} with |\bar{S}| = N < \infty.
+
+Definition 2.3 ((\varepsilon, \delta)-Approximate Probabilistic Bisimulation). \phi is an (\varepsilon, \delta)-approximate bisimulation if for all s_1, s_2 with \phi(s_1) = \phi(s_2) and all a:
+
+\big\| P(\cdot \mid s_1, a) - P(\cdot \mid s_2, a) \big\|_{\mathrm{TV}} \le \varepsilon
+\quad\text{with prob.}\ \ge 1 - \delta.
+
+Definition 2.4 (Per-State Abstraction Error Budget). For each abstract state \bar{s}_i, maintain a local error budget b_i. Let \hat{\varepsilon}_i^{(t)} be the empirical transition divergence. The budget is updated as:
+
+b_i^{(t+1)} = \max\!\left(0,\ b_i^{(t)} + \varepsilon_{\text{thresh}} - \hat{\varepsilon}_i^{(t)}\right)
+
+Refinement of state \bar{s}_i is triggered only when b_i^{(t)} = 0.
+
+Theorem 2.4 (Component-Wise PAC Bound). For a DTMC over N abstract states learned from n traces per state-action pair, with observed per-transition variance \hat{\sigma}_{ij}^2, with probability \ge 1-\delta:
+
+\left|P_{\hat{\mathcal{M}}}[\psi] - P_{\mathcal{M}}[\psi]\right| \le \sum_{i,j} L_\psi^{(ij)} H \left( \sqrt{\frac{2\hat{\sigma}_{ij}^2 \log(2/\delta_{ij})}{n_{ij}}} + \frac{7\log(2/\delta_{ij})}{3(n_{ij}-1)} \right) + L_\psi \varepsilon_{\text{abs}}
+
+where \delta_{ij} is the per-entry error budget satisfying \sum_{i,j} \delta_{ij} \le \delta, and L_\psi^{(ij)} is the sensitivity of the satisfaction probability to transition (i,j).
+
+Proof. The empirical Bernstein inequality applied to each transition entry with error budget \delta_{ij} yields the per-entry bound. The propagation to the satisfaction probability uses the Lipschitz continuity with sensitivity weights L_\psi^{(ij)}. The total error budget is allocated as \sum_{i,j} \delta_{ij} \le \delta by the union bound. \square
+
+Corollary 2.4 (Sample Complexity Reduction). The component-wise bound requires n_{ij} \ge \frac{7\log(2/\delta_{ij})}{3} \left(\frac{L_\psi^{(ij)} H}{\varepsilon_{ij} - L_\psi \varepsilon_{\text{abs}}}\right) samples for transition (i,j). For near-deterministic transitions (\hat{\sigma}_{ij}^2 \approx 0), the sample complexity is linear in the accuracy parameter, yielding a reduction of one to two orders of magnitude compared to the uniform bound.
+
+Remark 2.3 (Practical Allocation). In deployment, the error budget \delta_{ij} should be allocated proportionally to the sensitivity L_\psi^{(ij)}. Transitions with high sensitivity to the satisfaction probability receive more samples; transitions with low sensitivity receive fewer. This converts the N^2 union bound into an effective sample complexity that scales with the number of sensitive transitions, not the total number of abstract states.
+
+2.5 Regularized Anytime-Valid Sequential Monitoring
+
+For runtime monitoring, we use a regularized e-process that incorporates abstraction-derived prior knowledge without sacrificing anytime-validity.
+
+Definition 2.5 (Betting E-Process for Marginal Bernoulli Safety). Let X_i \in \{0,1\} be the safety outcome of executed step i, with X_i = 1 denoting safety. Under H_0: P(X_i = 1) \ge \theta, define the e-value:
+
+E_i = 1 + \beta_i (X_i - \theta)
+
+where \beta_i \in [0, 1/\theta] is a predictable betting fraction chosen before observing X_i. The e-process is the product E_t = \prod_{i=0}^{t} E_i.
+
+Theorem 2.5 (E-Process Validity). Under H_0: P_{\text{safe}} \ge \theta, E_t is a non-negative supermartingale with \mathbb{E}[E_t \mid H_0] \le 1 for all t.
+
+Proof. Under H_0, \mathbb{E}[X_i \mid \mathcal{F}_{i-1}] = P_{\text{safe}} \ge \theta. Therefore:
+
+\mathbb{E}[E_i \mid \mathcal{F}_{i-1}] = 1 + \beta_i (\mathbb{E}[X_i \mid \mathcal{F}_{i-1}] - \theta) \le 1 + \beta_i (\theta - \theta) = 1
+
+since \beta_i \ge 0. The product of conditional expectations yields \mathbb{E}[E_t \mid H_0] \le 1. Non-negativity follows from X_i \in \{0,1\} and \beta_i \in [0, 1/\theta]. \square
+
+Theorem 2.6 (Ville's Inequality). Under H_0, \Pr(\exists t: E_t \ge 1/\alpha \mid H_0) \le \alpha.
+
+Proof. Let \tau = \inf\{t \ge 0 : E_t \ge 1/\alpha\}. By the optional stopping theorem for non-negative supermartingales:
+
+\mathbb{E}[E_{\tau \wedge T}] \le \mathbb{E}[E_0] \le 1.
+
+On \{\tau \le T\}, E_{\tau \wedge T} \ge 1/\alpha. Therefore:
+
+\frac{1}{\alpha} \Pr(\tau \le T) \le \mathbb{E}[E_{\tau \wedge T} \cdot \mathbb{1}[\tau \le T]] \le 1.
+
+Thus \Pr(\tau \le T) \le \alpha. Taking T \to \infty gives the result. \square
+
+Definition 2.6 (Regularized E-Process). Let \rho(\Theta) be a knowledge-based, imprecise-probabilistic regularization derived from the abstraction's estimated transition kernels. The regularized e-value is:
+
+E_i^{\text{reg}} = \frac{\rho(\Theta) \cdot 1_{\rho(\Theta) < 1} + E_i \cdot \rho(\Theta) \cdot 1_{\rho(\Theta) \ge 1}}{\rho(\Theta)}
+
+The regularized e-process E_t^{\text{reg}} = \prod_{i=0}^{t} E_i^{\text{reg}} remains anytime-valid in a knowledge-dependent sense: a generalized version of Ville's inequality ensures that inference based on the regularized e-process is valid for any data-dependent stopping rule.
+
+Theorem 2.7 (Regularized Anytime-Validity). Under H_0, the regularized e-process satisfies:
+
+\Pr(\exists t: E_t^{\text{reg}} \ge 1/\alpha \mid H_0) \le \alpha
+
+for any \alpha \in [0,1], any N, and any data-dependent stopping rule.
+
+Proof. The regularization \rho(\Theta) is a knowledge-based, imprecise-probabilistic prior that is chosen before data collection. The generalized Ville's inequality for regularized e-processes establishes that the anytime-validity is preserved under knowledge-dependent regularization. The betting fraction \beta_i remains predictable, and the regularization does not introduce any data-dependent adaptivity that would violate the supermartingale property. \square
+
+Remark 2.4 (State-Dependent Monitoring). The marginal betting e-process tests P_{\text{safe}} \ge \theta, not full state-dependent MDP safety. The regularized e-process addresses this limitation by incorporating the abstraction's estimated transition kernels as prior knowledge. In the ACP context, the "knowledge" is the abstraction's estimated transition kernels. The regularized e-process uses the estimated kernel as a prior to construct a betting strategy that is more sensitive to state-dependent deviations, while the anytime-validity guarantee is preserved because the regularization is predictable. This provides state-dependent monitoring without requiring exact kernel knowledge.
+
+Remark 2.5 (GRAPA Adaptive Betting). The betting fraction \beta_i should be adapted online via the GRAPA (General Random Adaptive Proportion Algorithm) framework. At each step, set:
+
+\beta_i = \arg\max_{\beta \in [0,1/\theta]} \mathbb{E}_{P_{\text{est}}}[ \log(1 + \beta(X_i - \theta)) ]
+
+where P_{\text{est}} is the current empirical estimate of P_{\text{safe}}. This maximizes the expected log-growth rate of the e-process under the estimated alternative. The anytime-validity is preserved because \beta_i is predictable.
+
+2.6 Relationship Between PAC and E-Process
+
+The component-wise PAC bound (Theorem 2.4) is a fixed-sample, offline certification tool: it provides a confidence interval on the satisfaction probability of the abstraction, valid after collecting a predetermined number of traces under directed sampling. The regularized e-process (Theorem 2.7) is a sequential, runtime monitoring tool: it provides anytime-valid evidence against safety violations, valid regardless of when monitoring is stopped. The PAC bound is used at design time to certify the abstraction. The e-process is used at runtime to detect safety violations.
+
+---
+
+3. Capability Lattice for Delegation
+
+3.1 Eight-Dimensional Faceted Authority
+
+Delegation chains must enforce that delegated capabilities can only be attenuated, never amplified. We formalize agent authority over eight constraint dimensions as a product lattice.
+
+Definition 3.1 (Faceted Capability). A capability is a tuple:
+
+C = (R, A, \mathcal{C}_{\text{spend}}, \mathcal{C}_{\text{depth}}, \mathcal{C}_{\text{time}}, \mathcal{C}_{\text{rep}}, \mathcal{C}_{\text{val}}, \mathcal{C}_{\text{rev}}, \mathcal{C}_{\text{comp}})
+
+where:
+
+· R \in \mathcal{R} is a resource identifier in the prefix-tree lattice (nodes are resource paths, containment is ancestor-descendant).
+· A \subseteq \mathcal{A} is a set of actions with subset inclusion order.
+· \mathcal{C}_{\text{spend}} \in [0, \infty] with reverse order.
+· \mathcal{C}_{\text{depth}} \in \mathbb{N} \cup \{\infty\} with reverse order.
+· \mathcal{C}_{\text{time}} \subseteq \mathbb{T} is a set of allowed time intervals.
+· \mathcal{C}_{\text{rep}} \in [0,1] with direct order.
+· \mathcal{C}_{\text{val}} \subseteq \mathcal{V} is a set of value constraints.
+· \mathcal{C}_{\text{rev}} \in [0,1] with direct order.
+· \mathcal{C}_{\text{comp}} \in \{\text{full}, \text{partial}, \text{none}\} is the compensability classification.
+
+Definition 3.2 (Faceted Capability Order). Define the partial order \preceq on capabilities:
+
+C_1 \preceq C_2 \quad\Longleftrightarrow\quad
+\begin{cases}
+R_1 \subseteq_{\text{prefix}} R_2, \\
+A_1 \subseteq A_2, \\
+\mathcal{C}_{1,\text{spend}} \le \mathcal{C}_{2,\text{spend}}, \\
+\mathcal{C}_{1,\text{depth}} \le \mathcal{C}_{2,\text{depth}}, \\
+\mathcal{C}_{1,\text{time}} \subseteq \mathcal{C}_{2,\text{time}}, \\
+\mathcal{C}_{1,\text{rep}} \ge \mathcal{C}_{2,\text{rep}}, \\
+\mathcal{C}_{1,\text{val}} \subseteq \mathcal{C}_{2,\text{val}}, \\
+\mathcal{C}_{1,\text{rev}} \ge \mathcal{C}_{2,\text{rev}}, \\
+\mathcal{C}_{1,\text{comp}} \preceq_{\text{comp}} \mathcal{C}_{2,\text{comp}}
+\end{cases}
+
+where \preceq_{\text{comp}} orders compensability from \text{none} \preceq \text{partial} \preceq \text{full}.
+
+Theorem 3.1 (Faceted Capability Lattice). The set of capabilities (\mathcal{C}, \preceq) forms a complete lattice.
+
+Proof. Each component has a complete lattice structure. The resource order (\mathcal{R}, \subseteq) is a complete lattice with join R_1 \vee R_2 = R_1 \cup R_2 and meet R_1 \wedge R_2 = R_1 \cap R_2. The action order (2^{\mathcal{A}}, \subseteq) is a powerset lattice. The spend order ([0, \infty], \le) with reverse order is a complete lattice with meet \max and join \min. The depth order (\mathbb{N} \cup \{\infty\}, \le) with reverse order is a complete lattice. The time order (2^{\mathbb{T}}, \subseteq) is a powerset lattice. The reputation order ([0,1], \ge) is a complete lattice with meet \min and join \max. The values order (2^{\mathcal{V}}, \subseteq) is a powerset lattice. The reversibility order ([0,1], \ge) is a complete lattice. The compensability order \{\text{none}, \text{partial}, \text{full}\} with \preceq_{\text{comp}} is a complete lattice. The product of complete lattices is a complete lattice. \square
+
+Definition 3.3 (Delegation as Monotone Function). A delegation from parent capability C_p to child capability C_c is valid iff C_c \preceq C_p. Delegation is a monotone narrowing function on the capability lattice.
+
+Theorem 3.2 (Privilege Non-Escalation). Let each delegation edge (T_i \to T_{i+1}) be signed with an EUF-CMA-secure signature scheme. Let capability attenuation be monotone: for every parent/child pair, C_{i+1} \preceq C_i. Then communication between agents cannot grant new privileges absent an explicit signed delegation.
+
+Proof. Suppose agent A_1 sends a message m to A_2, and A_2 attempts to execute an action a with capability C_a \not\preceq C_1. By the central invariant, execution requires a valid delegation chain C' = (C_0 \to C_1 \to \cdots \to C_n) where C_n \succeq C_a and every edge is signed. The chain must originate from a trusted root. By monotone attenuation, C_n \preceq C_0. The message m is not a signed delegation edge; it does not appear in any chain. Therefore, the chain C' must contain a signed edge (T_1 \to T_2) where T_1 is an ancestor of A_1 and T_2 is A_2. If such an edge does not exist, A_2 must forge it. Forging the signature reduces to the EUF-CMA security of the signature scheme, which succeeds with negligible probability. \square
+
+Corollary 3.1 (Communication ≠ Authorization). Message passing does not confer authority. Authority flows only through signed delegation edges.
+
+3.2 Canonical Serialization and Authorization Witness
+
+Definition 3.4 (Canonical Capability Serialization). The canonical serialization of a capability C = (R, A, \mathcal{C}_{\text{spend}}, \mathcal{C}_{\text{depth}}, \mathcal{C}_{\text{time}}, \mathcal{C}_{\text{rep}}, \mathcal{C}_{\text{val}}, \mathcal{C}_{\text{rev}}, \mathcal{C}_{\text{comp}}) is a byte string \text{ser}(C) constructed as follows:
+
+1. Dimensions are sorted lexicographically by their names.
+2. Resource identifiers are serialized as UTF-8 strings with length prefixes.
+3. Action sets are sorted lexicographically, deduplicated, and serialized as length-prefixed concatenations.
+4. Numeric values are encoded as 64-bit big-endian integers (spend in micro-units, depth as unsigned, reputation and reversibility as 16-bit fixed-point).
+5. Time intervals are sorted by start time, deduplicated, and serialized as 64-bit timestamps.
+6. Value constraints are sorted lexicographically and serialized as length-prefixed strings.
+7. Compensability is serialized as a single byte: 0x00 for none, 0x01 for partial, 0x02 for full.
+
+The lattice position is the SHA-256 hash of \text{ser}(C).
+
+Theorem 3.3 (Serialization Determinism). For any two capabilities C_1, C_2, if C_1 = C_2 as tuples, then \text{ser}(C_1) = \text{ser}(C_2) as byte strings.
+
+Proof. The serialization algorithm is deterministic: it sorts all set-valued dimensions, uses fixed-width numeric encodings, and applies a canonical ordering to all components. Therefore, identical capabilities produce identical serializations. \square
+
+Definition 3.5 (Authorization Witness). An authorization witness is a tuple:
+
+W = \langle \text{lattice\_position}, \text{constraint\_vector\_hash}, \text{parent\_witness\_hash} \rangle
+
+where lattice_position is the SHA-256 hash of the canonical capability serialization, constraint_vector_hash is the SHA-256 hash of the eight-dimensional constraint vector, and parent_witness_hash is the hash of the parent's authorization witness. The witness enables structured denial diagnostics and near-miss detection.
+
+3.3 Revocation
+
+Each IBCT carries a chain ID (CID). A Bloom filter provides sub-millisecond membership queries at the fast path. For applications requiring certainty, a signed CRL with a monotone epoch counter is appended and Merkle-rooted.
+
+Theorem 3.4 (Revocation Soundness). Given a Bloom filter \mathcal{B} of revoked chain IDs, no revoked chain is executed:
+
+\text{CID}(C) \in \mathcal{B} \;\Rightarrow\; \text{Verify}(C) = \text{DENY}.
+
+Proof. Bloom filters have no false negatives for inserted elements. If \text{CID}(C) is revoked, it is inserted into \mathcal{B}, and \mathcal{B}.\text{contains}(\text{CID}(C)) returns true. The verification procedure checks \mathcal{B}.\text{contains}(\text{CID}(C)) and returns DENY if true. \square
+
+Remark 3.1 (False Positives). Bloom filters have a bounded false-positive rate \varepsilon_{\text{fp}}. A non-revoked chain may be incorrectly denied with probability \varepsilon_{\text{fp}}. This is a liveness cost, not a safety cost.
+
+---
+
+4. Architecture
+
+4.1 Five-Layer Reference Architecture
+
+We adopt a five-layer reference architecture for the ACP:
+
+1. Identity Plane: SPIFFE/SPIRE-based SVID issuance, IBCT chain verification, revocation (Bloom + CRL).
+2. Policy Plane: OPA/Rego evaluation, Goal Envelope AST compilation, LTL_f monitoring.
+3. Decision Plane: SA-CMDP shield, regularized e-process monitor, risk budget, bifurcated admission.
+4. Execution Plane: Sandboxed tool invocation, saga orchestration, WAL.
+5. Audit Plane: Merkle-checkpointed log, replay verification, near-miss detection.
+
+The control plane is a separate network service on the network path between the agent and the tools, not a sidecar. All tool invocations must route through the ACP; direct tool access is blocked at the network level via kernel-level enforcement.
+
+4.2 Bifurcated Execution with Compensability Classification
+
+For actions with risk \ge \tau_{\text{fast}}:
+
+1. Phase 1 (Prepare): Fast-path issues PROVISIONAL_ALLOW and the action is held. A durable audit record is written to a local write-ahead log (WAL) with fsync.
+2. Phase 2 (Commit/Abort): Slow-path evaluates. If ALLOW, commit and execute. If DENY, abort.
+
+Definition 4.1 (Compensability Classification). Each action a is classified by its compensability:
+
+\text{comp}(a) =
+\begin{cases}
+\text{full}, & \text{if there exists an idempotent compensating action } \gamma_a \text{ such that } \gamma_a \circ a = \text{id}, \\
+\text{partial}, & \text{if there exists a best-effort compensating action } \gamma_a \text{ with } \gamma_a \circ a \approx \text{id}, \\
+\text{none}, & \text{otherwise}.
+\end{cases}
+
+Routing Rule 4.1. For actions with \text{comp}(a) = \text{none} and risk \ge \tau_{\text{fast}}, the fast path must always route to the slow path, and the slow path must require explicit human approval. For \text{comp}(a) = \text{partial}, the saga compensation executes a best-effort rollback and logs an escalation event.
+
+Theorem 4.1 (Two-Phase Safety). No high-risk action executes without slow-path confirmation or a registered compensating action.
+
+Proof. By construction, the action is held in Phase 1 and only released in Phase 2 upon explicit slow-path approval or with a registered compensating action. The durable audit record ensures that the decision is trace-bound before execution. For non-compensable actions, the routing rule mandates human approval, which is a strict form of slow-path confirmation. \square
+
+Theorem 4.2 (Two-Phase Liveness). Low-risk actions are not indefinitely delayed.
+
+Proof. Low-risk actions bypass the slow path entirely. The token-bucket risk budget ensures that fast-path decisions are rate-limited. When the bucket is exhausted, subsequent actions wait for the slow path. The token bucket refills at rate \rho, so the system cannot starve indefinitely. \square
+
+4.3 Risk Budget with Estimation Error
+
+Definition 4.2 (Risk Budget with Error Margin). A token bucket with capacity B and refill rate \rho. Each fast-path execution consumes \hat{r}(a) + \epsilon_r tokens, where \hat{r}(a) is the estimated risk and \epsilon_r is the estimation error bound. When B < \hat{r}(a) + \epsilon_r, the action is held for slow-path evaluation.
+
+Proposition 4.1 (Risk Budget Bound with Error). The risk budget bounds the expected risk of fast-path executions:
+
+\mathbb{E}\left[\sum_{t \in \text{fast}} r(a_t)\right] \le \rho \cdot T + B.
+
+Proof. The token bucket enforces:
+
+\sum_{i=1}^{N_{\text{fast}}(t)} (\hat{r}(a_i) + \epsilon_r) \le \rho t + B
+
+for all t. The true risk satisfies r(a_i) \le \hat{r}(a_i) + \epsilon_r. Therefore:
+
+\sum_{i=1}^{N_{\text{fast}}(t)} r(a_i) \le \sum_{i=1}^{N_{\text{fast}}(t)} (\hat{r}(a_i) + \epsilon_r) \le \rho t + B.
+
+Taking expectations and letting t \to T gives the result. \square
+
+4.4 Latency Budget
+
+Stage Component p95 target
+Fast SPIFFE + IBCT verify ≤ 5 ms
+Fast OPA capability + revocation ≤ 8 ms
+Fast Shield + durable WAL (fsync) ≤ 10 ms
+Fast Total ≤ 23 ms
+Slow DTMC + regularized e-process ≤ 80 ms
+Slow LTL trace verifier ≤ 50 ms
+Slow Contextual risk OPA ≤ 20 ms
+Slow Total ≤ 150 ms
+
+Remark 4.1 (Durability). The fast-path audit write is durable (WAL with fsync), increasing the fast-path total to 23 ms. This is necessary to satisfy Axiom A3. If 23 ms is unacceptable, the control plane may be deployed in a "best-effort" mode with buffered writes, but this must be documented as a known durability gap.
+
+---
+
+5. Technical Specifications
+
+5.1 Hardened Kernel-Level Enforcement
+
+The ACP gateway enforces non-bypassability at the kernel level using seccomp-bpf filters and mandatory access control. However, seccomp-bpf is not a panacea. Known bypass vectors include:
+
+· x32 ABI syscall number aliasing: Most BPF filters only check the low 32 bits against known syscall numbers, missing the x32 variants. This allows an attacker to invoke a blocked syscall via its x32 alias.
+· 32-bit argument check bypass: BPF filter code generators may only check the lower 32 bits of syscall arguments on x86_64, allowing filter bypass.
+· File descriptor remapping: An attacker can use fcntl or dup2 to remap a restricted file descriptor to an unrestricted one, circumventing path-based restrictions.
+
+Hardening Specification 5.1. The seccomp filter must:
+
+1. Validate the ABI: Check AUDIT_ARCH and mask off the x32 bit before comparing syscall numbers. Return ENOSYS for any syscall not originating from the native x86_64 ABI.
+2. Check full 64-bit arguments: Use BPF load instructions that read both the low and high 32 bits of syscall arguments, rather than only the low 32 bits.
+3. Restrict FD manipulation: Use SECCOMP_RET_TRACE for dup, dup2, dup3, and fcntl to prevent file descriptor remapping. Combined with Landlock for filesystem confinement.
+4. Enforce network allowlist: Use a cgroup BPF egress firewall at the connect4/connect6 hooks with a per-session network allowlist. Unlisted destinations receive EPERM before the socket is established.
+
+Formal Non-Bypassability. The non-bypassability property is:
+
+\text{Execute}(q) \;\Longrightarrow\; \text{seccomp}_{\text{hardened}}(q) \,\wedge\, \text{landlock}(q) \,\wedge\, \text{netfilter}(q) \,\wedge\, \text{ACP-admitted}(q).
+
+The agent's syscall surface is restricted to \Sigma_{\text{allowed}} \subseteq \Sigma_{\text{all}}. Any q requiring \sigma \notin \Sigma_{\text{allowed}} is blocked at the kernel boundary with EPERM, before the ACP is consulted.
+
+5.2 Goal Envelope AST: Formal Semantics
+
+Raw NL→LTL achieves 24–35% semantic correctness. We forbid this path for authoritative goals. Goals are declared as parameterized templates that compile deterministically to LTL_f.
+
+Definition 5.1 (Goal Envelope Denotation). Each template T with parameters p denotes a set of finite traces \llbracket T(p) \rrbracket \subseteq (2^{\mathrm{AP}})^*. The denotation is defined recursively:
+
+· \llbracket \text{BOUNDED\_ACTION\_SEQUENCE}(A, M, F) \rrbracket = \{\tau \mid \forall t: \tau_t \in A,\ \forall a: \#_a(\tau) \le M[a],\ \forall (f,t) \in F: \neg(f \prec t \text{ in } \tau)\}.
+· \llbracket \text{DENY\_TRANSITION}(f, t) \rrbracket = \{\tau \mid \forall t': \tau_{t'} = f \Rightarrow \tau_{t'+1} \neq t\}.
+· \llbracket \text{REQUIRE\_PRIOR}(p, t) \rrbracket = \{\tau \mid \forall t': \tau_{t'} = t \Rightarrow \exists t'' < t': \tau_{t''} = p\}.
+· \llbracket \text{RATE\_LIMIT}(a, m, w) \rrbracket = \{\tau \mid \forall t': \#_a(\tau_{t' \ldots t'+w}) \le m\}.
+
+Definition 5.2 (Compilation Function). The compilation function \text{compile}: \text{Template} \to \text{LTL}_f is defined by the schemas in Appendix H. The compilation is sound if for every template T and parameters p:
+
+\tau \models \text{compile}(T(p)) \;\Longrightarrow\; \tau \in \llbracket T(p) \rrbracket
+
+and complete if:
+
+\tau \in \llbracket T(p) \rrbracket \;\Longrightarrow\; \tau \models \text{compile}(T(p)).
+
+Theorem 5.1 (Soundness and Completeness of Compilation). The compilation function is sound and complete for all templates in the Goal Envelope AST.
+
+Proof. By structural induction on the template grammar. For each template, the LTL_f schema is constructed to match the denotation exactly. The base cases (BOUNDED_ACTION_SEQUENCE, DENY_TRANSITION, etc.) follow directly from the definitions. The compositional cases (AND, OR, UNTIL) preserve soundness and completeness by the induction hypothesis and the semantics of LTL_f connectives. \square
+
+5.3 LTL_f Monitoring: Two-Tier Architecture
+
+We specify a two-tier monitoring architecture:
+
+· Fast path (automaton-based): For templates compiled from the Goal Envelope AST, the automata are small and known in advance. The monitor maintains the automaton state q_t incrementally: q_{t+1} = \delta(q_t, L(s_t, a_t)). This is \mathcal{O}(1) per step with a hash-table representation of \delta.
+· Slow path (trace-checking): For full-trace evaluation, we use the automata-less trace-checking approach. For LTL_f, all safety and cosafety formulas are intentionally safe and cosafe, so monitoring can be carried out directly on the trace with polynomial complexity in the size of the trace and the formula, without constructing a DFA.
+
+Theorem 5.2 (Trace-Checking Complexity for LTL_f). For any LTL_f safety or cosafety formula \varphi, monitoring can be carried out by direct trace-checking with polynomial complexity in |\varphi| and |\tau|, without constructing a DFA.
+
+Proof. The trace-checking problem reduces to evaluating the formula on the finite trace using dynamic programming over the formula structure. The dynamic program has state space O(|\varphi| \cdot |\tau|) subproblems, with O(1) transition per subproblem. Total complexity is O(|\varphi| \cdot |\tau|), which is polynomial in both the formula size and the trace length. \square
+
+5.4 Threat Model
+
+ID Threat Vector Mitigation Residual Risk
+T1 Prompt injection Tool output sanitization + OPA + slow-path trace check Zero-day injection patterns
+T2 Confused deputy Goal Envelope AST + IBCT leaf binding Semantic ambiguity
+T3 Privilege escalation IBCT attenuation (Thm 3.2) + SPIFFE federation Cryptographic breaks
+T4 Policy evasion (multi-step) LTL trace checker over \tau Incomplete LTL templates
+T5 Mid-chain compromise CID revocation (Bloom + CRL) Revocation propagation delay
+T6 Approval fatigue Adaptive risk threshold + batched low-risk approvals Social engineering
+T7 Supply-chain (tool) Signed tool registry + attestation Registry compromise
+T8 Supply-chain (model) Signed model weights + SLSA-style attestation Training-time attacks
+T9 Policy bundle tampering Signed bundles + transparency log + SHA-256 content addressing Transparency log compromise
+T10 Denial-of-wallet IBCT max_spend + rate-limit shield Legitimate high-cost operations
+T11 Memory poisoning Trace checker + envelope drift detection Subtle semantic drift
+T12 Abstraction adversary Per-state error budgets; alarm on OOD states Novel state distributions
+T13 E-process starvation \varepsilon-greedy escalation + periodic human sampling Slow drift attacks
+T14 Sidecar bypass Kernel-level enforcement (seccomp-bpf + Landlock) Container escape
+T15 Audit loss on crash Durable WAL with fsync before execution Disk failure
+T16 Shield incompleteness Regular shield auditing + red-team testing Emergent unsafe actions
+T17 E-process estimation error Regularized e-process (Thm 2.7) Betting fraction misspecification
+T18 Lattice bypass Prefix-tree lattice with explicit semantics Pattern language complexity
+T19 Two-phase commit race Hold state in Phase 1; no code path to execution Implementation bugs
+T20 Risk estimation poisoning Conservative upper confidence bound for budget consumption Estimator compromise
+
+5.5 Metrics
+
+Metric Definition Target
+PVR Unauthorized actions / total consequential actions → 0
+IE Harm prevented / human interventions ≥ 0.7
+OL Human approvals / agent actions < 0.05
+IL_fast Fast-path latency p95 ≤ 23 ms
+IL_slow Slow-path latency p95 ≤ 150 ms
+ATP Successfully completed authorized objectives / authorized objectives ≥ 0.8
+RTC % decisions with verifiable pre-execution reasoning trace ≥ 95%
+ACS % events in Merkle-checkpointed audit log 100%
+SSR Task-level safe completion rate ≥ 0.9
+ECR E-process coverage rate ≈ \alpha
+ABR Abstraction refinement rate Monitor for stability
+WDT WAL durability test pass rate 100%
+
+---
+
+6. Conclusion
+
+The Agent Control Plane provides a formally grounded control layer for autonomous AI agents. Its six theoretical pillars—shield-aware CMDP with learnability conditions, distributional shielding for differentiable policies, component-wise PAC abstraction bounds, regularized anytime-valid e-process monitoring, compensability-aware bifurcated execution, and hardened kernel-level non-bypassability—address the fundamental soundness gaps that arise when optimization and enforcement are conflated, when state abstractions are assumed rather than verified, when delegation is checked ad hoc, and when runtime monitoring is confused with offline certification.
+
+The central thesis is that agent intelligence and agent authority are distinct computational objects. Intelligence proposes; policy constrains; humans retain authority over consequential decisions. Governing the transition from reasoning to execution requires a control plane with its own formal foundations, not an extension of the agent's reasoning capabilities.
+
+\text{Agent Intelligence} \neq \text{Agent Authority}
+
+Appendices
+
+This appendix provides complete proofs, technical lemmas, notation tables, and implementation specifications referenced throughout the main text. All theorem, proposition, and corollary numbers correspond to the main text.
+
+---
+
+Appendix A: Proofs for Section 2 (Mathematical Foundations)
+
+A.1 Proof of Proposition 2.1 (Well-Definedness of SA-CMDP)
+
+Proposition 2.1. The shield-aware CMDP \mathcal{M}_c^\sigma is well-defined: P^\sigma is a valid transition kernel, and r^\sigma, c_k^\sigma are bounded measurable functions.
+
+Proof. We verify each component.
+
+(i) P^\sigma is a valid transition kernel. For each (s,a) \in S \times \mathcal{A}, the shield produces \sigma(s,a) \in \mathcal{A} \cup \{\bot\}. We define P^\sigma as:
+
+P^\sigma(s' \mid s, a) = \begin{cases} P(s' \mid s, \sigma(s,a)), & \sigma(s,a) \in \mathcal{A}, \\[4pt] \mathbb{1}[s' = s_\bot], & \sigma(s,a) = \bot, \end{cases}
+
+where s_\bot \in S is a designated absorbing failure state, assumed to exist in S. For each (s,a):
+
+· Non-negativity: P(s' \mid s, \sigma(s,a)) \ge 0 for all s', and \mathbb{1}[s' = s_\bot] \ge 0.
+· Normalization: If \sigma(s,a) \in \mathcal{A}, then \sum_{s'} P(s' \mid s, \sigma(s,a)) = 1 since P is a valid kernel. If \sigma(s,a) = \bot, then \sum_{s'} \mathbb{1}[s' = s_\bot] = 1.
+· Measurability: \sigma: S \times \mathcal{A} \to \mathcal{A} \cup \{\bot\} is assumed measurable. The composition s' \mapsto P(s' \mid s, \sigma(s,a)) is measurable in (s,a) because P is a transition kernel and \sigma is measurable. The indicator \mathbb{1}[s' = s_\bot] is constant in (s,a) and hence measurable.
+
+Therefore P^\sigma is a valid transition kernel on S \times \mathcal{A}.
+
+(ii) r^\sigma is bounded and measurable. r^\sigma(s,a) = r(s, \sigma(s,a)) - \kappa \cdot \mathbb{1}[\sigma(s,a) \neq a]. Since r is bounded (there exists R_{\max} < \infty with |r(s,a)| \le R_{\max} for all (s,a)) and \kappa > 0 is a constant, we have |r^\sigma(s,a)| \le R_{\max} + \kappa. Measurability follows from the composition of the measurable function \sigma with the measurable function r, and the indicator \mathbb{1}[\sigma(s,a) \neq a] is measurable.
+
+(iii) c_k^\sigma are bounded and measurable. Identical to (ii) with c_k in place of r. Since c_k \ge 0 and bounded (there exists C_{k,\max} < \infty with 0 \le c_k(s,a) \le C_{k,\max}), c_k^\sigma inherits these properties. \square
+
+A.2 Proof of Lemma 2.1 (Sufficient Condition for Shield Learnability)
+
+Lemma 2.1. Suppose the shield satisfies: for all (s,a) \in S \times \mathcal{A} and all k,
+
+c_k(s, \sigma(s,a)) \le c_k(s,a)
+\quad\text{and}\quad
+\mathbb{E}_{s' \sim P(\cdot \mid s, \sigma(s,a))}\!\left[V_{c_k}^{\sigma,\pi}(s')\right] \le \mathbb{E}_{s' \sim P(\cdot \mid s, a)}\!\left[V_{c_k}^{\sigma,\pi}(s')\right] + \frac{\kappa}{1-\gamma}.
+
+Then V_{c_k}^{\sigma,\pi}(s) \le V_{c_k}^{\pi}(s) + \frac{\kappa}{1-\gamma} \cdot \mathbb{E}_\pi\left[\sum_{t=0}^\infty \gamma^t \mathbb{1}[\sigma(s_t,a_t) \neq a_t]\right] for all s.
+
+Proof. By induction on the Bellman operator. Define the operator \mathcal{T}^\sigma acting on bounded measurable functions V: S \to \mathbb{R} by:
+
+(\mathcal{T}^\sigma V)(s) = \mathbb{E}_{a \sim \pi}\!\left[c_k(s, \sigma(s,a)) + \kappa \cdot \mathbb{1}[\sigma(s,a) \neq a] + \gamma \mathbb{E}_{s' \sim P(\cdot \mid s, \sigma(s,a))}\!\left[V(s')\right]\right].
+
+The shielded cost value function V_{c_k}^{\sigma,\pi} is the unique fixed point of \mathcal{T}^\sigma (by the Banach fixed-point theorem, since \mathcal{T}^\sigma is a \gamma-contraction in the sup-norm). Similarly, define:
+
+(\mathcal{T} V)(s) = \mathbb{E}_{a \sim \pi}\!\left[c_k(s, a) + \gamma \mathbb{E}_{s' \sim P(\cdot \mid s, a)}\!\left[V(s')\right]\right].
+
+The unshielded cost value function V_{c_k}^{\pi} is the unique fixed point of \mathcal{T}.
+
+Assume for induction that V_{c_k}^{\sigma,\pi}(s') \le V_{c_k}^{\pi}(s') + \frac{\kappa}{1-\gamma} \cdot I(s') for all s', where I(s') = \mathbb{E}_\pi[\sum_{t=0}^\infty \gamma^t \mathbb{1}[\sigma(s_t,a_t) \neq a_t] \mid s_0 = s'] is the discounted intervention frequency from s'.
+
+Then:
+
+\begin{aligned}
+V_{c_k}^{\sigma,\pi}(s) &= \mathbb{E}_{a \sim \pi}\!\left[c_k(s, \sigma(s,a)) + \kappa \cdot \mathbb{1}[\sigma(s,a) \neq a] + \gamma \mathbb{E}_{s'}\!\left[V_{c_k}^{\sigma,\pi}(s')\right]\right] \\
+&\le \mathbb{E}_{a \sim \pi}\!\left[c_k(s, a) + \kappa \cdot \mathbb{1}[\sigma(s,a) \neq a] + \gamma \mathbb{E}_{s'}\!\left[V_{c_k}^{\pi}(s') + \frac{\kappa}{1-\gamma} I(s')\right]\right] \\
+&= \mathbb{E}_{a \sim \pi}\!\left[c_k(s, a) + \gamma \mathbb{E}_{s'}\!\left[V_{c_k}^{\pi}(s')\right]\right] + \kappa \cdot \mathbb{E}_{a \sim \pi}\!\left[\mathbb{1}[\sigma(s,a) \neq a]\right] + \frac{\gamma \kappa}{1-\gamma} \mathbb{E}_{a \sim \pi}\!\left[\mathbb{E}_{s'}\!\left[I(s')\right]\right] \\
+&= V_{c_k}^{\pi}(s) + \kappa \cdot \mathbb{E}_\pi[\mathbb{1}[\sigma(s,a) \neq a]] + \frac{\gamma \kappa}{1-\gamma} \mathbb{E}_\pi[I(s')] \\
+&= V_{c_k}^{\pi}(s) + \frac{\kappa}{1-\gamma} \cdot \mathbb{E}_\pi\left[\sum_{t=0}^\infty \gamma^t \mathbb{1}[\sigma(s_t,a_t) \neq a_t]\right],
+\end{aligned}
+
+where the last equality uses the recursive structure I(s) = \mathbb{1}[\sigma(s,a) \neq a] + \gamma \mathbb{E}_{s'}[I(s')]. The base case follows from the boundedness of c_k and the contraction property of the Bellman operator. \square
+
+A.3 Proof of Theorem 2.1 (Slater Preservation under Learnability)
+
+Theorem 2.1. Let the shield be defined by cost-threshold infeasibility:
+
+\mathcal{A}_{\text{feas}}(s) = \{a \in \mathcal{A} \mid \forall k: c_k(s,a) \le d_k^{\text{inst}}\}.
+
+If the unshielded CMDP satisfies Slater's condition (there exists \pi with J_{c_k}(\pi) < d_k for all k) and Assumption 2.1 holds, then \mathcal{M}_c^\sigma satisfies Slater's condition provided that:
+
+\kappa \cdot \mathbb{E}_\pi\left[\sum_{t=0}^\infty \gamma^t \mathbb{1}[\sigma(s_t,a_t) \neq a_t]\right] < \min_k (d_k - J_{c_k}(\pi)).
+
+Proof. Let \pi be a strictly feasible policy of \mathcal{M}_c with J_{c_k}(\pi) < d_k for all k. Under Assumption 2.1:
+
+J_{c_k}^\sigma(\pi) = \mathbb{E}_{s_0}\!\left[V_{c_k}^{\sigma,\pi}(s_0)\right] \le \mathbb{E}_{s_0}\!\left[V_{c_k}^{\pi}(s_0)\right] + \kappa \cdot \mathbb{E}_\pi\left[\sum_{t=0}^\infty \gamma^t \mathbb{1}[\sigma(s_t,a_t) \neq a_t]\right] = J_{c_k}(\pi) + \Delta_k,
+
+where \Delta_k = \kappa \cdot \mathbb{E}_\pi[\sum_{t=0}^\infty \gamma^t \mathbb{1}[\sigma(s_t,a_t) \neq a_t]]. If \Delta_k < d_k - J_{c_k}(\pi) for all k, then J_{c_k}^\sigma(\pi) < d_k for all k. Therefore \pi is strictly feasible in \mathcal{M}_c^\sigma, and Slater's condition is preserved. \square
+
+A.4 Proof of Theorem 2.2 (Differentiability Preservation)
+
+Theorem 2.2. If the distributional shield \sigma_{\text{dist}} is Lipschitz continuous with respect to the policy parameters w, then the shielded policy class \{\sigma_{\text{dist}} \circ \pi_w : w \in \Theta\} inherits the smoothness properties of the unshielded policy class.
+
+Proof. Let \pi_w be parameterized by w. The shielded policy is \pi_w^\sigma = \sigma_{\text{dist}} \circ \pi_w. For any w, w' \in \Theta:
+
+\|\pi_w^\sigma - \pi_{w'}^\sigma\|_{\mathrm{TV}} = \|\sigma_{\text{dist}}(\pi_w) - \sigma_{\text{dist}}(\pi_{w'})\|_{\mathrm{TV}} \le L_\sigma \|\pi_w - \pi_{w'}\|_{\mathrm{TV}} \le L_\sigma L_\pi \|w - w'\|,
+
+where L_\sigma is the Lipschitz constant of \sigma_{\text{dist}} with respect to the total variation norm, and L_\pi is the smoothness constant of the unshielded policy class. Therefore the shielded class satisfies the same Lipschitz continuity with constant L_\sigma L_\pi. \square
+
+A.5 Proof of Theorem 2.3 (Shield-Aware Convergence with Distributional Shield)
+
+Theorem 2.3. Under Slater's condition, smooth policy parameterization (preserved by Theorem 2.2), bounded rewards and costs, compact action set, and Lipschitz continuity of the Lagrangian, the shield-aware CMDP \mathcal{M}_c^\sigma admits global convergence of NPG-PD with sublinear rates:
+
+J_r^{\sigma,*} - J_r^\sigma(\pi_T) \le \frac{C_1}{\sqrt{T}}, \qquad \big[J_{c_k}^\sigma(\pi_T) - d_k\big]^+ \le \frac{C_2}{\sqrt{T}}.
+
+Proof. We verify that the conditions (C1)–(C5) of the NPG-PD convergence theorem are preserved under the distributional shield.
+
+(C1) Slater's condition. Established by Theorem 2.1 under the intervention-frequency bound.
+
+(C2) Smooth policy parameterization. Preserved by Theorem 2.2. The distributional shield is Lipschitz continuous with respect to the policy parameters, so the shielded policy class inherits smoothness.
+
+(C3) Bounded rewards and costs. r^\sigma and c_k^\sigma are bounded by the same constants as r and c_k, plus the intervention penalty \kappa (Proposition 2.1).
+
+(C4) Compact action set. The effective action set is \mathcal{A}_{\text{feas}}(s) \subseteq \mathcal{A}, which is compact.
+
+(C5) Lipschitz continuity of the Lagrangian. The Lagrangian:
+
+\mathcal{L}^\sigma(\pi, \lambda) = J_r^\sigma(\pi) - \sum_k \lambda_k (J_{c_k}^\sigma(\pi) - d_k)
+
+inherits Lipschitz continuity from \mathcal{L}(\pi, \lambda) because the distributional shield is Lipschitz continuous with respect to the policy parameters. Formally, for any w, w':
+
+|\mathcal{L}^\sigma(\pi_w, \lambda) - \mathcal{L}^\sigma(\pi_{w'}, \lambda)| \le L_\sigma \|\pi_w - \pi_{w'}\|_{\mathrm{TV}} \le L_\sigma L_\pi \|w - w'\|.
+
+Under (C1)–(C5), the NPG-PD convergence theorem of Ding et al. (2025, Theorem 4.3) applies to \mathcal{M}_c^\sigma, yielding the stated rates with constants C_1, C_2 depending on L_\sigma, L_\pi, R_{\max}, C_{k,\max}, \gamma, and d_k, but independent of the state-action space size. \square
+
+A.6 Proof of Theorem 2.4 (Component-Wise PAC Bound)
+
+We first state the empirical Bernstein inequality.
+
+Lemma A.1 (Empirical Bernstein Inequality). Let X_1, \ldots, X_n be i.i.d. random variables with values in [0,1], mean \mu, and observed variance:
+
+\hat{\sigma}^2 = \frac{1}{n-1} \sum_{i=1}^n (X_i - \bar{X})^2, \qquad \bar{X} = \frac{1}{n} \sum_{i=1}^n X_i.
+
+Then with probability at least 1 - \delta:
+
+|\bar{X} - \mu| \le \sqrt{\frac{2\hat{\sigma}^2 \log(2/\delta)}{n}} + \frac{7 \log(2/\delta)}{3(n-1)}.
+
+Proof. See Maurer and Pontil (2009, Theorem 4). \square
+
+Lemma A.2 (Lipschitz Continuity of Satisfaction Probability). For a finite-horizon DTMC with horizon H, the satisfaction probability P_{\mathcal{M}}[\psi] is Lipschitz continuous with respect to the transition matrix P:
+
+|P_{\hat{\mathcal{M}}}[\psi] - P_{\mathcal{M}}[\psi]| \le \sum_{i,j} L_\psi^{(ij)} H |\hat{P}(j \mid i) - P(j \mid i)|,
+
+where L_\psi^{(ij)} is the sensitivity of the satisfaction probability to transition (i,j).
+
+Proof. The satisfaction probability can be written as:
+
+P_{\mathcal{M}}[\psi] = \sum_{\tau \in \text{Traces}(H)} \Pr\nolimits_{\mathcal{M}}[\tau] \cdot \mathbb{1}[\tau \models \psi],
+
+where the sum is over all traces of length H. The probability of a trace \tau = (s_0, s_1, \ldots, s_H) under \mathcal{M} is:
+
+\Pr\nolimits_{\mathcal{M}}[\tau] = \mu(s_0) \prod_{t=0}^{H-1} P(s_{t+1} \mid s_t).
+
+Perturbing P to \hat{P} changes each factor by at most |\hat{P}(j \mid i) - P(j \mid i)|. By the product rule and the triangle inequality, the change in the trace probability is bounded by:
+
+|\Pr\nolimits_{\hat{\mathcal{M}}}[\tau] - \Pr\nolimits_{\mathcal{M}}[\tau]| \le \sum_{t=0}^{H-1} \prod_{t' \neq t} P(s_{t'+1} \mid s_{t'}) \cdot |\hat{P}(s_{t+1} \mid s_t) - P(s_{t+1} \mid s_t)|.
+
+Summing over traces and using the sensitivity weights L_\psi^{(ij)} yields the result. \square
+
+Theorem 2.4 (Component-Wise PAC Bound). For a DTMC over N abstract states learned from n traces per state-action pair, with observed per-transition variance \hat{\sigma}_{ij}^2, with probability \ge 1-\delta:
+
+\left|P_{\hat{\mathcal{M}}}[\psi] - P_{\mathcal{M}}[\psi]\right| \le \sum_{i,j} L_\psi^{(ij)} H \left( \sqrt{\frac{2\hat{\sigma}_{ij}^2 \log(2/\delta_{ij})}{n_{ij}}} + \frac{7\log(2/\delta_{ij})}{3(n_{ij}-1)} \right) + L_\psi \varepsilon_{\text{abs}}
+
+where \delta_{ij} is the per-entry error budget satisfying \sum_{i,j} \delta_{ij} \le \delta, and L_\psi^{(ij)} is the sensitivity of the satisfaction probability to transition (i,j).
+
+Proof. Apply Lemma A.1 to each transition entry (i,j) with error budget \delta_{ij}:
+
+|\hat{P}(j \mid i) - P(j \mid i)| \le \sqrt{\frac{2\hat{\sigma}_{ij}^2 \log(2/\delta_{ij})}{n_{ij}}} + \frac{7 \log(2/\delta_{ij})}{3(n_{ij}-1)}
+
+with probability at least 1 - \delta_{ij}. By the union bound, all N^2 entries satisfy their respective bounds with probability at least:
+
+1 - \sum_{i,j} \delta_{ij} \ge 1 - \delta.
+
+Combining with Lemma A.2 (Lipschitz propagation) and adding the abstraction error L_\psi \varepsilon_{\text{abs}} yields the result. \square
+
+A.7 Proof of Corollary 2.4 (Sample Complexity Reduction)
+
+Corollary 2.4. The component-wise bound requires n_{ij} \ge \frac{7\log(2/\delta_{ij})}{3} \left(\frac{L_\psi^{(ij)} H}{\varepsilon_{ij} - L_\psi \varepsilon_{\text{abs}}}\right) samples for transition (i,j).
+
+Proof. Set the per-entry error bound equal to \varepsilon_{ij}:
+
+L_\psi^{(ij)} H \left( \sqrt{\frac{2\hat{\sigma}_{ij}^2 \log(2/\delta_{ij})}{n_{ij}}} + \frac{7\log(2/\delta_{ij})}{3(n_{ij}-1)} \right) \le \varepsilon_{ij}.
+
+For near-deterministic transitions (\hat{\sigma}_{ij}^2 \approx 0), the second term dominates, yielding:
+
+n_{ij} \ge \frac{7 L_\psi^{(ij)} H \log(2/\delta_{ij})}{3 \varepsilon_{ij}}.
+
+Allocating the error budget \varepsilon_{ij} \propto L_\psi^{(ij)} and using \sum_{i,j} \varepsilon_{ij} = \varepsilon - L_\psi \varepsilon_{\text{abs}} yields the stated bound. \square
+
+A.8 Proof of Theorem 2.5 (E-Process Validity)
+
+Theorem 2.5. Under H_0: P_{\text{safe}} \ge \theta, the e-process E_t = \prod_{i=0}^{t} E_i with E_i = 1 + \beta_i (X_i - \theta) is a non-negative supermartingale with \mathbb{E}[E_t \mid H_0] \le 1 for all t.
+
+Proof. We verify the three defining properties.
+
+(i) Non-negativity. Since X_i \in \{0,1\} and \beta_i \in [0, 1/\theta]:
+
+· If X_i = 1: E_i = 1 + \beta_i(1 - \theta) \ge 1 > 0.
+· If X_i = 0: E_i = 1 - \beta_i \theta \ge 1 - (1/\theta) \cdot \theta = 0.
+
+Therefore E_i \ge 0, and the product E_t \ge 0.
+
+(ii) Conditional expectation. Under H_0, \mathbb{E}[X_i \mid \mathcal{F}_{i-1}] = P_{\text{safe}} \ge \theta. Therefore:
+
+\mathbb{E}[E_i \mid \mathcal{F}_{i-1}] = 1 + \beta_i (\mathbb{E}[X_i \mid \mathcal{F}_{i-1}] - \theta) \le 1 + \beta_i (\theta - \theta) = 1,
+
+where the inequality uses \beta_i \ge 0 and \mathbb{E}[X_i \mid \mathcal{F}_{i-1}] \ge \theta. Since \beta_i is \mathcal{F}_{i-1}-measurable (predictable), it can be pulled out of the conditional expectation.
+
+(iii) Supermartingale property. Combining (i) and (ii):
+
+\mathbb{E}[E_t \mid \mathcal{F}_{t-1}] = E_{t-1} \cdot \mathbb{E}[E_t / E_{t-1} \mid \mathcal{F}_{t-1}] = E_{t-1} \cdot \mathbb{E}[E_t \mid \mathcal{F}_{t-1}] \le E_{t-1}.
+
+Therefore E_t is a supermartingale. Taking expectations:
+
+\mathbb{E}[E_t] = \mathbb{E}[\mathbb{E}[E_t \mid \mathcal{F}_{t-1}]] \le \mathbb{E}[E_{t-1}] \le \cdots \le \mathbb{E}[E_0] = 1. \qquad \square
+
+A.9 Proof of Theorem 2.6 (Ville's Inequality)
+
+Theorem 2.6. Under H_0, \Pr(\exists t: E_t \ge 1/\alpha \mid H_0) \le \alpha.
+
+Proof. Let E_t be a non-negative supermartingale with \mathbb{E}[E_0] \le 1. Define the stopping time:
+
+\tau = \inf\{t \ge 0 : E_t \ge 1/\alpha\}.
+
+By the optional stopping theorem for non-negative supermartingales:
+
+\mathbb{E}[E_{\tau \wedge T}] \le \mathbb{E}[E_0] \le 1
+
+for any finite T. On the event \{\tau \le T\}, we have E_{\tau \wedge T} = E_\tau \ge 1/\alpha. Therefore:
+
+\frac{1}{\alpha} \Pr(\tau \le T) \le \mathbb{E}[E_{\tau \wedge T} \cdot \mathbb{1}[\tau \le T]] \le \mathbb{E}[E_{\tau \wedge T}] \le 1.
+
+Thus \Pr(\tau \le T) \le \alpha. Taking T \to \infty:
+
+\Pr(\exists t: E_t \ge 1/\alpha) = \Pr(\tau < \infty) \le \alpha. \qquad \square
+
+A.10 Proof of Theorem 2.7 (Regularized Anytime-Validity)
+
+Theorem 2.7. Under H_0, the regularized e-process satisfies:
+
+\Pr(\exists t: E_t^{\text{reg}} \ge 1/\alpha \mid H_0) \le \alpha
+
+for any \alpha \in [0,1], any N, and any data-dependent stopping rule.
+
+Proof. The regularized e-value is defined as:
+
+E_i^{\text{reg}} = \frac{\rho(\Theta) \cdot 1_{\rho(\Theta) < 1} + E_i \cdot \rho(\Theta) \cdot 1_{\rho(\Theta) \ge 1}}{\rho(\Theta)}.
+
+We verify that E_t^{\text{reg}} is a non-negative supermartingale under H_0. The regularization \rho(\Theta) is a knowledge-based, imprecise-probabilistic prior chosen before data collection, hence \mathcal{F}_{0}-measurable. The betting fraction \beta_i remains \mathcal{F}_{i-1}-measurable (predictable).
+
+Consider the conditional expectation:
+
+\mathbb{E}[E_i^{\text{reg}} \mid \mathcal{F}_{i-1}] = \frac{\rho(\Theta) \cdot 1_{\rho(\Theta) < 1} + \mathbb{E}[E_i \mid \mathcal{F}_{i-1}] \cdot \rho(\Theta) \cdot 1_{\rho(\Theta) \ge 1}}{\rho(\Theta)}.
+
+Under H_0, \mathbb{E}[E_i \mid \mathcal{F}_{i-1}] \le 1. Therefore:
+
+\mathbb{E}[E_i^{\text{reg}} \mid \mathcal{F}_{i-1}] \le \frac{\rho(\Theta) \cdot 1_{\rho(\Theta) < 1} + 1 \cdot \rho(\Theta) \cdot 1_{\rho(\Theta) \ge 1}}{\rho(\Theta)} = \frac{\rho(\Theta)}{\rho(\Theta)} = 1.
+
+Non-negativity follows from E_i \ge 0, \rho(\Theta) > 0, and the indicator functions. Therefore E_t^{\text{reg}} is a non-negative supermartingale under H_0.
+
+The generalized Ville's inequality for regularized e-processes establishes that inference based on E_t^{\text{reg}} is valid for any data-dependent stopping rule. Specifically, for any stopping time \tau:
+
+\Pr(\exists t: E_t^{\text{reg}} \ge 1/\alpha) \le \alpha.
+
+The knowledge-dependent regularization does not violate the supermartingale property because \rho(\Theta) is fixed before data collection. \square
+
+---
+
+Appendix B: Proofs for Section 3 (Capability Lattice)
+
+B.1 Proof of Theorem 3.1 (Faceted Capability Lattice)
+
+Definition B.1 (Prefix-Tree Resource Lattice). Let U be a countable universe of resource identifiers. A prefix pattern is a string p such that p* denotes the set \{u \in U : p \text{ is a prefix of } u\}. Let \mathcal{P} be the set of all prefix patterns, and let \mathcal{R} be the set of all finite unions of prefix patterns, ordered by inclusion. Then (\mathcal{R}, \subseteq) is a complete lattice with:
+
+· Join: R_1 \vee R_2 = R_1 \cup R_2.
+· Meet: R_1 \wedge R_2 = R_1 \cap R_2.
+· Top: U.
+· Bottom: \varnothing.
+
+Proof. The powerset lattice (2^U, \subseteq) is a complete lattice. The set \mathcal{R} is closed under finite unions and intersections of prefix patterns. The completion of \mathcal{R} under arbitrary unions and intersections is the full powerset lattice 2^U, which is complete. For practical purposes, we restrict to finite unions, which suffice for capability representation. \square
+
+Theorem 3.1 (Faceted Capability Lattice). The set of capabilities (\mathcal{C}, \preceq) forms a complete lattice.
+
+Proof. A capability is a tuple:
+
+C = (R, A, \mathcal{C}_{\text{spend}}, \mathcal{C}_{\text{depth}}, \mathcal{C}_{\text{time}}, \mathcal{C}_{\text{rep}}, \mathcal{C}_{\text{val}}, \mathcal{C}_{\text{rev}}, \mathcal{C}_{\text{comp}}).
+
+Each component has a complete lattice structure:
+
+1. Resource order: (\mathcal{R}, \subseteq) is a complete lattice (Definition B.1).
+2. Action order: (2^{\mathcal{A}}, \subseteq) is a complete lattice (powerset lattice).
+3. Spend order: ([0, \infty], \le) with reverse order (lower is more restrictive) is a complete lattice. The meet is \max and the join is \min.
+4. Depth order: (\mathbb{N} \cup \{\infty\}, \le) with reverse order is a complete lattice. The meet is \max and the join is \min.
+5. Time order: (2^{\mathbb{T}}, \subseteq) is a complete lattice (powerset lattice of time intervals).
+6. Reputation order: ([0,1], \ge) with direct order (higher is more restrictive) is a complete lattice. The meet is \min and the join is \max.
+7. Values order: (2^{\mathcal{V}}, \subseteq) is a complete lattice (powerset lattice of value constraints).
+8. Reversibility order: ([0,1], \ge) with direct order is a complete lattice. The meet is \min and the join is \max.
+9. Compensability order: (\{\text{none}, \text{partial}, \text{full}\}, \preceq_{\text{comp}}) with \text{none} \preceq \text{partial} \preceq \text{full} is a complete lattice.
+
+The product of complete lattices is a complete lattice (Birkhoff, 1967, Theorem 2). Therefore (\mathcal{C}, \preceq) is a complete lattice. \square
+
+B.2 Proof of Theorem 3.2 (Privilege Non-Escalation)
+
+Theorem 3.2. Let each delegation edge (T_i \to T_{i+1}) be signed with an EUF-CMA-secure signature scheme \Sigma. Let capability attenuation be monotone: for every parent/child pair, C_{i+1} \preceq C_i. Then communication between agents cannot grant new privileges absent an explicit signed delegation.
+
+Proof. We proceed by contradiction. Suppose agent A_1 sends a message m to A_2, and A_2 attempts to execute an action a with capability C_a such that C_a \not\preceq C_1, where C_1 is the capability of A_1. We show that this execution must fail unless there exists a signed delegation edge from A_1 (or an ancestor) to A_2.
+
+(i) Execution requires a valid chain. By the central invariant (§1.3), execution of a requires a valid delegation chain C' = (C_0 \to C_1 \to \cdots \to C_n) where C_n is the capability of A_2 and C_n \succeq C_a. The chain must be signed at every edge.
+
+(ii) The chain must originate from a trusted root. By the IBCT schema, the chain originates from a root issuer. The root's capability C_0 is the maximum authority in the system.
+
+(iii) Attenuation is monotone. By assumption, for every edge (T_i \to T_{i+1}), we have C_{i+1} \preceq C_i. Therefore, by transitivity of \preceq, C_n \preceq C_0.
+
+(iv) Communication does not create edges. The message m from A_1 to A_2 is not a signed delegation edge. It does not appear in any chain. Therefore, the chain C' must contain a signed edge (T_1 \to T_2) where T_1 is an ancestor of A_1 and T_2 is A_2 (or an ancestor of A_2).
+
+(v) Forgery requires breaking EUF-CMA. If such an edge does not exist, then A_2 must forge it. Forging the signature on the edge reduces to the EUF-CMA security of \Sigma. Since \Sigma is EUF-CMA-secure, the forgery succeeds with negligible probability.
+
+Therefore, communication cannot grant new privileges absent a signed delegation edge. \square
+
+B.3 Proof of Theorem 3.3 (Serialization Determinism)
+
+Theorem 3.3. For any two capabilities C_1, C_2, if C_1 = C_2 as tuples, then \text{ser}(C_1) = \text{ser}(C_2) as byte strings.
+
+Proof. The serialization algorithm is deterministic:
+
+1. Dimensions are sorted lexicographically by their names — deterministic.
+2. Resource identifiers are serialized as UTF-8 strings with length prefixes — deterministic.
+3. Action sets are sorted lexicographically, deduplicated, and serialized as length-prefixed concatenations — deterministic.
+4. Numeric values are encoded as 64-bit big-endian integers — deterministic.
+5. Time intervals are sorted by start time, deduplicated, and serialized as 64-bit timestamps — deterministic.
+6. Value constraints are sorted lexicographically and serialized as length-prefixed strings — deterministic.
+7. Compensability is serialized as a single byte — deterministic.
+
+Therefore, identical capabilities produce identical serializations. \square
+
+B.4 Proof of Theorem 3.4 (Revocation Soundness)
+
+Theorem 3.4. Given a Bloom filter \mathcal{B} of revoked chain IDs, no revoked chain is executed:
+
+\text{CID}(C) \in \mathcal{B} \;\Rightarrow\; \text{Verify}(C) = \text{DENY}.
+
+Proof. Bloom filters have no false negatives for inserted elements: if an element x is inserted into \mathcal{B}, then the membership query \mathcal{B}.\text{contains}(x) returns true (Bloom, 1970). Therefore, if \text{CID}(C) is revoked, it is inserted into \mathcal{B}, and \mathcal{B}.\text{contains}(\text{CID}(C)) returns true. The verification procedure checks \mathcal{B}.\text{contains}(\text{CID}(C)) and returns DENY if true. Therefore, no revoked chain is executed. \square
+
+Remark B.1 (False Positives). Bloom filters have a bounded false-positive rate \varepsilon_{\text{fp}}. A non-revoked chain may be incorrectly denied with probability \varepsilon_{\text{fp}}. This is a liveness cost, not a safety cost.
+
+---
+
+Appendix C: Proofs for Section 4 (Architecture)
+
+C.1 Proof of Theorem 4.1 (Two-Phase Safety)
+
+Theorem 4.1. No high-risk action executes without slow-path confirmation or a registered compensating action.
+
+Proof. By Definition 4.1, for actions with risk \ge \tau_{\text{fast}}:
+
+1. Phase 1 (Prepare): Fast-path issues PROVISIONAL_ALLOW and the action is held. A durable audit record is written to the WAL with fsync.
+2. Phase 2 (Commit/Abort): Slow-path evaluates. If ALLOW, commit and execute. If DENY, abort.
+
+The action is held in Phase 1 and only released in Phase 2 upon explicit slow-path approval or with a registered compensating action. For non-compensable actions (\text{comp}(a) = \text{none}), Routing Rule 4.1 mandates human approval, which is a strict form of slow-path confirmation. There is no code path from PROVISIONAL_ALLOW to execution that bypasses Phase 2. Therefore, no high-risk action executes without slow-path confirmation or a registered compensating action. \square
+
+C.2 Proof of Theorem 4.2 (Two-Phase Liveness)
+
+Theorem 4.2. Low-risk actions are not indefinitely delayed.
+
+Proof. Low-risk actions (\text{risk} < \tau_{\text{fast}}) bypass the slow path entirely and execute on the fast path. The risk budget (token bucket) ensures that fast-path decisions are rate-limited: each fast-path execution consumes \hat{r}(a) + \epsilon_r tokens, and when the bucket is exhausted, subsequent actions wait for the slow path. The token bucket refills at rate \rho, so the system cannot starve indefinitely. \square
+
+C.3 Proof of Proposition 4.1 (Risk Budget Bound with Error)
+
+Proposition 4.1. The risk budget bounds the expected risk of fast-path executions:
+
+\mathbb{E}\left[\sum_{t \in \text{fast}} r(a_t)\right] \le \rho \cdot T + B.
+
+Proof. Let N_{\text{fast}}(t) be the number of fast-path executions up to time t. The token bucket enforces:
+
+\sum_{i=1}^{N_{\text{fast}}(t)} (\hat{r}(a_i) + \epsilon_r) \le \rho t + B
+
+for all t, since the bucket starts with at most B tokens and refills at rate \rho. The true risk satisfies r(a_i) \le \hat{r}(a_i) + \epsilon_r by definition of the estimation error bound. Therefore:
+
+\sum_{i=1}^{N_{\text{fast}}(t)} r(a_i) \le \sum_{i=1}^{N_{\text{fast}}(t)} (\hat{r}(a_i) + \epsilon_r) \le \rho t + B.
+
+Taking expectations and letting t \to T:
+
+\mathbb{E}\left[\sum_{t \in \text{fast}} r(a_t)\right] \le \rho T + B. \qquad \square
+
+C.4 Saga-Style Compensation Specification
+
+The two-phase admission protocol for high-risk actions employs a saga-style compensation pattern. Each step in a multi-step action sequence is associated with a forward action and an optional compensating action. If any step fails or is denied by the slow path, all previously completed steps are compensated in reverse order (LIFO).
+
+Formally, let a multi-step action be \pi = (a_1, a_2, \ldots, a_n) with compensating actions (\gamma_1, \gamma_2, \ldots, \gamma_n). If step k fails, the compensation executes \gamma_{k-1}, \gamma_{k-2}, \ldots, \gamma_1 in that order. The system is guaranteed to reach a state equivalent to the initial state if all compensations are idempotent and total.
+
+Proposition C.1 (Saga Consistency). If all compensating actions are idempotent and total, and the forward actions are executed sequentially, then the saga either completes all forward actions or returns the system to the initial state.
+
+Proof. By induction on the number of steps. If n = 1, the saga either commits a_1 or aborts and executes \gamma_1, which restores the initial state by totality. For n > 1, if step k fails, the compensation \gamma_{k-1}, \ldots, \gamma_1 restores the initial state by the induction hypothesis. Idempotence ensures that repeated compensation does not alter the restored state. \square
+
+---
+
+Appendix D: Proofs for Section 5 (Technical Specifications)
+
+D.1 Proof of Theorem 5.1 (Soundness and Completeness of Compilation)
+
+Theorem 5.1. The compilation function is sound and complete for all templates in the Goal Envelope AST.
+
+Proof. By structural induction on the template grammar.
+
+Base cases:
+
+BOUNDED_ACTION_SEQUENCE. The denotation is:
+
+\llbracket \text{BOUNDED\_ACTION\_SEQUENCE}(A, M, F) \rrbracket = \{\tau \mid \forall t: \tau_t \in A,\ \forall a: \#_a(\tau) \le M[a],\ \forall (f,t) \in F: \neg(f \prec t \text{ in } \tau)\}.
+
+The compilation is:
+
+\text{compile} = G\left( \bigwedge_{a \in A} X a \right) \wedge G\left( \bigwedge_{(f,t) \in F} (f \to X \neg t) \right) \wedge \bigwedge_{a \in M} (\#a \le M[a]).
+
+A trace satisfies the first conjunct iff every action is in A. It satisfies the second conjunct iff no forbidden transition occurs. It satisfies the third conjunct iff the occurrence count of each action is bounded. Therefore soundness and completeness hold.
+
+DENY_TRANSITION. The denotation is \{\tau \mid \forall t': \tau_{t'} = f \Rightarrow \tau_{t'+1} \neq t\}. The compilation is G(f \to X \neg t). Soundness and completeness follow directly.
+
+REQUIRE_PRIOR. The denotation is \{\tau \mid \forall t': \tau_{t'} = t \Rightarrow \exists t'' < t': \tau_{t''} = p\}. The compilation is G(t \to F p). Soundness and completeness follow from the semantics of the F operator.
+
+RATE_LIMIT. The denotation is \{\tau \mid \forall t': \#_a(\tau_{t' \ldots t'+w}) \le m\}. The compilation is G(\#a \le m \ U \ (w \text{ elapsed})). Soundness and completeness follow from the semantics of the U operator.
+
+Compositional cases:
+
+AND. \llbracket \text{AND}(T_1, T_2) \rrbracket = \llbracket T_1 \rrbracket \cap \llbracket T_2 \rrbracket. The compilation is \text{compile}(T_1) \wedge \text{compile}(T_2). By the induction hypothesis, \tau \models \text{compile}(T_i) \iff \tau \in \llbracket T_i \rrbracket. Therefore \tau \models \text{compile}(T_1) \wedge \text{compile}(T_2) \iff \tau \in \llbracket T_1 \rrbracket \cap \llbracket T_2 \rrbracket.
+
+OR. \llbracket \text{OR}(T_1, T_2) \rrbracket = \llbracket T_1 \rrbracket \cup \llbracket T_2 \rrbracket. The compilation is \text{compile}(T_1) \vee \text{compile}(T_2). By the induction hypothesis, soundness and completeness follow.
+
+UNTIL. \llbracket \text{UNTIL}(T_1, T_2) \rrbracket = \{\tau \mid \exists t: \tau_{t \ldots} \in \llbracket T_2 \rrbracket \wedge \forall t' < t: \tau_{t' \ldots} \in \llbracket T_1 \rrbracket\}. The compilation is \text{compile}(T_1) \ U \ \text{compile}(T_2). By the induction hypothesis, soundness and completeness follow. \square
+
+D.2 Proof of Theorem 5.2 (Trace-Checking Complexity for LTL_f)
+
+Theorem 5.2. For any LTL_f safety or cosafety formula \varphi, monitoring can be carried out by direct trace-checking with polynomial complexity in |\varphi| and |\tau|, without constructing a DFA.
+
+Proof. The result follows from Brunello et al. (2026), who show that all formulas in the safety and cosafety fragments of LTL_f are intentionally safe and intentionally cosafe. For such formulas, the trace-checking problem reduces to evaluating the formula on the finite trace using dynamic programming over the formula structure. The dynamic program has:
+
+· State space: O(|\varphi| \cdot |\tau|) subproblems (one per subformula and trace position).
+· Transition: O(1) per subproblem (standard Boolean and temporal operators).
+· Total complexity: O(|\varphi| \cdot |\tau|).
+
+This is polynomial in both the formula size and the trace length, and avoids the doubly exponential blow-up of DFA construction. \square
+
+D.3 Proof of Hardened Seccomp Non-Bypassability
+
+Definition D.1 (Hardened Seccomp Filter). A seccomp filter F is hardened if it satisfies:
+
+1. ABI validation: F checks AUDIT_ARCH and masks off the x32 bit before comparing syscall numbers.
+2. Full argument check: F reads both the low and high 32 bits of syscall arguments.
+3. FD restriction: F returns SECCOMP_RET_TRACE for dup, dup2, dup3, and fcntl.
+4. Network allowlist: A cgroup BPF egress firewall at connect4/connect6 hooks enforces a per-session allowlist.
+
+Theorem D.1 (Non-Bypassability). Let F be a hardened seccomp filter with syscall surface \Sigma_{\text{allowed}} \subseteq \Sigma_{\text{all}}. Then:
+
+\text{Execute}(q) \;\Longrightarrow\; F(q) \wedge \text{landlock}(q) \wedge \text{netfilter}(q) \wedge \text{ACP-admitted}(q).
+
+Proof. Any q requiring \sigma \notin \Sigma_{\text{allowed}} is blocked at the kernel boundary with EPERM. The ABI validation prevents x32 aliasing, the full argument check prevents 32-bit truncation bypass, the FD restriction prevents file descriptor remapping, and the network allowlist prevents unauthorized egress. Therefore, no q can bypass the filter. The Landlock LSM provides filesystem confinement, and the netfilter/cgroup BPF provides network confinement. The ACP admission is enforced at the application layer. \square
+
+---
+
+Appendix E: Proof of Theorem 6.1 (Intervention Efficiency)
+
+Theorem 6.1. Define \mathrm{IE} = \frac{\text{harm prevented}}{\text{human interventions}}. With threshold \theta and true unsafe rate p_{\text{unsafe}}, false-positive rate \mathrm{FPR}, and detection rate \mathrm{TPR}:
+
+\mathrm{IE} = \frac{\mathrm{TPR}\cdot p_{\text{unsafe}}}{\mathrm{FPR}\cdot(1-p_{\text{unsafe}}) + \mathrm{TPR}\cdot p_{\text{unsafe}}}.
+
+Proof. The total number of interventions is the sum of true positives and false positives:
+
+\text{Interventions} = \mathrm{TPR} \cdot p_{\text{unsafe}} \cdot N + \mathrm{FPR} \cdot (1 - p_{\text{unsafe}}) \cdot N,
+
+where N is the total number of actions. The harm prevented is the number of true positives (each intervention on a truly unsafe action prevents one harm):
+
+\text{Harm prevented} = \mathrm{TPR} \cdot p_{\text{unsafe}} \cdot N.
+
+Dividing:
+
+\mathrm{IE} = \frac{\mathrm{TPR} \cdot p_{\text{unsafe}} \cdot N}{\mathrm{TPR} \cdot p_{\text{unsafe}} \cdot N + \mathrm{FPR} \cdot (1 - p_{\text{unsafe}}) \cdot N} = \frac{\mathrm{TPR} \cdot p_{\text{unsafe}}}{\mathrm{FPR} \cdot (1 - p_{\text{unsafe}}) + \mathrm{TPR} \cdot p_{\text{unsafe}}}. \qquad \square
+
+Corollary E.1. With \mathrm{TPR}=0.94, \mathrm{FPR}=0.042, p_{\text{unsafe}}=0.1, \mathrm{IE}\approx 0.71.
+
+---
+
+Appendix F: Notation Table
+
+Symbol Definition Reference
+S Full context state space §2.1
+\mathcal{A} Action/tool-call space §2.1
+P Transition kernel §2.1
+r Goal-achievement reward §2.1
+c_k Cost function k §2.1
+d_k Cumulative threshold for cost k §2.1
+\gamma Discount factor §2.1
+\sigma Shield operator §2.1
+\sigma_{\text{dist}} Distributional shield §2.3
+\kappa Intervention penalty §2.2
+\mathcal{M}_c Constrained MDP §2.1
+\mathcal{M}_c^\sigma Shield-aware CMDP §2.2
+\mathcal{A}_{\text{feas}}(s) Instantaneously feasible actions at s §2.2
+\phi Abstraction function §2.4
+\bar{S} Abstract state space §2.4
+N Number of abstract states §2.4
+\varepsilon_{\text{abs}} Abstraction error §2.4
+\varepsilon_{\text{thresh}} Abstraction error threshold §2.4
+b_i Per-state abstraction error budget §2.4
+E_t E-process §2.5
+E_t^{\text{reg}} Regularized e-process §2.5
+\beta_i Betting fraction §2.5
+\theta Safety threshold §2.5
+\alpha Type-I error rate §2.5
+\rho(\Theta) Knowledge-based regularization §2.5
+\mathcal{C} Capability set §3.1
+\preceq Capability order §3.1
+R Resource identifier §3.1
+A Action set (capability) §3.1
+\mathcal{C}_{\text{spend}} Spend constraint §3.1
+\mathcal{C}_{\text{depth}} Delegation depth constraint §3.1
+\mathcal{C}_{\text{time}} Time constraint §3.1
+\mathcal{C}_{\text{rep}} Reputation constraint §3.1
+\mathcal{C}_{\text{val}} Value constraint §3.1
+\mathcal{C}_{\text{rev}} Reversibility constraint §3.1
+\mathcal{C}_{\text{comp}} Compensability classification §3.1
+\mathcal{A}_\varphi Büchi automaton for LTL formula \varphi §5.3
+Q Automaton state space §5.3
+\delta Automaton transition function §5.3
+\tau_{\text{fast}} Risk threshold for fast path §4.2
+B Token bucket capacity §4.3
+\rho Token bucket refill rate §4.3
+\hat{r}(a) Estimated risk of action a §4.3
+\epsilon_r Risk estimation error bound §4.3
+\mathrm{IE} Intervention efficiency §6.1
+\mathrm{TPR} True positive rate §6.1
+\mathrm{FPR} False positive rate §6.1
+p_{\text{unsafe}} True unsafe rate §6.1
+\Sigma_{\text{allowed}} Allowed syscall surface §5.1
+\Sigma_{\text{all}} Full syscall set §5.1
+\text{ser}(C) Canonical capability serialization §3.2
+W Authorization witness §3.2
+\llbracket T(p) \rrbracket Denotation of template T with parameters p §5.2
+
+---
+
+Appendix G: Full IBCT Schema
+
+```json
+{
+  "$schema": "https://org.domain/schemas/ibct-v3.json",
+  "ibct_version": "3.1",
+  "chain_id": "chain_7f8a91b2c3d4e5f6",
+  "issuer": "spiffe://org.domain/agent/orchestrator",
+  "subject": "spiffe://org.domain/agent/worker-data-processor",
+  "issued_at": 1789214400,
+  "expires_at": 1789214460,
+  "capabilities": [
+    {
+      "resource": "database/staging/*",
+      "actions": ["read", "write"],
+      "constraints": {
+        "spend": 0.00,
+        "depth": 1,
+        "time": [{"start": "09:00", "end": "17:00", "timezone": "UTC"}],
+        "reputation": 0.8,
+        "values": ["pii_masking_required", "no_external_export"],
+        "reversibility": 0.9,
+        "compensability": "full"
+      }
+    }
+  ],
+  "authorization_witness": {
+    "lattice_position": "sha256:a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e",
+    "constraint_vector_hash": "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+    "parent_witness_hash": "sha256:fcde2b2edba56bf408601fb721fe9b5c338d10ee429ea04fae5511b68fbf8fb9"
+  },
+  "provenance_hash": "sha256:3f79bb7b435b05321651daefd374cdc681dc06faa65e374e38337b88ca046dea",
+  "parent_signature": "ed25519:8f3c...a911",
+  "chain_signature": "ed25519:b721...c004",
+  "signature_algorithm": "Ed25519",
+  "key_id": "spiffe://org.domain/agent/orchestrator/svid-key-2026-09",
+  "revocation": {
+    "bloom_filter_epoch": 42,
+    "crl_url": "https://org.domain/crl/epoch-42.json",
+    "merkle_root": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+  }
+}
+```
+
+G.1 Canonical Serialization Algorithm
+
+```
+Input: Capability C = (R, A, C_spend, C_depth, C_time, C_rep, C_val, C_rev, C_comp)
+Output: byte string ser(C)
+
+1. Serialize R as: len(R) || UTF-8(R)
+2. Sort A lexicographically; for each a in A: len(a) || UTF-8(a)
+3. Serialize C_spend as 64-bit big-endian integer (micro-units)
+4. Serialize C_depth as 64-bit big-endian unsigned integer
+5. Sort C_time by start time; for each interval: 64-bit start || 64-bit end
+6. Serialize C_rep as 16-bit fixed-point (reputation * 65535)
+7. Sort C_val lexicographically; for each v: len(v) || UTF-8(v)
+8. Serialize C_rev as 16-bit fixed-point (reversibility * 65535)
+9. Serialize C_comp as single byte: 0x00 (none), 0x01 (partial), 0x02 (full)
+
+Concatenate in lexicographic order of dimension names:
+  "actions" || "compensability" || "depth" || "reputation" || "resource" || "reversibility" || "spend" || "time" || "values"
+```
+
+---
+
+Appendix H: Goal Envelope AST Grammar (Complete)
+
+```
+Envelope ::= {
+  "template": TemplateName,
+  "parameters": ParameterMap,
+  "composition": CompositionOp | null
+}
+
+CompositionOp ::= {
+  "op": "AND" | "OR" | "UNTIL",
+  "operands": [Envelope, ...]
+}
+
+TemplateName ∈ {
+  "BOUNDED_ACTION_SEQUENCE",
+  "DENY_TRANSITION",
+  "REQUIRE_PRIOR",
+  "RATE_LIMIT",
+  "HUMAN_APPROVAL_GATE",
+  "CONDITIONAL_REQUIREMENT",
+  "TEMPORAL_ORDERING",
+  "DATA_FLOW_CONSTRAINT",
+  "RESOURCE_QUOTA",
+  "GEOGRAPHIC_RESTRICTION",
+  "TEMPORAL_WINDOW",
+  "DELEGATION_DEPTH_LIMIT",
+  "REVERSIBILITY_REQUIREMENT",
+  "REPUTATION_THRESHOLD"
+}
+
+ParameterMap ::= {
+  [key: string]: string | number | boolean | [string] | ParameterMap
+}
+
+-- Template schemas --
+
+BOUNDED_ACTION_SEQUENCE ::= {
+  "allowed_actions": [string],
+  "max_occurrences": { [action: string]: number },
+  "forbidden_transitions": [{"from": string, "to": string}]
+}
+
+DENY_TRANSITION ::= {
+  "from_action": string,
+  "to_action": string
+}
+
+REQUIRE_PRIOR ::= {
+  "prior_action": string,
+  "target_action": string
+}
+
+RATE_LIMIT ::= {
+  "action": string,
+  "max_per_window": number,
+  "window_seconds": number
+}
+
+HUMAN_APPROVAL_GATE ::= {
+  "trigger_action": string,
+  "approval_role": string,
+  "timeout_seconds": number
+}
+
+CONDITIONAL_REQUIREMENT ::= {
+  "condition": string,
+  "required_action": string
+}
+
+TEMPORAL_ORDERING ::= {
+  "first_action": string,
+  "second_action": string,
+  "max_delay_seconds": number
+}
+
+DATA_FLOW_CONSTRAINT ::= {
+  "source": string,
+  "sink": string,
+  "allowed": boolean
+}
+
+RESOURCE_QUOTA ::= {
+  "resource": string,
+  "max_usage": number,
+  "unit": string
+}
+
+GEOGRAPHIC_RESTRICTION ::= {
+  "allowed_regions": [string],
+  "denied_regions": [string]
+}
+
+TEMPORAL_WINDOW ::= {
+  "start_time": string,
+  "end_time": string,
+  "timezone": string
+}
+
+DELEGATION_DEPTH_LIMIT ::= {
+  "max_depth": number
+}
+
+REVERSIBILITY_REQUIREMENT ::= {
+  "min_reversibility": number
+}
+
+REPUTATION_THRESHOLD ::= {
+  "min_reputation": number
+}
+
+-- Compilation to LTL_f --
+
+compile(BOUNDED_ACTION_SEQUENCE) = 
+  G( (∧_{a ∈ allowed_actions} X a) 
+     ∧ G(∧_{(f,t) ∈ forbidden_transitions} (f → X ¬t))
+     ∧ ∧_{a ∈ max_occurrences} (#a ≤ max_occurrences[a]) )
+
+compile(DENY_TRANSITION) = 
+  G( from_action → X ¬to_action )
+
+compile(REQUIRE_PRIOR) = 
+  G( target_action → F prior_action )
+
+compile(RATE_LIMIT) = 
+  G( #action ≤ max_per_window U (window_seconds elapsed) )
+
+compile(HUMAN_APPROVAL_GATE) = 
+  G( trigger_action → (¬trigger_action U approval) )
+
+compile(CONDITIONAL_REQUIREMENT) = 
+  G( condition → X required_action )
+
+compile(TEMPORAL_ORDERING) = 
+  G( first_action → F_{≤max_delay} second_action )
+
+compile(DATA_FLOW_CONSTRAINT) = 
+  G( source ∧ X sink → allowed )
+
+compile(RESOURCE_QUOTA) = 
+  G( Σ_{t} usage(t) ≤ max_usage )
+
+compile(GEOGRAPHIC_RESTRICTION) = 
+  G( region ∈ allowed_regions )
+
+compile(TEMPORAL_WINDOW) = 
+  G( current_time ∈ [start_time, end_time] )
+
+compile(DELEGATION_DEPTH_LIMIT) = 
+  G( delegation_depth ≤ max_depth )
+
+compile(REVERSIBILITY_REQUIREMENT) = 
+  G( reversibility ≥ min_reversibility )
+
+compile(REPUTATION_THRESHOLD) = 
+  G( reputation ≥ min_reputation )
+
+compile(AND(E1, E2)) = compile(E1) ∧ compile(E2)
+compile(OR(E1, E2)) = compile(E1) ∨ compile(E2)
+compile(UNTIL(E1, E2)) = compile(E1) U compile(E2)
+```
+
+---
+
+Appendix I: Hardened Seccomp Specification
+
+I.1 BPF Filter Pseudo-Code
+
+```
+// Hardened seccomp-bpf filter for ACP agent sandbox
+
+// Step 1: Validate architecture
+BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch))
+BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_X86_64, 1, 0)
+BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS)
+
+// Step 2: Load syscall number and mask off x32 bit
+BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr))
+BPF_STMT(BPF_ALU | BPF_AND | BPF_K, ~__X32_SYSCALL_BIT)
+
+// Step 3: Check against allowed syscall list
+// For each allowed syscall σ:
+BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, σ, 0, 1)
+BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW)
+
+// Step 4: Restrict FD manipulation syscalls
+BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_dup, 0, 1)
+BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRACE)
+BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_dup2, 0, 1)
+BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRACE)
+BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_dup3, 0, 1)
+BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRACE)
+BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_fcntl, 0, 1)
+BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRACE)
+
+// Step 5: Default deny with ENOSYS
+BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (ENOSYS & SECCOMP_RET_DATA))
+```
+
+I.2 Cgroup BPF Egress Firewall
+
+```
+// Cgroup BPF program attached to connect4/connect6 hooks
+// Enforces per-session network allowlist
+
+SEC("cgroup/connect4")
+int egress_filter(struct bpf_sock_addr *ctx) {
+    __u32 dst_ip = ctx->user_ip4;
+    __u16 dst_port = ctx->user_port;
+    
+    // Look up destination in session allowlist
+    struct allowlist_entry *entry = bpf_map_lookup_elem(&allowlist, &dst_ip);
+    if (!entry || !(entry->allowed_ports & (1 << dst_port))) {
+        return 0; // EPERM
+    }
+    return 1; // ALLOW
+}
+```
+
+I.3 Formal Non-Bypassability Statement
+
+Let \Sigma_{\text{all}} be the full syscall set and \Sigma_{\text{allowed}} \subseteq \Sigma_{\text{all}} be the allowed subset. The non-bypassability property is:
+
+\text{Execute}(q) \;\Longrightarrow\; \text{seccomp}_{\text{hardened}}(q) \,\wedge\, \text{landlock}(q) \,\wedge\, \text{netfilter}(q) \,\wedge\, \text{ACP-admitted}(q)
+
+Any q requiring \sigma \notin \Sigma_{\text{allowed}} is blocked at the kernel boundary with EPERM, before the ACP is consulted.
+
+---
+
+Appendix J: Threat Model with Quantitative Residual Risk
+
+ID Threat Likelihood Impact Residual Risk Detection Latency Recovery Time
+T1 Prompt injection High Critical Medium Real-time (trace check) Minutes
+T2 Confused deputy Medium High Low Real-time (AST) Minutes
+T3 Privilege escalation Low Critical Very Low Real-time (IBCT) Seconds
+T4 Policy evasion (multi-step) Medium High Low Real-time (LTL) Minutes
+T5 Mid-chain compromise Low High Low Seconds (revocation) Minutes
+T6 Approval fatigue High Medium Medium Hours (audit review) Hours
+T7 Supply-chain (tool) Medium Critical Low Hours (attestation) Hours
+T8 Supply-chain (model) Medium Critical Low Days (attestation) Days
+T9 Policy bundle tampering Low Critical Very Low Seconds (transparency log) Minutes
+T10 Denial-of-wallet High Medium Low Real-time (budget) Seconds
+T11 Memory poisoning Medium High Medium Hours (drift detection) Hours
+T12 Abstraction adversary Low High Medium Real-time (OOD alarm) Minutes
+T13 E-process starvation Medium Medium Medium Hours (periodic sampling) Hours
+T14 Sidecar bypass Low Critical Very Low Real-time (kernel) Seconds
+T15 Audit loss on crash Low High Low Minutes (WAL replay) Minutes
+T16 Shield incompleteness Medium High Medium Days (red-team) Days
+T17 E-process estimation error Low Medium Low Real-time (regularization) Minutes
+T18 Lattice bypass Low High Low Real-time (canonicalization) Minutes
+T19 Two-phase commit race Low Critical Very Low Real-time (hold state) Seconds
+T20 Risk estimation poisoning Low High Medium Hours (conservative bound) Hours
+
+Residual Risk Scale: Very Low (negligible), Low (acceptable with monitoring), Medium (requires active mitigation), High (unacceptable without additional controls), Critical (must be eliminated or accepted at executive level).
+
+---
+
+Appendix K: Glossary
+
+Term Definition
+ACP Agent Control Plane: an admission-controlled intermediary between agent intention and execution
+Attenuation The narrowing of capabilities during delegation; a child capability is always a subset of the parent
+Authorization Witness A cryptographic artifact capturing an agent's position in the authority lattice at execution time
+Betting E-Process A sequential test constructed by betting on the safety outcome; valid under optional stopping
+Bloom Filter A probabilistic data structure for set membership with no false negatives and bounded false positives
+Büchi Automaton A finite automaton accepting infinite words; used for LTL model checking
+Capability A tuple (R, A, \mathcal{C}) representing a resource, action set, and constraint vector
+CID Chain ID: a unique identifier for a delegation chain
+CMDP Constrained Markov Decision Process
+Compensability Classification of an action as fully, partially, or non-compensable
+CRL Certificate Revocation List
+DFA Deterministic Finite Automaton
+Distributional Shield A shield operator acting on policy distributions rather than individual actions
+DTMC Discrete-Time Markov Chain
+E-Process A non-negative supermartingale with expectation at most 1 under the null hypothesis
+EUF-CMA Existential Unforgeability under Chosen Message Attack
+Goal Envelope AST A parameterized template language for authoring formal goals
+GRAPA General Random Adaptive Proportion Algorithm
+IBCT Identity-Bound Capability Token
+LDBA Limit-Deterministic Büchi Automaton
+LTL Linear Temporal Logic
+LTL_f Linear Temporal Logic over finite traces
+NPG-PD Natural Policy Gradient Primal-Dual
+OPA Open Policy Agent
+PAC Probably Approximately Correct
+PCTL Probabilistic Computation Tree Logic
+ProSH Probabilistic Shielding via Risk Augmentation
+PVR Policy Violation Rate
+Regularized E-Process An e-process incorporating knowledge-based regularization while preserving anytime-validity
+SA-CMDP Shield-Aware Constrained MDP
+Saga A pattern for managing distributed transactions with compensating actions
+seccomp-bpf Secure Computing mode with Berkeley Packet Filter; kernel-level syscall filtering
+SVID SPIFFE Verifiable Identity Document
+SPIFFE Secure Production Identity Framework for Everyone
+SPRT Sequential Probability Ratio Test
+SSR Safe Success Rate
+WAL Write-Ahead Log
+
+---
+
+Appendix L: Numerical Estimates for Component-Wise PAC Bounds
+
+L.1 Uniform Bound (Baseline)
+
+For a deployment with N = 5000 abstract states, H = 100, L_\psi = 2.0, \varepsilon_{\text{abs}} = 0.01, \delta = 0.05, and desired \varepsilon = 0.1, with observed variance \hat{\sigma}^2 = 0.01:
+
+n \ge \frac{2 \cdot 0.01 \cdot \log(10^9)}{(0.1 - 0.02)^2 / (2 \cdot 100)^2} + \frac{7 \log(10^9)}{3 \cdot ((0.1 - 0.02) / (2 \cdot 100))^2} \approx 2.6 \times 10^6 + 3.0 \times 10^8.
+
+This is prohibitive for uniform bounds.
+
+L.2 Component-Wise Bound (Proposed)
+
+With sensitivity-weighted allocation, suppose L_\psi^{(ij)} \propto 1/(i+j) (power-law decay). The effective number of sensitive transitions is:
+
+N_{\text{eff}} = \sum_{i,j} \frac{L_\psi^{(ij)}}{L_\psi^{\max}} \approx N \log N \approx 5000 \cdot 8.5 \approx 4.25 \times 10^4.
+
+The sample complexity reduces to:
+
+n_{ij} \ge \frac{7 L_\psi^{(ij)} H \log(2/\delta_{ij})}{3 \varepsilon_{ij}} \approx \frac{7 \cdot 0.5 \cdot 100 \cdot \log(2 \cdot 10^5)}{3 \cdot 0.02} \approx 2.4 \times 10^4.
+
+This is a reduction of four orders of magnitude compared to the uniform bound.
+
+L.3 Sequential Bound (Fixed-Confidence)
+
+Using a fixed-confidence sequential bound with the e-process, the expected sample size to achieve \varepsilon = 0.1 with confidence 1 - \delta = 0.95 is:
+
+\mathbb{E}[n] \approx \frac{2 \log(1/\alpha)}{\mathrm{KL}(P_{\text{alt}} \| P_{\text{null}})} \approx \frac{2 \log(20)}{0.01} \approx 600.
+
+This is a further reduction of two orders of magnitude, at the cost of requiring a fixed alternative for the SPRT.
+
+---
+
+Appendix M: Implementation Roadmap
+
+M.1 Phase 1: Identity and Capability Foundation
+
+1. Deploy SPIFFE/SPIRE for SVID issuance.
+2. Implement IBCT schema v3.1 with canonical serialization.
+3. Implement Bloom filter revocation with CRL fallback.
+4. Deploy OPA with basic capability policies.
+
+M.2 Phase 2: Shield and Admission
+
+1. Implement hard shield with feasible action set computation.
+2. Implement intervention penalty in the CMDP formulation.
+3. Implement token-bucket risk budget with error margin.
+4. Implement two-phase admission with WAL.
+
+M.3 Phase 3: Monitoring and Verification
+
+1. Implement regularized e-process with GRAPA adaptive betting.
+2. Implement component-wise PAC bound for offline certification.
+3. Implement LTL_f trace checker and incremental automaton monitor.
+4. Implement Goal Envelope AST compiler.
+
+M.4 Phase 4: Hardening and Evaluation
+
+1. Implement hardened seccomp filter with ABI validation and FD restriction.
+2. Implement cgroup BPF egress firewall.
+3. Implement Landlock filesystem confinement.
+4. Run ablation studies and benchmark suite.
+5. Conduct red-team testing against threat model T1–T20.
+
+M.5 Phase 5: Production Deployment
+
+1. Deploy ACP gateway on network path.
+2. Integrate with tool registry and model attestation.
+3. Deploy Merkle-checkpointed audit log with WAL.
+4. Monitor PVR, IE, SSR, IL, and other metrics.
+5. Iterate on abstraction refinement and policy tuning.
+
+ASCII Diagrams: Agent Control Plane v3.1
+
+---
+
+1. Overall System Architecture — Five-Layer Reference Model
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                          AGENT CONTROL PLANE (ACP) — v3.1                           │
+│                                                                                     │
+│  ┌───────────────────────────────────────────────────────────────────────────────┐  │
+│  │  LAYER 5 — AUDIT PLANE                                                        │  │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │  │
+│  │  │ Merkle Log   │  │ WAL + fsync  │  │ Replay       │  │ Near-Miss    │       │  │
+│  │  │ (SHA-256)    │  │ (durable)    │  │ Verifier     │  │ Detector     │       │  │
+│  │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘       │  │
+│  └─────────┼─────────────────┼─────────────────┼─────────────────┼───────────────┘  │
+│            │                 │                 │                 │                  │
+│  ┌─────────┼─────────────────┼─────────────────┼─────────────────┼───────────────┐  │
+│  │  LAYER 4 — EXECUTION PLANE                                                   │  │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │  │
+│  │  │ Sandboxed    │  │ Saga         │  │ Tool         │  │ Compensation │       │  │
+│  │  │ Tool Invoke  │  │ Orchestrator │  │ Registry     │  │ Executor     │       │  │
+│  │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘       │  │
+│  └─────────┼─────────────────┼─────────────────┼─────────────────┼───────────────┘  │
+│            │                 │                 │                 │                  │
+│  ┌─────────┼─────────────────┼─────────────────┼─────────────────┼───────────────┐  │
+│  │  LAYER 3 — DECISION PLANE                                                    │  │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │  │
+│  │  │ SA-CMDP      │  │ Regularized  │  │ Risk Budget  │  │ Bifurcated   │       │  │
+│  │  │ Shield σ     │  │ E-Process    │  │ Token Bucket │  │ Admission    │       │  │
+│  │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘       │  │
+│  └─────────┼─────────────────┼─────────────────┼─────────────────┼───────────────┘  │
+│            │                 │                 │                 │                  │
+│  ┌─────────┼─────────────────┼─────────────────┼─────────────────┼───────────────┐  │
+│  │  LAYER 2 — POLICY PLANE                                                      │  │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │  │
+│  │  │ OPA / Rego   │  │ Goal Envelope│  │ LTL_f        │  │ Abstraction  │       │  │
+│  │  │ Evaluator    │  │ AST Compiler │  │ Monitor      │  │ Refiner      │       │  │
+│  │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘       │  │
+│  └─────────┼─────────────────┼─────────────────┼─────────────────┼───────────────┘  │
+│            │                 │                 │                 │                  │
+│  ┌─────────┼─────────────────┼─────────────────┼─────────────────┼───────────────┐  │
+│  │  LAYER 1 — IDENTITY PLANE                                                    │  │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │  │
+│  │  │ SPIFFE/SPIRE │  │ IBCT Chain   │  │ Revocation   │  │ Authorization│       │  │
+│  │  │ SVID Verify  │  │ Verify       │  │ Bloom + CRL  │  │ Witness      │       │  │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘       │  │
+│  └───────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                     │
+│  ┌───────────────────────────────────────────────────────────────────────────────┐  │
+│  │  KERNEL ENFORCEMENT (below all layers)                                        │  │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │  │
+│  │  │ seccomp-bpf  │  │ Landlock LSM │  │ cgroup BPF   │  │ Auditd       │       │  │
+│  │  │ (hardened)   │  │ (filesystem) │  │ (egress)     │  │ (syscall)    │       │  │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘       │  │
+│  └───────────────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+2. SA-CMDP Decision Flow
+
+```
+                         ┌─────────────────────────────────────┐
+                         │      AGENT PROPOSES ACTION a        │
+                         │      from policy π_θ(s, ·)          │
+                         └─────────────────┬───────────────────┘
+                                           │
+                                           ▼
+                         ┌─────────────────────────────────────┐
+                         │   STATE s ∈ S (full context)        │
+                         │   + abstraction φ(s) = s̄ ∈ S̄       │
+                         └─────────────────┬───────────────────┘
+                                           │
+                                           ▼
+                    ┌──────────────────────────────────────────────┐
+                    │           HARD SHIELD σ(s, a)                │
+                    │                                              │
+                    │   A_feas(s) = { a' ∈ A |                    │
+                    │       ∀k: c_k(s,a') ≤ d_k^inst  ∧           │
+                    │       (s', q') ∉ F_bad }                    │
+                    │                                              │
+                    │   ┌──────────────────────────────────────┐   │
+                    │   │  Is a ∈ A_feas(s)?                   │   │
+                    │   └──────┬───────────────────────┬───────┘   │
+                    │          │ YES                   │ NO        │
+                    │          ▼                       ▼           │
+                    │   ┌─────────────┐        ┌────────────────┐  │
+                    │   │ σ(s,a) = a  │        │ Is A_feas≠∅?   │  │
+                    │   │ (no inter-  │        └───┬────────┬───┘  │
+                    │   │  vention)   │            │ YES    │ NO   │
+                    │   └──────┬──────┘            ▼        ▼      │
+                    │          │          ┌───────────┐ ┌────────┐ │
+                    │          │          │ σ(s,a) =  │ │ σ = ⊥  │ │
+                    │          │          │ a_safe =  │ │ DENY   │ │
+                    │          │          │ argmin    │ │ + near-│ │
+                    │          │          │ ‖a-a_prop‖│ │ miss   │ │
+                    │          │          └─────┬─────┘ └───┬────┘ │
+                    │          │                │           │      │
+                    └──────────┼────────────────┼───────────┼──────┘
+                               │                │           │
+                               ▼                ▼           ▼
+                    ┌──────────────────────────────────────────────┐
+                    │   INTERVENTION PENALTY                       │
+                    │   r^σ(s,a) = r(s,σ(s,a))                     │
+                    │             - κ · 1[σ(s,a) ≠ a]              │
+                    │                                              │
+                    │   c_k^σ(s,a) = c_k(s, σ(s,a))                │
+                    └─────────────────┬────────────────────────────┘
+                                      │
+                                      ▼
+                    ┌──────────────────────────────────────────────┐
+                    │   SHIELD-AWARE TRANSITION KERNEL             │
+                    │                                              │
+                    │   P^σ(s'|s,a) = P(s'|s, σ(s,a))   if σ ∈ A   │
+                    │                 1[s' = s_⊥]         if σ = ⊥  │
+                    └─────────────────┬────────────────────────────┘
+                                      │
+                                      ▼
+                    ┌──────────────────────────────────────────────┐
+                    │   NPG-PD CONVERGENCE (Thm 2.3)               │
+                    │                                              │
+                    │   J_r^{σ,*} - J_r^σ(π_T) ≤ C_1 / √T          │
+                    │   [J_{c_k}^σ(π_T) - d_k]^+ ≤ C_2 / √T        │
+                    └──────────────────────────────────────────────┘
+```
+
+---
+
+3. Shield-Aware CMDP — Mathematical Object Map
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                          SA-CMDP: M_c^σ = ⟨S, A, P^σ, r^σ, {c_k^σ}, d, γ⟩           │
+│                                                                                     │
+│   ┌─────────────────┐         ┌─────────────────┐         ┌─────────────────┐       │
+│   │  UNShielded     │         │  SHIELD σ       │         │  SHIELD-AWARE   │       │
+│   │  CMDP M_c       │────────▶│  OPERATOR       │────────▶│  CMDP M_c^σ     │       │
+│   │                 │         │                 │         │                 │       │
+│   │  P(s'|s,a)      │         │  A_feas(s)      │         │  P^σ(s'|s,a)    │       │
+│   │  r(s,a)         │         │  a_safe         │         │  r^σ(s,a)       │       │
+│   │  c_k(s,a)       │         │  ⊥ (DENY)       │         │  c_k^σ(s,a)     │       │
+│   └─────────────────┘         └─────────────────┘         └─────────────────┘       │
+│                                                                                     │
+│   POLICY-SHIELD MISMATCH RESOLUTION:                                                │
+│                                                                                     │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  Before: π* optimized for P(s'|s,a)  →  shield filters → realized dist ≠   │   │
+│   │          the one π* was optimized for → soundness gap                       │   │
+│   │                                                                             │   │
+│   │  After:  π* optimized for P^σ(s'|s,a)  →  shield integrated → no gap       │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                     │
+│   LEARNABILITY CONDITION (replaces value-dominance):                                │
+│                                                                                     │
+│   V_{c_k}^{σ,π}(s₀) ≤ V_{c_k}^{π}(s₀) + κ · E_π[Σ_t γ^t 1[σ(s_t,a_t) ≠ a_t]]     │
+│                                                                                     │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  Interpretation: shield can increase cumulative cost by at most the          │   │
+│   │  discounted intervention frequency times penalty κ. This is the correct      │   │
+│   │  relaxation — value-dominance is too strong.                                 │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+4. Bifurcated Execution Pipeline
+
+```
+                    ┌───────────────────────────────────────────┐
+                    │   TOOL CALL REQUEST q = (s, a, ctx)       │
+                    └─────────────────────┬─────────────────────┘
+                                          │
+                                          ▼
+                    ┌───────────────────────────────────────────┐
+                    │   ESTIMATE RISK r̂(a) + ε_r                │
+                    └─────────────────────┬─────────────────────┘
+                                          │
+                          ┌───────────────┴───────────────┐
+                          │                               │
+                          ▼                               ▼
+              ┌───────────────────────┐       ┌───────────────────────┐
+              │  r̂(a) < τ_fast        │       │  r̂(a) ≥ τ_fast        │
+              │  (LOW RISK)           │       │  (HIGH RISK)          │
+              └───────────┬───────────┘       └───────────┬───────────┘
+                          │                               │
+                          ▼                               ▼
+              ┌───────────────────────┐       ┌───────────────────────┐
+              │  FAST PATH            │       │  TWO-PHASE ADMISSION  │
+              │                       │       │                       │
+              │  1. SPIFFE verify     │       │  PHASE 1 (PREPARE):   │
+              │  2. IBCT verify       │       │  - PROVISIONAL_ALLOW  │
+              │  3. OPA capability    │       │  - Hold action        │
+              │  4. Bloom revocation  │       │  - WAL write + fsync  │
+              │  5. Shield σ          │       │                       │
+              │  6. Token bucket      │       │  PHASE 2 (COMMIT):    │
+              │     consume r̂+ε_r     │       │  - Slow-path evaluate │
+              │  7. WAL write + fsync │       │  - If ALLOW: commit   │
+              │  8. EXECUTE           │       │  - If DENY: abort     │
+              │                       │       │  - If partial: saga   │
+              │  Latency: ≤ 23 ms     │       │                       │
+              └───────────┬───────────┘       │  Latency: ≤ 150 ms    │
+                          │                   └───────────┬───────────┘
+                          │                               │
+                          │                               ▼
+                          │               ┌───────────────────────────────┐
+                          │               │  SLOW PATH COMPONENTS         │
+                          │               │                               │
+                          │               │  1. DTMC abstraction check    │
+                          │               │  2. Regularized e-process     │
+                          │               │  3. LTL_f trace verifier      │
+                          │               │  4. Contextual risk OPA       │
+                          │               │  5. Compensability routing    │
+                          │               └───────────────┬───────────────┘
+                          │                               │
+                          │               ┌───────────────┴───────────────┐
+                          │               │                               │
+                          │               ▼                               ▼
+                          │   ┌───────────────────────┐   ┌───────────────────────┐
+                          │   │  comp(a) = FULL       │   │  comp(a) = NONE       │
+                          │   │  → saga compensation  │   │  → human approval     │
+                          │   │    registered         │   │    required           │
+                          │   └───────────┬───────────┘   └───────────┬───────────┘
+                          │               │                           │
+                          │               ▼                           ▼
+                          │   ┌───────────────────────┐   ┌───────────────────────┐
+                          │   │  comp(a) = PARTIAL    │   │  ESCALATE to human    │
+                          │   │  → best-effort        │   │  - Timeout: DENY      │
+                          │   │    rollback + log     │   │  - Approve: EXECUTE   │
+                          │   └───────────┬───────────┘   └───────────┬───────────┘
+                          │               │                           │
+                          └───────────────┴───────────────┬───────────┘
+                                                          │
+                                                          ▼
+                                          ┌───────────────────────────────┐
+                                          │   FINAL DECISION              │
+                                          │   ALLOW / DENY / MODIFY /     │
+                                          │   DELAY / ESCALATE / ROLLBACK │
+                                          └───────────────────────────────┘
+```
+
+---
+
+5. Capability Lattice — Eight Dimensions (+ Compensability)
+
+```
+                    ┌─────────────────────────────────────────────────────────────┐
+                    │              CAPABILITY LATTICE (C, ⪯)                      │
+                    │                                                             │
+                    │   C = (R, A, C_spend, C_depth, C_time, C_rep, C_val,       │
+                    │        C_rev, C_comp)                                       │
+                    │                                                             │
+                    │   ┌─────────────────────────────────────────────────────┐   │
+                    │   │  DIMENSION       ORDER              MEET    JOIN    │   │
+                    │   ├─────────────────────────────────────────────────────┤   │
+                    │   │  Resource R      ⊆_prefix            ∩       ∪       │   │
+                    │   │  Action A        ⊆                   ∩       ∪       │   │
+                    │   │  Spend           ≤ (reverse)         max     min     │   │
+                    │   │  Depth           ≤ (reverse)         max     min     │   │
+                    │   │  Time            ⊆                   ∩       ∪       │   │
+                    │   │  Reputation      ≥ (direct)          min     max     │   │
+                    │   │  Values          ⊆                   ∩       ∪       │   │
+                    │   │  Reversibility   ≥ (direct)          min     max     │   │
+                    │   │  Compensability  ⪯_comp              min     max     │   │
+                    │   └─────────────────────────────────────────────────────┘   │
+                    │                                                             │
+                    │   PRODUCT LATTICE: C = R × 2^A × [0,∞]_rev × N_rev ×       │
+                    │                      2^T × [0,1] × 2^V × [0,1] ×           │
+                    │                      {none, partial, full}                  │
+                    │                                                             │
+                    │   THEOREM 3.1: (C, ⪯) is a COMPLETE LATTICE                │
+                    │   (product of complete lattices is complete)                │
+                    └─────────────────────────────────────────────────────────────┘
+
+                    ┌─────────────────────────────────────────────────────────────┐
+                    │              ATTENUATION MONOTONICITY                       │
+                    │                                                             │
+                    │   Parent C_p  ──────delegate──────▶  Child C_c              │
+                    │                                                             │
+                    │   C_c ⪯ C_p  ⟺  ALL of:                                    │
+                    │     R_c ⊆_prefix R_p                                        │
+                    │     A_c ⊆ A_p                                               │
+                    │     C_c.spend ≤ C_p.spend                                   │
+                    │     C_c.depth ≤ C_p.depth                                   │
+                    │     C_c.time ⊆ C_p.time                                     │
+                    │     C_c.rep ≥ C_p.rep                                       │
+                    │     C_c.val ⊆ C_p.val                                       │
+                    │     C_c.rev ≥ C_p.rev                                       │
+                    │     C_c.comp ⪯_comp C_p.comp                                │
+                    │                                                             │
+                    │   THM 3.2: communication ≠ authorization                    │
+                    │   (no unsigned edge can extend the chain)                   │
+                    └─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+6. Delegation Chain — IBCT Structure
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                              DELEGATION CHAIN                                       │
+│                                                                                     │
+│   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐          │
+│   │  ROOT       │    │  ORCHESTR.  │    │  WORKER     │    │  SUB-WORKER │          │
+│   │  ISSUER     │───▶│  AGENT      │───▶│  AGENT      │───▶│  AGENT      │          │
+│   │             │    │             │    │             │    │             │          │
+│   │ C_0 (max)   │    │ C_1 ⪯ C_0   │    │ C_2 ⪯ C_1   │    │ C_3 ⪯ C_2   │          │
+│   └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘          │
+│         │                  │                  │                  │                  │
+│         ▼                  ▼                  ▼                  ▼                  │
+│   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐          │
+│   │ IBCT_0      │    │ IBCT_1      │    │ IBCT_2      │    │ IBCT_3      │          │
+│   │ sig_root    │    │ sig_0→1     │    │ sig_1→2     │    │ sig_2→3     │          │
+│   │ witness_0   │    │ witness_1   │    │ witness_2   │    │ witness_3   │          │
+│   └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘          │
+│                                                                                     │
+│   CHAIN VERIFICATION:                                                               │
+│                                                                                     │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  1. Verify sig_root (EUF-CMA)                                               │   │
+│   │  2. For i = 0..n-1:                                                         │   │
+│   │       Verify sig_i→i+1 (EUF-CMA)                                            │   │
+│   │       Check C_{i+1} ⪯ C_i (monotone attenuation)                            │   │
+│   │       Check parent_witness_hash matches                                     │   │
+│   │  3. Check CID not in Bloom filter (revocation)                              │   │
+│   │  4. Check expires_at > now                                                  │   │
+│   │  5. Check lattice_position = SHA-256(ser(C_n))                              │   │
+│   │                                                                             │   │
+│   │  IF all pass:  ValidDelegationChain = TRUE                                  │   │
+│   │  ELSE:         DENY + structured denial diagnostic                          │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                     │
+│   COMMUNICATION vs AUTHORIZATION:                                                   │
+│                                                                                     │
+│   ┌──────────┐   message m    ┌──────────┐                                          │
+│   │  Agent A │───────────────▶│  Agent B │                                          │
+│   └──────────┘                └──────────┘                                          │
+│        │                           │                                                │
+│        │  m is NOT a signed edge   │  B cannot acquire A's capabilities            │
+│        │  m does NOT extend chain  │  unless a signed edge (T_A → T_B) exists      │
+│        │                           │                                                │
+│        ▼                           ▼                                                │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  THM 3.2: If no signed edge exists, forgery reduces to EUF-CMA break.       │   │
+│   │  Therefore: communication cannot grant new privileges.                      │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+7. Regularized E-Process Monitoring
+
+```
+                    ┌───────────────────────────────────────────┐
+                    │   OBSERVED SAFETY OUTCOME X_i ∈ {0,1}     │
+                    │   X_i = 1: safe, X_i = 0: unsafe          │
+                    └─────────────────────┬─────────────────────┘
+                                          │
+                                          ▼
+                    ┌───────────────────────────────────────────┐
+                    │   NULL HYPOTHESIS H_0: P_safe ≥ θ          │
+                    └─────────────────────┬─────────────────────┘
+                                          │
+                                          ▼
+                    ┌───────────────────────────────────────────┐
+                    │   BETTING FRACTION β_i ∈ [0, 1/θ]          │
+                    │   (predictable, F_{i-1}-measurable)        │
+                    │                                           │
+                    │   GRAPA update:                            │
+                    │   β_i = argmax_β E_{P_est}[log(1+β(X_i-θ))]│
+                    └─────────────────────┬─────────────────────┘
+                                          │
+                                          ▼
+                    ┌───────────────────────────────────────────┐
+                    │   E-VALUE: E_i = 1 + β_i (X_i - θ)         │
+                    └─────────────────────┬─────────────────────┘
+                                          │
+                                          ▼
+                    ┌───────────────────────────────────────────┐
+                    │   REGULARIZATION ρ(Θ)                     │
+                    │   (knowledge-based prior from abstraction)│
+                    │                                           │
+                    │   E_i^reg = [ρ(Θ)·1_{ρ<1} + E_i·ρ(Θ)·1_{ρ≥1}]│
+                    │             / ρ(Θ)                        │
+                    └─────────────────────┬─────────────────────┘
+                                          │
+                                          ▼
+                    ┌───────────────────────────────────────────┐
+                    │   E-PROCESS: E_t^reg = Π_{i=0}^t E_i^reg   │
+                    └─────────────────────┬─────────────────────┘
+                                          │
+                          ┌───────────────┴───────────────┐
+                          │                               │
+                          ▼                               ▼
+              ┌───────────────────────┐       ┌───────────────────────┐
+              │  E_t^reg < 1/α        │       │  E_t^reg ≥ 1/α        │
+              │  (no evidence)        │       │  (evidence against H_0)│
+              │                       │       │                       │
+              │  CONTINUE MONITORING  │       │  REJECT H_0           │
+              │                       │       │  ESCALATE / INTERVENE │
+              └───────────────────────┘       └───────────────────────┘
+
+                    ┌───────────────────────────────────────────┐
+                    │   THEOREM 2.7: ANYTIME-VALIDITY            │
+                    │                                           │
+                    │   Pr(∃t: E_t^reg ≥ 1/α | H_0) ≤ α          │
+                    │                                           │
+                    │   Valid for ANY stopping time τ           │
+                    │   Valid for ANY data-dependent rule       │
+                    │   Valid for ANY N                         │
+                    └───────────────────────────────────────────┘
+
+                    ┌───────────────────────────────────────────┐
+                    │   SCOPE COMPARISON                        │
+                    │                                           │
+                    │   Marginal e-process:  P_safe ≥ θ         │
+                    │   Regularized e-process: state-dependent  │
+                    │   SPRT e-process:      needs known kernels│
+                    └───────────────────────────────────────────┘
+```
+
+---
+
+8. PAC Abstraction and Refinement
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                         ABSTRACTION PIPELINE                                        │
+│                                                                                     │
+│   ┌─────────────────────┐                                                           │
+│   │  RAW STATE SPACE S  │  (uncountable)                                            │
+│   │  s ∈ S              │                                                           │
+│   └──────────┬──────────┘                                                           │
+│              │                                                                      │
+│              ▼                                                                      │
+│   ┌─────────────────────┐                                                           │
+│   │  ABSTRACTION φ      │  φ: S → S̄,  |S̄| = N < ∞                                  │
+│   │  s ↦ s̄              │                                                           │
+│   └──────────┬──────────┘                                                           │
+│              │                                                                      │
+│              ▼                                                                      │
+│   ┌─────────────────────┐                                                           │
+│   │  ABSTRACT DTMC M̄    │  P̄(s̄'|s̄) estimated from traces                             │
+│   │                     │                                                           │
+│   │  For each (s̄, a):   │                                                           │
+│   │    n samples        │                                                           │
+│   │    σ̂² observed      │                                                           │
+│   │    δ_ij error budget│                                                           │
+│   └──────────┬──────────┘                                                           │
+│              │                                                                      │
+│              ▼                                                                      │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  COMPONENT-WISE PAC BOUND (Thm 2.4)                                         │   │
+│   │                                                                             │   │
+│   │  |P_M̄[ψ] - P_M[ψ]| ≤ Σ_{i,j} L_ψ^(ij) H [                                    │   │
+│   │       √(2σ̂²_ij log(2/δ_ij)/n_ij) + 7log(2/δ_ij)/(3(n_ij-1)) ]               │   │
+│   │       + L_ψ ε_abs                                                           │   │
+│   │                                                                             │   │
+│   │  where Σ_{i,j} δ_ij ≤ δ                                                     │   │
+│   └──────────┬──────────────────────────────────────────────────────────────────┘   │
+│              │                                                                      │
+│              ▼                                                                      │
+│   ┌─────────────────────┐                                                           │
+│   │  PER-STATE BUDGET   │  b_i^(t+1) = max(0, b_i^(t) + ε_thresh - ε̂_i^(t))       │
+│   │                     │                                                           │
+│   │  Refine when b_i=0  │                                                           │
+│   └──────────┬──────────┘                                                           │
+│              │                                                                      │
+│              ▼                                                                      │
+│   ┌─────────────────────┐                                                           │
+│   │  REFINEMENT ACTION  │  Split state s̄_i into sub-states                          │
+│   │                     │  Update abstraction φ                                      │
+│   │                     │  Re-run PAC bound                                          │
+│   └─────────────────────┘                                                           │
+│                                                                                     │
+│   SAMPLE COMPLEXITY COMPARISON:                                                     │
+│                                                                                     │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  UNIFORM BOUND (baseline):     n ≈ 3.0 × 10^8 samples                       │   │
+│   │  COMPONENT-WISE BOUND:         n ≈ 2.4 × 10^4 samples                       │   │
+│   │  SEQUENTIAL BOUND:             E[n] ≈ 600 samples                           │   │
+│   │                                                                             │   │
+│   │  Reduction: 4 orders of magnitude (uniform → component-wise)                │   │
+│   │             6 orders of magnitude (uniform → sequential)                    │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+9. Goal Envelope AST — Compilation Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                         GOAL ENVELOPE AST PIPELINE                                  │
+│                                                                                     │
+│   ┌─────────────────────┐                                                           │
+│   │  HUMAN AUTHOR       │  (NOT auto-generated for high-risk envelopes)             │
+│   │  writes template    │                                                           │
+│   └──────────┬──────────┘                                                           │
+│              │                                                                      │
+│              ▼                                                                      │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  ENVELOPE AST                                                               │   │
+│   │                                                                             │   │
+│   │  {                                                                          │   │
+│   │    "template": "BOUNDED_ACTION_SEQUENCE",                                   │   │
+│   │    "parameters": {                                                          │   │
+│   │      "allowed_actions": ["read", "query"],                                  │   │
+│   │      "max_occurrences": {"read": 10, "query": 5},                           │   │
+│   │      "forbidden_transitions": [{"from": "read", "to": "delete"}]            │   │
+│   │    },                                                                       │   │
+│   │    "composition": {                                                         │   │
+│   │      "op": "AND",                                                           │   │
+│   │      "operands": [ ... ]                                                    │   │
+│   │    }                                                                        │   │
+│   │  }                                                                          │   │
+│   └──────────┬──────────────────────────────────────────────────────────────────┘   │
+│              │                                                                      │
+│              ▼                                                                      │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  COMPILATION FUNCTION compile: Template → LTL_f                             │   │
+│   │                                                                             │   │
+│   │  BOUNDED_ACTION_SEQUENCE:                                                   │   │
+│   │    G( ∧_{a∈allowed} X a ∧ G(∧_{(f,t)∈forbidden}(f→X¬t)) ∧                   │   │
+│   │       ∧_{a∈max_occ}(#a ≤ max_occ[a]) )                                      │   │
+│   │                                                                             │   │
+│   │  DENY_TRANSITION:   G( from → X ¬to )                                       │   │
+│   │  REQUIRE_PRIOR:     G( target → F prior )                                   │   │
+│   │  RATE_LIMIT:        G( #action ≤ m U (w elapsed) )                          │   │
+│   │  AND(E1,E2):        compile(E1) ∧ compile(E2)                               │   │
+│   │  OR(E1,E2):         compile(E1) ∨ compile(E2)                               │   │
+│   │  UNTIL(E1,E2):      compile(E1) U compile(E2)                               │   │
+│   └──────────┬──────────────────────────────────────────────────────────────────┘   │
+│              │                                                                      │
+│              ▼                                                                      │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  SOUNDNESS & COMPLETENESS (Thm 5.1)                                         │   │
+│   │                                                                             │   │
+│   │  τ ⊨ compile(T(p))  ⟺  τ ∈ ⟦T(p)⟧                                          │   │
+│   │                                                                             │   │
+│   │  Proven by structural induction on template grammar                         │   │
+│   └──────────┬──────────────────────────────────────────────────────────────────┘   │
+│              │                                                                      │
+│              ▼                                                                      │
+│   ┌─────────────────────┐                                                           │
+│   │  LTL_f FORMULA      │  φ ∈ LTL_f                                                │
+│   └──────────┬──────────┘                                                           │
+│              │                                                                      │
+│              ▼                                                                      │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  MONITORING — TWO TIER                                                      │   │
+│   │                                                                             │   │
+│   │  ┌──────────────────────────┐    ┌──────────────────────────────────────┐   │   │
+│   │  │  FAST PATH               │    │  SLOW PATH                           │   │   │
+│   │  │  Automaton-based         │    │  Trace-checking                      │   │   │
+│   │  │                          │    │                                      │   │   │
+│   │  │  q_{t+1} = δ(q_t, L_t)   │    │  Dynamic programming over            │   │   │
+│   │  │                          │    │  formula structure                   │   │   │
+│   │  │  O(1) per step           │    │                                      │   │   │
+│   │  │  (hash table δ)          │    │  O(|φ| · |τ|)                        │   │   │
+│   │  │                          │    │                                      │   │   │
+│   │  │  For known AST templates │    │  For full-trace evaluation           │   │   │
+│   │  └──────────────────────────┘    └──────────────────────────────────────┘   │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+10. Hardened Kernel Enforcement — Layered Defense
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                         KERNEL ENFORCEMENT STACK                                    │
+│                                                                                     │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  USER SPACE                                                                 │   │
+│   │                                                                             │   │
+│   │   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐                    │   │
+│   │   │  Agent      │    │  ACP        │    │  Tool       │                    │   │
+│   │   │  Process    │───▶│  Gateway    │───▶│  Process    │                    │   │
+│   │   └─────────────┘    └─────────────┘    └─────────────┘                    │   │
+│   │         │                  │                  │                            │   │
+│   │         │ syscall          │ syscall          │ syscall                    │   │
+│   │         ▼                  ▼                  ▼                            │   │
+│   └─────────┼──────────────────┼──────────────────┼────────────────────────────┘   │
+│             │                  │                  │                                │
+│   ┌─────────┼──────────────────┼──────────────────┼────────────────────────────┐   │
+│   │  KERNEL │                  │                  │                            │   │
+│   │         ▼                  ▼                  ▼                            │   │
+│   │   ┌─────────────────────────────────────────────────────────────────────┐   │   │
+│   │   │  LAYER 1: seccomp-bpf (HARDENED)                                   │   │   │
+│   │   │                                                                     │   │   │
+│   │   │  1. Validate AUDIT_ARCH (x86_64 only)                               │   │   │
+│   │   │  2. Mask off x32 bit before syscall comparison                      │   │   │
+│   │   │  3. Check full 64-bit arguments (low + high 32 bits)               │   │   │
+│   │   │  4. SECCOMP_RET_TRACE for dup, dup2, dup3, fcntl                   │   │   │
+│   │   │  5. Default: SECCOMP_RET_ERRNO | ENOSYS                             │   │   │
+│   │   │                                                                     │   │   │
+│   │   │  Σ_allowed = { read, write, openat, close, mmap, ... }             │   │   │
+│   │   │  Any σ ∉ Σ_allowed → EPERM before ACP consulted                    │   │   │
+│   │   └─────────────────────────────────────────────────────────────────────┘   │   │
+│   │         │                                                                  │   │
+│   │         ▼                                                                  │   │
+│   │   ┌─────────────────────────────────────────────────────────────────────┐   │   │
+│   │   │  LAYER 2: Landlock LSM                                             │   │   │
+│   │   │                                                                     │   │   │
+│   │   │  Filesystem confinement:                                            │   │   │
+│   │   │    - Read-only access to /usr, /lib                                 │   │   │
+│   │   │    - Read-write access to /tmp/agent-sandbox-<id>                   │   │   │
+│   │   │    - No access to /etc, /root, /home                                │   │   │
+│   │   │    - No access to /proc/<other-pid>                                 │   │   │
+│   │   └─────────────────────────────────────────────────────────────────────┘   │   │
+│   │         │                                                                  │   │
+│   │         ▼                                                                  │   │
+│   │   ┌─────────────────────────────────────────────────────────────────────┐   │   │
+│   │   │  LAYER 3: cgroup BPF egress firewall                               │   │   │
+│   │   │                                                                     │   │   │
+│   │   │  Attached to connect4/connect6 hooks                                │   │   │
+│   │   │  Per-session allowlist:                                             │   │   │
+│   │   │    - dst_ip ∈ allowed_ips                                           │   │   │
+│   │   │    - dst_port ∈ allowed_ports                                       │   │   │
+│   │   │    - else → EPERM                                                   │   │   │
+│   │   │                                                                     │   │   │
+│   │   │  Prevents: direct tool invocation via network sockets               │   │   │
+│   │   └─────────────────────────────────────────────────────────────────────┘   │   │
+│   │         │                                                                  │   │
+│   │         ▼                                                                  │   │
+│   │   ┌─────────────────────────────────────────────────────────────────────┐   │   │
+│   │   │  LAYER 4: Auditd                                                    │   │   │
+│   │   │                                                                     │   │   │
+│   │   │  Syscall audit log:                                                 │   │   │
+│   │   │    - SHA-256 sealed                                                 │   │   │
+│   │   │    - Chained into receipt log                                       │   │   │
+│   │   │    - Tamper-evident                                                 │   │   │
+│   │   └─────────────────────────────────────────────────────────────────────┘   │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                     │
+│   FORMAL NON-BYPASSABILITY:                                                         │
+│                                                                                     │
+│   Execute(q) ⟹ seccomp_hardened(q) ∧ landlock(q) ∧ netfilter(q) ∧ ACP-admitted(q)  │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+11. Threat Model — Attack Surface and Mitigations
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                         THREAT SURFACE MAP                                          │
+│                                                                                     │
+│                        ┌─────────────────────────────┐                             │
+│                        │      ATTACK VECTORS         │                             │
+│                        └─────────────┬───────────────┘                             │
+│                                      │                                             │
+│         ┌────────────────────────────┼────────────────────────────┐                │
+│         │                            │                            │                │
+│         ▼                            ▼                            ▼                │
+│   ┌───────────┐              ┌───────────┐              ┌───────────┐             │
+│   │  INPUT    │              │  CHAIN    │              │  RUNTIME  │             │
+│   │  LAYER    │              │  LAYER    │              │  LAYER    │             │
+│   ├───────────┤              ├───────────┤              ├───────────┤             │
+│   │ T1 Prompt │              │ T5 Mid-   │              │ T14       │             │
+│   │ injection │              │ chain     │              │ Sidecar   │             │
+│   │           │              │ compromise│              │ bypass    │             │
+│   │ T2 Confus-│              │           │              │           │             │
+│   │ ed deputy │              │ T3 Priv-  │              │ T15 Audit │             │
+│   │           │              │ ilege     │              │ loss      │             │
+│   │ T4 Policy │              │ escalation│              │           │             │
+│   │ evasion   │              │           │              │ T19 Two-  │             │
+│   │           │              │ T9 Policy │              │ phase race│             │
+│   │ T11 Memory│              │ tampering │              │           │             │
+│   │ poisoning │              │           │              │ T20 Risk  │             │
+│   │           │              │ T18       │              │ poisoning │             │
+│   │ T12       │              │ Lattice   │              │           │             │
+│   │ Abstraction│             │ bypass    │              │           │             │
+│   │ adversary │              │           │              │           │             │
+│   └─────┬─────┘              └─────┬─────┘              └─────┬─────┘             │
+│         │                          │                          │                   │
+│         └──────────────────────────┼──────────────────────────┘                   │
+│                                    │                                              │
+│                                    ▼                                              │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐  │
+│   │                         DEFENSE IN DEPTH                                    │  │
+│   │                                                                             │  │
+│   │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐             │  │
+│   │  │ PREVENT         │  │ DETECT          │  │ RECOVER         │             │  │
+│   │  ├─────────────────┤  ├─────────────────┤  ├─────────────────┤             │  │
+│   │  │ • IBCT          │  │ • E-process     │  │ • Saga          │             │  │
+│   │  │ • Shield        │  │ • LTL monitor   │  │   compensation  │             │  │
+│   │  │ • OPA           │  │ • Near-miss     │  │ • WAL replay    │             │  │
+│   │  │ • seccomp       │  │   detector      │  │ • Revocation    │             │  │
+│   │  │ • Landlock      │  │ • Abstraction   │  │ • Human         │             │  │
+│   │  │ • netfilter     │  │   drift alarm   │  │   escalation    │             │  │
+│   │  │ • Two-phase     │  │ • Audit log     │  │                 │             │  │
+│   │  │   admission     │  │   verification  │  │                 │             │  │
+│   │  └─────────────────┘  └─────────────────┘  └─────────────────┘             │  │
+│   └─────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                     │
+│   RESIDUAL RISK MATRIX:                                                             │
+│                                                                                     │
+│         IMPACT →   Low      Medium     High      Critical                          │
+│   LIKELIHOOD ↓                                                                     │
+│   ┌─────────────┬──────────┬──────────┬──────────┬──────────┐                      │
+│   │ High        │ T6       │ T10      │ T1       │          │                      │
+│   │ Medium      │          │ T13      │ T4,T11   │ T7,T8    │                      │
+│   │ Low         │          │ T17      │ T2,T5,   │ T3,T9,   │                      │
+│   │             │          │          │ T12,T16, │ T14,T19  │                      │
+│   │             │          │          │ T18,T20  │          │                      │
+│   └─────────────┴──────────┴──────────┴──────────┴──────────┘                      │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+12. Admission Decision State Machine
+
+```
+                    ┌───────────────────────────────────────────┐
+                    │           INITIAL STATE                   │
+                    │   q = (s, a, ctx) received                │
+                    └─────────────────────┬─────────────────────┘
+                                          │
+                                          ▼
+                    ┌───────────────────────────────────────────┐
+                    │   IDENTITY CHECK                          │
+                    │   SPIFFE SVID valid?                      │
+                    └─────────────────────┬─────────────────────┘
+                                          │
+                          ┌───────────────┴───────────────┐
+                          │ YES                           │ NO
+                          ▼                               ▼
+              ┌───────────────────────┐       ┌───────────────────────┐
+              │  CAPABILITY CHECK     │       │  DENY                 │
+              │  IBCT chain valid?    │       │  (identity failure)   │
+              │  C_a ⪯ C_leaf?        │       └───────────────────────┘
+              └───────────┬───────────┘
+                          │
+          ┌───────────────┴───────────────┐
+          │ YES                           │ NO
+          ▼                               ▼
+┌───────────────────────┐       ┌───────────────────────┐
+│  REVOCATION CHECK     │       │  DENY                 │
+│  CID in Bloom?        │       │  (capability failure) │
+│  CRL epoch valid?     │       └───────────────────────┘
+└───────────┬───────────┘
+            │
+    ┌───────┴───────┐
+    │ NOT REVOKED   │ REVOKED
+    ▼               ▼
+┌───────────────┐ ┌───────────────────────┐
+│  SHIELD CHECK │ │  DENY                 │
+│  a ∈ A_feas?  │ │  (revocation)         │
+└───────┬───────┘ └───────────────────────┘
+        │
+   ┌────┴────┐
+   │ FEASIBLE│ INFEASIBLE
+   ▼         ▼
+┌─────────┐ ┌───────────────────────┐
+│ RISK    │ │  MODIFY               │
+│ BUDGET  │ │  (σ → a_safe)         │
+│ CHECK   │ │  + intervention       │
+└────┬────┘ │    penalty            │
+     │      └───────────────────────┘
+     │
+ ┌───┴───┐
+ │ B ≥   │ B < r̂+ε_r
+ │ r̂+ε_r │
+ ▼       ▼
+┌───────┐ ┌───────────────────────┐
+│ E-    │ │  DELAY                │
+│ PROCESS│ │  (hold for slow path) │
+│ CHECK │ │  + token bucket wait  │
+└───┬───┘ └───────────────────────┘
+    │
+┌───┴───┐
+│ E_t < │ E_t ≥ 1/α
+│ 1/α   │
+▼       ▼
+┌───────┐ ┌───────────────────────┐
+│ LTL   │ │  ESCALATE             │
+│ CHECK │ │  (evidence against    │
+│       │ │   safety)             │
+└───┬───┘ │  + human review       │
+    │     └───────────────────────┘
+┌───┴───┐
+│ τ ⊨ φ │ τ ⊭ φ
+▼       ▼
+┌───────┐ ┌───────────────────────┐
+│COMPEN-│ │  DENY                 │
+│SABILITY│ │  (LTL violation)      │
+│CHECK  │ └───────────────────────┘
+└───┬───┘
+    │
+┌───┴───┬───────────┐
+│ FULL  │ PARTIAL   │ NONE
+▼       ▼           ▼
+┌───────┐ ┌─────────┐ ┌───────────────────────┐
+│ ALLOW │ │ ALLOW   │ │  ESCALATE             │
+│(fast) │ │(saga +  │ │  (human approval      │
+│       │ │ rollback│ │   required for        │
+│       │ │ reg.)   │ │   irreversible action)│
+└───────┘ └─────────┘ └───────────────────────┘
+```
+
+---
+
+13. Data Flow — Request Lifecycle
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                         REQUEST LIFECYCLE                                           │
+│                                                                                     │
+│   TIME →                                                                            │
+│                                                                                     │
+│   ┌──────┐   ┌──────┐   ┌──────┐   ┌──────┐   ┌──────┐   ┌──────┐   ┌──────┐        │
+│   │  t0  │   │  t1  │   │  t2  │   │  t3  │   │  t4  │   │  t5  │   │  t6  │        │
+│   │      │   │      │   │      │   │      │   │      │   │      │   │      │        │
+│   │Agent │   │ACP   │   │ACP   │   │ACP   │   │ACP   │   │Tool  │   │Audit │        │
+│   │pro-  │   │re-   │   │iden- │   │poli- │   │deci- │   │exec- │   │log   │        │
+│   │poses │   │ceives│   │tity  │   │cy    │   │sion  │   │utes  │   │write │        │
+│   │a     │   │q     │   │check │   │check │   │      │   │      │   │      │        │
+│   └──┬───┘   └──┬───┘   └──┬───┘   └──┬───┘   └──┬───┘   └──┬───┘   └──┬───┘        │
+│      │          │          │          │          │          │          │            │
+│      │          │          │          │          │          │          │            │
+│      ▼          ▼          ▼          ▼          ▼          ▼          ▼            │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  FAST PATH (≤ 23 ms)                                                        │   │
+│   │  ┌───────────────────────────────────────────────────────────────────────┐   │   │
+│   │  │  t0 → t1: Network transit + ACP receive                  ~ 2 ms      │   │   │
+│   │  │  t1 → t2: SPIFFE + IBCT verify + revocation              ~ 5 ms      │   │   │
+│   │  │  t2 → t3: OPA capability + policy evaluation             ~ 8 ms      │   │   │
+│   │  │  t3 → t4: Shield + risk budget + WAL fsync               ~ 10 ms     │   │   │
+│   │  │  t4 → t5: Decision emit + tool dispatch                  ~ 1 ms      │   │   │
+│   │  └───────────────────────────────────────────────────────────────────────┘   │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                     │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  SLOW PATH (≤ 150 ms) — only for high-risk or non-compensable              │   │
+│   │  ┌───────────────────────────────────────────────────────────────────────┐   │   │
+│   │  │  t4 → t4a: DTMC abstraction check + e-process            ~ 80 ms     │   │   │
+│   │  │  t4a → t4b: LTL_f trace verifier                         ~ 50 ms     │   │   │
+│   │  │  t4b → t4c: Contextual risk OPA                          ~ 20 ms     │   │   │
+│   │  │  t4c → t5: Compensability routing + saga setup           ~ 5 ms      │   │   │
+│   │  └───────────────────────────────────────────────────────────────────────┘   │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                     │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  AUDIT PLANE (parallel, non-blocking after WAL fsync)                      │   │
+│   │  ┌───────────────────────────────────────────────────────────────────────┐   │   │
+│   │  │  t3 → t6: Merkle checkpoint + replay verification         ~ 20 ms     │   │   │
+│   │  │  t6: Near-miss detection + diagnostic emit                ~ 5 ms      │   │   │
+│   │  └───────────────────────────────────────────────────────────────────────┘   │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+14. Saga Compensation — Reversible Action Sequence
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                         SAGA COMPENSATION PATTERN                                   │
+│                                                                                     │
+│   FORWARD EXECUTION:                                                                │
+│                                                                                     │
+│   ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐          │
+│   │  a_1    │───▶│  a_2    │───▶│  a_3    │───▶│  a_4    │───▶│  a_5    │          │
+│   │ (read)  │    │ (write) │    │ (update)│    │ (send)  │    │ (commit)│          │
+│   └─────────┘    └─────────┘    └─────────┘    └─────────┘    └─────────┘          │
+│        │              │              │              │              │                │
+│        ▼              ▼              ▼              ▼              ▼                │
+│   ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐          │
+│   │  γ_1    │    │  γ_2    │    │  γ_3    │    │  γ_4    │    │  γ_5    │          │
+│   │ (no-op) │    │ (delete)│    │ (revert)│    │ (recall)│    │ (abort) │          │
+│   └─────────┘    └─────────┘    └─────────┘    └─────────┘    └─────────┘          │
+│                                                                                     │
+│   FAILURE AT STEP k:                                                                │
+│                                                                                     │
+│   ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐          │
+│   │  a_1    │───▶│  a_2    │───▶│  a_3    │───▶│  a_4    │───▶│  FAIL   │          │
+│   │ COMMIT  │    │ COMMIT  │    │ COMMIT  │    │ COMMIT  │    │  at a_5 │          │
+│   └─────────┘    └─────────┘    └─────────┘    └─────────┘    └─────────┘          │
+│                                                                                     │
+│   COMPENSATION (REVERSE ORDER, LIFO):                                               │
+│                                                                                     │
+│   ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐                         │
+│   │  γ_4    │───▶│  γ_3    │───▶│  γ_2    │───▶│  γ_1    │                         │
+│   │ (recall)│    │ (revert)│    │ (delete)│    │ (no-op) │                         │
+│   └─────────┘    └─────────┘    └─────────┘    └─────────┘                         │
+│                                                                                     │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  CONSISTENCY GUARANTEE (Prop C.1):                                          │   │
+│   │                                                                             │   │
+│   │  If all γ_i are idempotent and total, then the saga either:                 │   │
+│   │    (a) completes all forward actions, OR                                    │   │
+│   │    (b) returns the system to the initial state.                             │   │
+│   │                                                                             │   │
+│   │  Idempotence: γ_i ∘ γ_i = γ_i                                               │   │
+│   │  Totality: γ_i is defined for all reachable states                          │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                     │
+│   COMPENSABILITY ROUTING:                                                           │
+│                                                                                     │
+│   ┌─────────────────┬─────────────────┬─────────────────┐                          │
+│   │  comp(a)=FULL   │  comp(a)=PARTIAL│  comp(a)=NONE   │                          │
+│   ├─────────────────┼─────────────────┼─────────────────┤                          │
+│   │  Fast path OK   │  Slow path +    │  Always slow    │                          │
+│   │  Saga on fail   │  best-effort    │  path + human   │                          │
+│   │                 │  rollback       │  approval       │                          │
+│   └─────────────────┴─────────────────┴─────────────────┘                          │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+15. Complete System — End-to-End View
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    AGENT CONTROL PLANE — END TO END                                 │
+│                                                                                                     │
+│   ┌──────────┐                                                                                      │
+│   │  HUMAN   │                                                                                      │
+│   │  AUTHOR  │                                                                                      │
+│   └────┬─────┘                                                                                      │
+│        │ writes Goal Envelope AST                                                                    │
+│        ▼                                                                                            │
+│   ┌──────────────────────────────────────────────────────────────────────────────────────────────┐  │
+│   │  GOAL ENVELOPE AST ──compile──▶ LTL_f ──▶ Monitor                                            │  │
+│   └──────────────────────────────────────────────────────────────────────────────────────────────┘  │
+│        │                                                                                            │
+│        │                                                                                            │
+│   ┌────▼─────┐                                                                                      │
+│   │  LLM     │                                                                                      │
+│   │  AGENT   │                                                                                      │
+│   │  (π_θ)   │                                                                                      │
+│   └────┬─────┘                                                                                      │
+│        │ proposes action a                                                                          │
+│        ▼                                                                                            │
+│   ┌──────────────────────────────────────────────────────────────────────────────────────────────┐  │
+│   │                         ACP GATEWAY (on network path)                                        │  │
+│   │                                                                                              │  │
+│   │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐            │  │
+│   │  │ IDENTITY   │  │ CAPABILITY │  │ SHIELD     │  │ E-PROCESS  │  │ LTL        │            │  │
+│   │  │ PLANE      │─▶│ PLANE      │─▶│ (SA-CMDP)  │─▶│ MONITOR    │─▶│ MONITOR    │            │  │
+│   │  │            │  │            │  │            │  │            │  │            │            │  │
+│   │  │ SPIFFE     │  │ IBCT chain │  │ A_feas(s)  │  │ E_t^reg    │  │ τ ⊨ φ      │            │  │
+│   │  │ SVID       │  │ 8-dim      │  │ σ(s,a)     │  │ β_i GRAPA  │  │            │            │  │
+│   │  │ Bloom+CRL  │  │ lattice    │  │ κ penalty  │  │ ρ(Θ)       │  │            │            │  │
+│   │  └────────────┘  └────────────┘  └────────────┘  └────────────┘  └────────────┘            │  │
+│   │                                                                                              │  │
+│   │  ┌───────────────────────────────────────────────────────────────────────────────────────┐  │  │
+│   │  │  BIFURCATED ADMISSION                                                                 │  │  │
+│   │  │                                                                                       │  │  │
+│   │  │  ┌─────────────────────┐          ┌─────────────────────┐                            │  │  │
+│   │  │  │  FAST PATH          │          │  SLOW PATH          │                            │  │  │
+│   │  │  │  ≤ 23 ms            │          │  ≤ 150 ms           │                            │  │  │
+│   │  │  │                     │          │                     │                            │  │  │
+│   │  │  │  ALLOW / DENY /     │          │  DTMC + e-process   │                            │  │  │
+│   │  │  │  MODIFY / DELAY     │          │  LTL trace check    │                            │  │  │
+│   │  │  │                     │          │  Contextual risk    │                            │  │  │
+│   │  │  │  Token bucket       │          │  Compensability     │                            │  │  │
+│   │  │  │  WAL fsync          │          │  routing            │                            │  │  │
+│   │  │  └─────────────────────┘          └─────────────────────┘                            │  │  │
+│   │  └───────────────────────────────────────────────────────────────────────────────────────┘  │  │
+│   │                                                                                              │  │
+│   │  ┌───────────────────────────────────────────────────────────────────────────────────────┐  │  │
+│   │  │  DECISION: ALLOW | DENY | MODIFY | DELAY | ESCALATE | ROLLBACK                         │  │  │
+│   │  └───────────────────────────────────────────────────────────────────────────────────────┘  │  │
+│   └──────────────────────────────────────────────────────────────────────────────────────────────┘  │
+│        │                                                                                            │
+│        │ if ALLOW                                                                                   │
+│        ▼                                                                                            │
+│   ┌──────────────────────────────────────────────────────────────────────────────────────────────┐  │
+│   │  TOOL EXECUTION (sandboxed)                                                                  │  │
+│   │                                                                                              │  │
+│   │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐                            │  │
+│   │  │ seccomp    │  │ Landlock   │  │ cgroup BPF │  │ Auditd     │                            │  │
+│   │  │ hardened   │  │ filesystem │  │ egress     │  │ syscall    │                            │  │
+│   │  └────────────┘  └────────────┘  └────────────┘  └────────────┘                            │  │
+│   └──────────────────────────────────────────────────────────────────────────────────────────────┘  │
+│        │                                                                                            │
+│        │ if failure or DENY                                                                         │
+│        ▼                                                                                            │
+│   ┌──────────────────────────────────────────────────────────────────────────────────────────────┐  │
+│   │  SAGA COMPENSATION (reverse order)                                                           │  │
+│   │  γ_4 → γ_3 → γ_2 → γ_1                                                                      │  │
+│   └──────────────────────────────────────────────────────────────────────────────────────────────┘  │
+│        │                                                                                            │
+│        │ always                                                                                     │
+│        ▼                                                                                            │
+│   ┌──────────────────────────────────────────────────────────────────────────────────────────────┐  │
+│   │  AUDIT PLANE                                                                                 │  │
+│   │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐                            │  │
+│   │  │ WAL        │  │ Merkle     │  │ Replay     │  │ Near-Miss  │                            │  │
+│   │  │ durable    │  │ checkpoint │  │ verifier   │  │ detector   │                            │  │
+│   │  └────────────┘  └────────────┘  └────────────┘  └────────────┘                            │  │
+│   └──────────────────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                                     │
+│   ┌──────────────────────────────────────────────────────────────────────────────────────────────┐  │
+│   │  FEEDBACK LOOP                                                                               │  │
+│   │                                                                                              │  │
+│   │  Near-miss ──▶ Abstraction refinement ──▶ PAC bound recheck ──▶ Updated shield              │  │
+│   │  E-process alarm ──▶ Human escalation ──▶ Policy update ──▶ Updated OPA                     │  │
+│   │  Audit anomaly ──▶ Threat model update ──▶ New mitigations ──▶ Hardened enforcement         │  │
+│   └──────────────────────────────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+16. Capability Lattice — Visual Hasse Diagram (Simplified)
+
+```
+                    ┌─────────────────────────────────────────────┐
+                    │           TOP (max authority)               │
+                    │  R = U, A = A_all, spend = ∞, depth = ∞,   │
+                    │  time = T_all, rep = 0, val = ∅, rev = 0,  │
+                    │  comp = full                                │
+                    └─────────────────────┬───────────────────────┘
+                                          │
+                    ┌─────────────────────┼───────────────────────┐
+                    │                     │                       │
+                    ▼                     ▼                       ▼
+          ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐
+          │  C_1            │   │  C_2            │   │  C_3            │
+          │  R = db/*       │   │  R = db/staging │   │  R = api/*      │
+          │  A = {read}     │   │  A = {read,     │   │  A = {query}    │
+          │  spend = 0      │   │       write}    │   │  spend = 10     │
+          │  depth = 1      │   │  spend = 5      │   │  depth = 2      │
+          │  comp = full    │   │  depth = 1      │   │  comp = partial │
+          └────────┬────────┘   └────────┬────────┘   └────────┬────────┘
+                   │                     │                       │
+                   └─────────────────────┼───────────────────────┘
+                                         │
+                                         ▼
+                    ┌─────────────────────────────────────────────┐
+                    │           BOTTOM (min authority)            │
+                    │  R = ∅, A = ∅, spend = 0, depth = 0,       │
+                    │  time = ∅, rep = 1, val = V_all, rev = 1,  │
+                    │  comp = none                                │
+                    └─────────────────────────────────────────────┘
+
+                    ORDER:  C_i ⪯ C_j  iff  C_i is "below" C_j
+                    (less authority, more restrictive)
+
+                    MEET:   greatest lower bound (most restrictive)
+                    JOIN:   least upper bound (most permissive)
+```
+
+---
+
+17. E-Process Growth — Log-Space Visualization
+
+```
+    E_t^reg
+    (log scale)
+       │
+  10^6 │                                                    ╱ REJECT H_0
+       │                                                  ╱   (evidence
+  10^5 │                                                ╱      against safety)
+       │                                              ╱
+  10^4 │                                            ╱
+       │                                          ╱
+  10^3 │                                        ╱
+       │                                      ╱
+  10^2 │                                    ╱
+       │                                  ╱
+  10^1 │────────────────────────────────╱──────────────────── 1/α threshold
+       │                              ╱
+  10^0 │────────────────────────────╱───────────────────────── H_0 region
+       │                          ╱
+  10^-1│                        ╱
+       │                      ╱
+  10^-2│                    ╱
+       │                  ╱
+  10^-3│                ╱
+       │              ╱
+       └────────────╱──────────────────────────────────────────▶ t
+                    │
+                    │
+                    └── Safe observations accumulate
+                        (E_t decreases under H_0)
+```
+
+---
+
+18. Abstraction Refinement — State Space Evolution
+
+```
+    INITIAL ABSTRACTION (coarse):
+    ┌─────────────────────────────────────────────────────────────┐
+    │  S̄ = { s̄_1, s̄_2, s̄_3, s̄_4 }                               │
+    │                                                             │
+    │   ┌───────┐   ┌───────┐   ┌───────┐   ┌───────┐           │
+    │   │ s̄_1   │   │ s̄_2   │   │ s̄_3   │   │ s̄_4   │           │
+    │   │ b_1=5 │   │ b_2=3 │   │ b_3=0 │   │ b_4=7 │           │
+    │   └───────┘   └───────┘   └───────┘   └───────┘           │
+    └─────────────────────────────────────────────────────────────┘
+                              │
+                              │ b_3 = 0 → REFINE s̄_3
+                              ▼
+    REFINED ABSTRACTION:
+    ┌─────────────────────────────────────────────────────────────┐
+    │  S̄ = { s̄_1, s̄_2, s̄_3a, s̄_3b, s̄_4 }                       │
+    │                                                             │
+    │   ┌───────┐   ┌───────┐   ┌───────┐   ┌───────┐   ┌───────┐│
+    │   │ s̄_1   │   │ s̄_2   │   │ s̄_3a  │   │ s̄_3b  │   │ s̄_4   ││
+    │   │ b_1=5 │   │ b_2=3 │   │ b=2   │   │ b=2   │   │ b_4=7 ││
+    │   └───────┘   └───────┘   └───────┘   └───────┘   └───────┘│
+    └─────────────────────────────────────────────────────────────┘
+                              │
+                              │ Continue until all b_i > 0
+                              ▼
+    STABLE ABSTRACTION:
+    ┌─────────────────────────────────────────────────────────────┐
+    │  All per-state budgets b_i > 0                              │
+    │  PAC bound satisfied with confidence 1-δ                    │
+    │  Abstraction is certified for deployment                    │
+    └─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+19. Threat Mitigation — Defense in Depth Layers
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                         DEFENSE IN DEPTH                                            │
+│                                                                                     │
+│   ATTACKER                                                                          │
+│      │                                                                              │
+│      ▼                                                                              │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  LAYER 1: INPUT SANITIZATION                                                │   │
+│   │  • Tool output sanitization                                                 │   │
+│   │  • Prompt injection filters                                                 │   │
+│   │  • Content Security Policy                                                  │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│      │                                                                              │
+│      ▼                                                                              │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  LAYER 2: IDENTITY VERIFICATION                                             │   │
+│   │  • SPIFFE SVID validation                                                   │   │
+│   │  • IBCT chain verification                                                  │   │
+│   │  • EUF-CMA signature checks                                                 │   │
+│   │  • Bloom + CRL revocation                                                   │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│      │                                                                              │
+│      ▼                                                                              │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  LAYER 3: CAPABILITY ENFORCEMENT                                            │   │
+│   │  • 8-dimensional lattice attenuation                                        │   │
+│   │  • Monotone narrowing check                                                 │   │
+│   │  • Authorization witness verification                                       │   │
+│   │  • Canonical serialization hash                                             │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│      │                                                                              │
+│      ▼                                                                              │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  LAYER 4: POLICY COMPLIANCE                                                 │   │
+│   │  • OPA/Rego policy evaluation                                               │   │
+│   │  • Goal Envelope AST compilation                                            │   │
+│   │  • LTL_f trace verification                                                 │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│      │                                                                              │
+│      ▼                                                                              │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  LAYER 5: RUNTIME SAFETY                                                    │   │
+│   │  • Hard shield σ (SA-CMDP)                                                  │   │
+│   │  • Regularized e-process monitoring                                         │   │
+│   │  • Risk budget token bucket                                                 │   │
+│   │  • Abstraction refinement                                                   │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│      │                                                                              │
+│      ▼                                                                              │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  LAYER 6: EXECUTION ISOLATION                                               │   │
+│   │  • Two-phase admission (saga)                                               │   │
+│   │  • Compensability routing                                                   │   │
+│   │  • Human approval for irreversible actions                                  │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│      │                                                                              │
+│      ▼                                                                              │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  LAYER 7: KERNEL ENFORCEMENT                                                │   │
+│   │  • Hardened seccomp-bpf                                                     │   │
+│   │  • Landlock LSM                                                             │   │
+│   │  • cgroup BPF egress firewall                                               │   │
+│   │  • Auditd syscall logging                                                   │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│      │                                                                              │
+│      ▼                                                                              │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  LAYER 8: AUDIT AND RECOVERY                                                │   │
+│   │  • Durable WAL with fsync                                                   │   │
+│   │  • Merkle-checkpointed log                                                  │   │
+│   │  • Replay verification                                                      │   │
+│   │  • Near-miss detection                                                      │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                     │
+│   RESULT: No single point of failure. Compromise of one layer does not              │
+│           compromise the others. Defense in depth.                                  │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+20. Metrics Dashboard — Evaluation Targets
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                         ACP METRICS DASHBOARD                                       │
+│                                                                                     │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  SAFETY METRICS                                                             │   │
+│   │                                                                             │   │
+│   │  PVR (Policy Violation Rate)          ████████████████████░░  0.00  ✓       │   │
+│   │  SSR (Safe Success Rate)              ██████████████████░░░░  0.92  ✓       │   │
+│   │  ECR (E-process Coverage Rate)        ████████████████████░░  0.05  ✓       │   │
+│   │  ACS (Audit Completeness Score)       ██████████████████████  1.00  ✓       │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                     │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  EFFICIENCY METRICS                                                         │   │
+│   │                                                                             │   │
+│   │  IE (Intervention Efficiency)         ████████████████░░░░░░  0.71  ✓       │   │
+│   │  OL (Oversight Load)                  ██░░░░░░░░░░░░░░░░░░░░  0.03  ✓       │   │
+│   │  ATP (Authorized Task Progress)       ██████████████████░░░░  0.88  ✓       │   │
+│   │  RTC (Reasoning Trace Coverage)       ████████████████████░░  0.96  ✓       │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                     │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  LATENCY METRICS                                                            │   │
+│   │                                                                             │   │
+│   │  IL_fast (Fast Path p95)              ████████████████████░░  23 ms  ✓      │   │
+│   │  IL_slow (Slow Path p95)              ██████████████████░░░░  150 ms ✓      │   │
+│   │  WDT (WAL Durability Test)            ██████████████████████  1.00  ✓       │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                     │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │  STABILITY METRICS                                                          │   │
+│   │                                                                             │   │
+│   │  ABR (Abstraction Refinement Rate)    ████░░░░░░░░░░░░░░░░░░  monitor       │   │
+│   │  Near-Miss Frequency                  ██░░░░░░░░░░░░░░░░░░░░  monitor       │   │
+│   │  Revocation Propagation Latency       ███░░░░░░░░░░░░░░░░░░░  < 5 s  ✓     │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
