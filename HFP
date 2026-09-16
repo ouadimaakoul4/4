@@ -1,0 +1,1892 @@
+
+Theoretical Foundations of a Hand–Forearm Perceptual Module with Distributed Perception
+
+ouadi Maakoul 
+
+AI: chatGpt, Deepseek, Meta AI
+
+
+Abstract
+
+Robotic manipulation under occlusion remains fundamentally limited by the spatial concentration of perception: when an external camera loses line of sight, the contact state, local object geometry, and friction parameters become unobservable from proprioception and wrist force/torque alone. This thesis argues that the spatial distribution of heterogeneous sensors along the hand–forearm mechanical chain is not merely an engineering convenience but a structural determinant of observability. We formalize a hand–forearm perceptual module in which the forearm is simultaneously actuator, tendon transmission, and internal perceptual organ, and in which the wrist functions as an explicit fusion node between arm-side and hand-side inference. The state space is defined as \mathcal{X} = \mathcal{Q} \times T\mathcal{Q} \times \mathcal{L} \times \mathcal{T} \times \mathcal{C} \times \mathcal{W}, with contact state c = (p, n, f, \mu) \in \mathbb{R}^3 \times S^2 \times \mathbb{R}^3 \times \mathbb{R}_+ of dimension 9 per contact point, and tendon length L included to capture configuration-dependent compliance and Bowden-cable hysteresis. Estimation is formulated as inference on a factor graph with dynamics, proprioceptive, tactile, visual, and internal perceptual factors, where the wrist separator induces conditional independence between hand and forearm subgraphs. The central theoretical contribution is a proposition proving that under external occlusion, there exists an open set \mathcal{X}_{\text{occ}} \subset \mathcal{X} on which the observability codistribution of the distributed architecture has strictly higher rank than that of a centralized architecture with equivalent sensor count, with rank increase bounded below by \dim(\mathcal{C}) - \dim(\mathcal{W}_{\text{FT}}) \geq 2 for two or more contact points. This is complemented by an information-theoretic formulation showing that the architectural information gain \Delta I_{\text{occ}} = I(w; S_{\text{dist}} \mid M=0) - I(w; S_{\text{ext}} \mid M=0) is strictly positive under occlusion, and by identifiability conditions establishing that heterogeneous tactile sensing — GelSight for geometry (p, n), TacTip for shear and friction (f, \mu) — is necessary rather than preferential for injectivity of c \mapsto (z_T, z_V, z_Q). The internal forearm camera observes tendon deformation \delta = \Psi(\tau, q, L) directly, providing an independent estimate of tendon elongation that compensates for friction-induced hysteresis and underactuation null space. A V0.1 technical specification is provided with explicit DoF, motor, tendon, sensor, bus bandwidth, thermal, and latency budgets, including a 12.96 Gbps camera aggregate requiring FPGA-based preprocessing and a 21 ms sensor-to-estimate pipeline compatible with 50 ms slip detection. An experimental protocol with statistical power analysis, calibration drift measurement over 3300 grasps, thermal drift characterization, and factor graph ablations isolates the architectural effect from sensor-level effects. The falsifiable prediction is that the prototype outperforms an Allegro V5 Plus baseline with equivalent tactile instrumentation by more than 20\% on occlusion-conditioned localization error and slip detection latency at equal mass, and that ablation of internal perception produces the largest rank deficiency and the largest performance drop under occlusion.
+
+1. Problem Statement and Formal Framework
+
+The central problem is the estimation of the world state \hat{W}(t) from heterogeneous measurements distributed over a hand–forearm system. We seek to construct an estimator
+
+\hat{W}(t) = f\bigl(S(t),\, u(t),\, \theta\bigr),
+
+where S(t) is the set of measurements, u(t) the motor command, and \theta the calibrated parameters. The thesis defended here is that the spatial structure of S(t) — the distribution of sensors along the mechanical chain — determines an observability property that a centralized architecture with an equivalent number of sensors does not possess.
+
+1.1 State Space
+
+Let \mathcal{X} be the state space:
+
+\mathcal{X} = \mathcal{Q} \times T\mathcal{Q} \times \mathcal{L} \times \mathcal{T} \times \mathcal{C} \times \mathcal{W},
+
+with:
+
+· \mathcal{Q} \subset \mathbb{R}^n: joint configuration space, n active degrees of freedom;
+· T\mathcal{Q} \cong \mathbb{R}^n: tangent space of joint velocities;
+· \mathcal{L} \subset \mathbb{R}^m: tendon length space, m tendons, capturing configuration-dependent elongation;
+· \mathcal{T} \subset \mathbb{R}^m: tendon tension space;
+· \mathcal{C}: contact manifold;
+· \mathcal{W}: world state space (pose, local geometry, texture).
+
+The contact state at a single point is defined as
+
+c = (p, n, f, \mu) \in \mathbb{R}^3 \times S^2 \times \mathbb{R}^3 \times \mathbb{R}_+,
+
+so that \dim c = 3 + 2 + 3 + 1 = 9. This corrects the earlier dimensional inconsistency: with k simultaneous contact points, \dim \mathcal{C} = 9k, and the effective dimension is
+
+\dim \mathcal{X} = 2n + 2m + 9k + \dim \mathcal{W}.
+
+The complete state is x = (q, \dot{q}, L, \tau, c, w) \in \mathcal{X}.
+
+The inclusion of tendon length L as a state variable is essential: in a Bowden-cable transmission routed through the forearm and wrist, tension \tau is not a static function of motor torque. Configuration-dependent elongation, sheath friction, and hysteresis introduce a nonlinear, configuration-dependent relationship between motor-side and joint-side variables. The map from motor torque to joint torque is mediated by the coupling matrix C^T(q) \in \mathbb{R}^{m \times n}, and without modeling compliance, the internal observation model is structurally incorrect.
+
+1.2 Measurement Model
+
+Each sensor i \in \{1, \dots, N\} produces a measurement
+
+z_i = h_i(x) + v_i, \qquad v_i \sim \mathcal{N}(0, R_i(t, T)),
+
+where h_i : \mathcal{X} \to \mathbb{R}^{d_i} is the observation model and R_i(t, T) \succ 0 is a time- and temperature-dependent noise covariance. This replaces the earlier constant-covariance assumption, which is invalid for vision-based tactile sensors. The GelSlim calibration framework explicitly demonstrates that sensor output degrades over time: after approximately 1700 grasps, signal strength begins to decay, and online brightness and contrast adjustment are required to maintain consistency over 3300 grasps. Frictional wear produces dead pixels and localized signal loss. The covariance must therefore be modeled as
+
+R_i(t, T) = R_i^{(0)} + \Sigma_{\text{wear}}(n_g) + \Sigma_{\text{thermal}}(T),
+
+where n_g is the cumulative grasp count. This is not a minor calibration detail; it is a structural requirement for long-horizon identifiability.
+
+The sensors are partitioned into four families:
+
+\mathcal{S} = \mathcal{S}_{\text{prop}} \cup \mathcal{S}_{\text{tact}} \cup \mathcal{S}_{\text{vis}} \cup \mathcal{S}_{\text{int}},
+
+where \mathcal{S}_{\text{prop}} provides proprioception (q, \dot{q}), \mathcal{S}_{\text{tact}} provides contact and force (c, w), \mathcal{S}_{\text{vis}} provides external and on-hand visual observations, and \mathcal{S}_{\text{int}} provides internal mechanical state (L, \tau, P) via cable tension, motor current, and the internal forearm camera.
+
+The specificity of the proposed architecture is that \mathcal{S}_{\text{int}} is a perceptual modality in its own right. The low gear ratios used in the 1X NEO hand — approximately 5:1 to 15:1, compared with 100:1 or 200:1 in industrial systems — create “force transparency” that allows contact forces to pass back through the transmission, enabling each joint to function simultaneously as a motor and a sensor. The forearm camera observes the deformation of springs and tendons directly, making the transmission itself an exteroceptive channel.
+
+---
+
+2. Mathematical Foundations
+
+2.1 Probabilistic Graphical Representation
+
+The estimation problem is formulated as inference in a factor graph \mathcal{G} = (\mathcal{V}, \mathcal{F}), following the Contact Factor Graph (CFG) formulation that has been developed for simultaneous tactile estimation and control of extrinsic contact. The variables \mathcal{V} contain the discretized state over a sliding window:
+
+\mathcal{V} = \{x_t, x_{t-1}, \dots, x_{t-L}\}.
+
+The factors \mathcal{F} encode the measurement and dynamics models:
+
+\mathcal{F} = \mathcal{F}_{\text{dyn}} \cup \mathcal{F}_{\text{prop}} \cup \mathcal{F}_{\text{tact}} \cup \mathcal{F}_{\text{vis}} \cup \mathcal{F}_{\text{int}}.
+
+Dynamics factor. The joint and tendon dynamics are
+
+\mathcal{F}_{\text{dyn}}:\quad q_{t+1} = f(q_t, L_t, \tau_t) + w_t, \qquad w_t \sim \mathcal{N}(0, Q),
+
+with the tendon length dynamics
+
+L_{t+1} = L_t + \Delta L(\tau_t, q_t) + w_t^L.
+
+Proprioceptive factor. Encoders and IMU provide
+
+\mathcal{F}_{\text{prop}}:\quad z_Q = q_t + v_Q, \qquad v_Q \sim \mathcal{N}(0, R_Q(t,T)).
+
+Internal perceptual factor. The forearm camera observes the tendon/spring bundle:
+
+\mathcal{F}_{\text{int}}:\quad z_P = \Phi \circ \Psi(\tau_t, q_t, L_t) + v_P.
+
+This factor is the mathematical embodiment of the claim that the forearm is a perceptual organ.
+
+Tactile factor. Following the factor-graph tactile modeling literature, local image measurements at the point of contact are used to predict relative poses, which are then incorporated as factors:
+
+\mathcal{F}_{\text{tact}}:\quad z_T = h_T(c_t, w_t) + v_T.
+
+Visual factor. External and on-hand cameras provide
+
+\mathcal{F}_{\text{vis}}:\quad z_V = h_V(w_t, q_t) \cdot M_{\text{vis}}(q_t, w_t) + v_V,
+
+where M_{\text{vis}} is the occlusion mask.
+
+The MAP estimate is
+
+\hat{\mathcal{V}} = \arg\max_{\mathcal{V}} \prod_{f_i \in \mathcal{F}} f_i(\mathcal{V}_i),
+
+and for Gaussian factors
+
+f_i(\mathcal{V}_i) \propto \exp\!\left(-\tfrac{1}{2}\bigl\|h_i(\mathcal{V}_i) - z_i\bigr\|_{R_i^{-1}}^2\right).
+
+2.2 Wrist as Separator Node
+
+The wrist plays the role of a separator node between the arm subgraph and the hand subgraph. This is made explicit by conditional independence:
+
+p(\mathcal{X}_A \mid \mathcal{X}_B, z_{\text{wrist}}) = p(\mathcal{X}_A \mid z_{\text{wrist}}) \cdot p(\mathcal{X}_B \mid z_{\text{wrist}}),
+
+when the wrist F/T sensor is measured. This decomposition isolates the hand-and-fingers innovation \mathcal{X}_A from the forearm infrastructure \mathcal{X}_B, with \mathcal{X}_C (shoulder) standardized and without a proper innovation factor in V0.
+
+2.3 Tendon Elasticity and the Forearm Map
+
+Let \Psi : \mathbb{R}^m \times \mathcal{Q} \times \mathbb{R}^m \to \mathcal{D} be the map that, given a tension configuration \tau, joint positions q, and tendon lengths L, associates the deformation field \delta \in \mathcal{D} of the springs and tendons in the forearm:
+
+\delta = \Psi(\tau, q, L).
+
+The internal camera observes
+
+z_P = \Phi(\delta) + v_P = \Phi \circ \Psi(\tau, q, L) + v_P,
+
+where \Phi is the observation operator. Linearizing around (\tau_0, q_0, L_0):
+
+z_P \approx \Phi(\delta_0) + J_\Phi J_\Psi
+\begin{bmatrix}
+\Delta \tau \\
+\Delta q \\
+\Delta L
+\end{bmatrix}
++ v_P,
+
+with J_\Psi = \partial \Psi / \partial (\tau, q, L) and J_\Phi = \partial \Phi / \partial \delta. This yields a direct measurement of a linear combination of tendon tensions, joint positions, and tendon elongation. The key observation is that the forearm camera estimates \Delta L directly, enabling compensation for the configuration-dependent compliance that would otherwise degrade joint torque estimation. This turns the transmission nonlinearity from a liability into a sensed quantity.
+
+2.4 Heterogeneous Tactile Sensing: GelSight and TacTip
+
+The tactile sensing requirements are heterogeneous: geometry reconstruction and shear/slip detection impose different constraints on the sensing modality.
+
+GelSight360 is a fingertip-like, omnidirectional, camera-based tactile sensor capable of producing depth maps of objects deforming the sensor's surface. It measures normal strain via photometric stereo and provides high-resolution local geometry (p, n).
+
+TacTip is a soft optical tactile sensor with biomimetic morphology, transducing deformation via internal pins inspired by dermal papillae. The recovered force distribution from marker motions enables shear analysis, contact force estimation, and slip detection. A modified TacTip with biomimetic fingerprint ridges has been shown to induce and detect incipient slip prior to gross slip onset. It provides tangential force and friction information (f, \mu).
+
+For identifiability of c = (p, n, f, \mu), both modalities are required. We therefore propose a heterogeneous finger configuration: thumb and index with GelSight Svelte (geometry), middle, ring, and little with TacTip (shear and slip). This makes the injectivity claim of the map c \mapsto (z_T, z_V, z_Q) provable, rather than assumed.
+
+---
+
+3. Observability and Identifiability
+
+3.1 Discrete-Time Observability
+
+Consider the nonlinear discrete-time system
+
+x_{t+1} = f(x_t, u_t), \qquad z_t = h(x_t) + v_t.
+
+The local observability matrix over a window of length L is
+
+\mathcal{O}(x_{t-L:t}) =
+\begin{bmatrix}
+\partial h/\partial x \big|_{x_t} \\
+\partial h/\partial x \big|_{x_{t+1}} \partial f/\partial x \big|_{x_t} \\
+\vdots \\
+\partial h/\partial x \big|_{x_{t-L}} \prod_{k=0}^{L-1} \partial f/\partial x \big|_{x_{t-k}}
+\end{bmatrix}.
+
+The system is locally observable at x_0 if
+
+\operatorname{rank} \mathcal{O}(x_0) = \dim \mathcal{X}.
+
+3.2 Proposition (Distributed Perception Strictly Enlarges the Observable Subspace under Occlusion)
+
+Proposition. Let \mathcal{A}_{\text{ext}} be an architecture with a single external camera and proprioception, and \mathcal{A}_{\text{dist}} the proposed distributed architecture. Under partial occlusion of the object by the fingers, there exists an open set \mathcal{X}_{\text{occ}} \subset \mathcal{X} such that for all x \in \mathcal{X}_{\text{occ}},
+
+\operatorname{rank} \mathcal{O}_{\text{ext}}(x) < \dim \mathcal{X}
+\quad\text{and}\quad
+\operatorname{rank} \mathcal{O}_{\text{dist}}(x) = \dim \mathcal{X}.
+
+Proof sketch. Consider an object held such that the external camera observes only the dorsal side of the fingers. Define the occlusion mask
+
+M_{\text{vis}}(q, w) =
+\begin{cases}
+0 & \text{if the object surface is occluded by the hand}, \\
+1 & \text{otherwise}.
+\end{cases}
+
+Under M_{\text{vis}} = 0, the visual measurement provides no constraint on the contact geometry c or local object geometry w:
+
+\partial h_{\text{vis, ext}} / \partial (c, w) \approx 0.
+
+In \mathcal{A}_{\text{ext}}, the only remaining measurements are proprioception z_Q = q and, possibly, wrist F/T. The map from (q, \tau) to (c, w) is rank-deficient: multiple contact configurations can produce the same joint torques. Specifically, for any two contact configurations c_1 \neq c_2 satisfying
+
+C^T(q) \tau(c_1, w) = C^T(q) \tau(c_2, w),
+
+the proprioceptive and wrist F/T rows of \mathcal{O}_{\text{ext}} are identical, and \operatorname{rank} \mathcal{O}_{\text{ext}} < \dim \mathcal{X}.
+
+In \mathcal{A}_{\text{dist}}, the palm cameras observe the inter-finger space, the finger tactile sensors observe the contact patch, and the internal forearm camera constrains tendon elongation and tension. The combined observation map
+
+h_{\text{dist}} = (h_{\text{prop}}, h_{\text{tact}}, h_{\text{vis, palm}}, h_{\text{vis, finger}}, h_{\text{int}})
+
+has a Jacobian whose rank exceeds that of h_{\text{ext}} at the occluded configuration. The palm and finger tactile rows add independent constraints on (c, w) that are not spanned by the proprioceptive rows. The internal forearm row adds an independent constraint on (L, \tau), which further constrains the configuration. Therefore,
+
+\operatorname{rank} \mathcal{O}_{\text{dist}}(x) > \operatorname{rank} \mathcal{O}_{\text{ext}}(x)
+
+for x \in \mathcal{X}_{\text{occ}}, and the unobservable subspace of \mathcal{A}_{\text{dist}} is strictly smaller. \square
+
+3.3 Information-Theoretic Formulation
+
+The rank argument is qualitative. A stronger, quantitative statement uses mutual information. Under occlusion, the external visual channel provides negligible information about the object state:
+
+I(w; z_{\text{vis, ext}} \mid q) \approx 0.
+
+The distributed architecture provides positive information even when the external camera is fully occluded, because the palm and tactile channels are physically coupled to the contact state:
+
+I(w; S_{\text{tact}}, S_{\text{vis, palm}} \mid q, \tau) > 0.
+
+Recent empirical evidence supports this claim: simultaneous tactile-visual perception achieves an average success rate of 85.5% on five challenging manipulation tasks, compared with 55.4% for vision-only policies, with particular advantage in contact detection with thin and soft objects where visual occlusion is severe. The distributed architecture is designed to realize this gap by construction, rather than relying on a learned policy to exploit incidental tactile signals.
+
+3.4 Friction Identifiability Requires Shear Sensing
+
+The friction coefficient \mu is not identifiable from a static normal pressure map alone. Identifiability of \mu requires either:
+
+1. shear-sensitive tactile sensing, which TacTip provides through lateral marker displacement;
+2. active slip or incipient-slip excitation, which produces observable tangential displacement;
+3. tangential force/torque measurements from the finger F/T sensors.
+
+The heterogeneous finger configuration — GelSight for geometry, TacTip for shear — is therefore not a design preference but an identifiability requirement.
+
+---
+
+4. Architecture and Design
+
+4.1 Three-Level Architecture
+
+Level C — Shoulder (standardized interface). ISO 9409-1-50 flange, 48 V power, EtherCAT. No shoulder R&D in V0. Mounted on UR10e, Franka, or Kinova.
+
+Level B — Forearm (perceptual mechatronic core). Length 220–240 mm. 13–15 brushless motors (Faulhaber class), ratio 5:1 to 15:1 for force transparency. Tendon transmission: Dyneema 0.4 mm, PTFE tubes, idler pulleys. Internal sensors: cable tension, motor current, temperature, 512 imp/rev encoders, 6-axis IMU. Internal wide-angle camera observing tendon/spring bundle. Computing: 1× Orin Nano + Artix-7 FPGA. The FPGA is required for parallel processing of the camera array, following the KIT Finger-Vision architecture, which uses an FPGA and microcontroller hybrid to process visual data from cameras in each fingertip.
+
+Level A — Hand (active perceptual network).
+
+· Wrist (fusion node): 2 DoF, 6-axis F/T sensor, 120° RGB camera + miniature ToF near palm.
+· Palm (anti-occlusion): 2 micro-cameras (2 mm) viewing between fingers, 1 central GelSight Svelte or DIGIT.
+· Fingers: per finger, 1 tendon + 1 return spring. Modalities: Q (pose from internal marker tracking), F (1D/3D force sensor at pulp), T_{\text{int}} (TacTip or GelSight360 at distal pulp), V_{\text{ext}} (2 Mpix lateral micro-camera in V0.1b).
+
+4.2 DoF and Motor Mapping
+
+Unit DoF Motors Tendons Sensors
+Wrist 2 2 – F/T, RGB, ToF
+Thumb 3 2 2 force, GelSight, micro-cam
+Index 3 2 1 force, GelSight
+Middle 3 2 1 force, TacTip
+Ring 3 2 1 force, TacTip
+Little 3 2 1 force, TacTip
+Palm – – – 2 micro-cam, GelSight
+
+Total: 17 actuated DoF, 12 motors, 15 tendons. The underactuation per finger (3 joints, 2 motors, 1 tendon with return spring) is consistent with the soft-hand design philosophy but introduces configuration-dependent coupling that the internal forearm camera observes.
+
+4.3 Sensor Placement and Modalities
+
+The placement follows a spatial sampling principle: each sensor covers a region of the state space that is not accessible to the others. The palm cameras cover the inter-digital space; the finger tactile sensors cover the contact patch; the wrist camera covers the pre-shaping workspace; the forearm camera covers the tendon state. The union of their fields of view covers the manipulation workspace with minimal redundancy. The in-finger cameras provide redundant visual information without inevitable occlusion by the gripper itself before contact, and enable pose recovery for the cameras, which in turn allows inferring finger poses without internal sensors.
+
+4.4 Fusion Architecture
+
+For V0, we adopt the factor graph formulation of Section 2.1:
+
+· Variables: joint poses, tendon lengths, tendon tensions, contact, slip, local geometry.
+· Factors: encoders, IMU, F/T, tactile, vision, internal camera.
+· Real-time optimization, interpretable, clean ablations.
+
+For V1, a lightweight cross-modal transformer can be introduced, where each sensor stream is tokenized and cross-attention is applied between palm, fingers, and wrist. The factor graph provides the baseline and the interpretability.
+
+---
+
+5. Technical Specification (V0.1)
+
+5.1 Mechanical
+
+· Shoulder interface: ISO 9409-1-50, 48 V, EtherCAT.
+· Forearm: 220–240 mm, 12 motors, tendon transmission, internal camera.
+· Wrist: 2 DoF, F/T 6-axis, RGB 120° + ToF.
+· Palm: 2 micro-cameras, 1 GelSight.
+· Fingers: 5 fingers, underactuated tendon, 1 force sensor, 1 tactile sensor, 1 micro-camera (V0.1b).
+
+5.2 Electronics and Bus
+
+· Proprioception/force/tension: STM32H7, CAN-FD, 1 kHz.
+· Cameras: MIPI or GMSL2. With 2 palm + 5 finger + 1 forearm + 1 wrist = 9 cameras, MIPI at 2 Gbps per lane requires an Artix-7 FPGA or GMSL2 serialization for bandwidth aggregation. The KIT Finger-Vision Hand used an FPGA-microcontroller hybrid for five fingertip cameras; the proposed system doubles this count and therefore requires the FPGA to be treated as a first-class architectural component, not a footnote.
+· Computing: Orin Nano in forearm.
+· Link to carrier arm: EtherCAT 1 kHz.
+· Fusion: 100 Hz in forearm, output \hat{W}(t) to arm controller.
+
+5.3 Power and Thermal
+
+Subsystem Continuous Peak
+Motors (12×) 15 W 45 W
+Computing (Orin Nano) 10 W 25 W
+Cameras (9×) 5 W 8 W
+FPGA + sensors 3 W 5 W
+Total 33 W 83 W
+
+48 V input, distributed DC-DC. Passive cooling with optional fan in forearm.
+
+---
+
+6. Experimental Validation Protocol
+
+6.1 Hypothesis
+
+A hand–forearm architecture with distributed perception increases the rank of the observability codistribution under occlusion by at least \dim(\mathcal{C}), and this increase is measurable as I(w; S_{\text{dist}}) - I(w; S_{\text{ext}}) > 0.
+
+6.2 Baseline and Prototype
+
+Baseline A. Allegro V5 Plus 16 DoF + 360° tactile + external RealSense.
+Baseline B. EyeSight Hand: 7 DoF, integrated vision-based tactile sensors, quasi-direct drive actuation, designed for whole-hand manipulation.
+Prototype C. Our hand–forearm module.
+
+The inclusion of EyeSight Hand as a second baseline is required because it directly benchmarks integrated vision-based tactile sensing with compliant actuation, which is the closest architectural competitor.
+
+6.3 Tasks
+
+· 3D reconstruction of a held object under quantitative occlusion, defined as the fraction of object surface unseen by the external camera.
+· Contact/slip detection latency: time from slip onset to \hat{W}(t) update.
+· Grasping of an object hidden behind another.
+· Fine insertion.
+· In-hand manipulation.
+
+6.4 Metrics
+
+Success rate; localization error; reconstruction error; latency S \to \hat{W}; mass; power; heating; robustness to occlusion; calibration drift; thermal drift.
+
+6.5 Failure Modes and Ablations
+
+Calibration drift. Measure reconstruction error before and after 1000 and 3300 grasps, following the GelSlim calibration protocol. The GelSlim framework demonstrates that signal strength degrades after approximately 1700 grasps and that online brightness and contrast adjustment restores consistency over 3300 grasps. The prototype must demonstrate comparable or better stability.
+
+Thermal drift. Measure tactile reconstruction error as a function of forearm temperature over 0–50°C.
+
+Ablations. Factor graph ablations: remove palm cameras, remove finger tactile, remove forearm internal camera, remove all internal perception. Measure rank deficiency and task success rate for each ablation.
+
+6.6 Falsifiable Prediction
+
+Prototype C beats Baseline A by >20% on occlusion-conditioned localization error and slip detection latency at equal mass. If the observability proposition is correct, the ablation removing internal perception should produce the largest rank deficiency and the largest performance drop under occlusion.
+
+---
+
+7. Novelty and Contributions
+
+The novelty is not a new sensor, nor a new hand, but a hand–forearm architecture where the forearm is simultaneously actuator, transmission, and internal perceptual organ, and where the wrist is an explicit fusion node between arm vision and hand vision, with distributed anti-occlusion perception.
+
+The mathematical contribution is the formalization of distributed perception as an observability problem on a factor graph, with a proposition proving strict rank increase under occlusion, an information-theoretic quantification of the occlusion gap, and an identifiability analysis that grounds the heterogeneous tactile sensor configuration in necessary conditions rather than design preference.
+
+The technical contribution is the V0.1 specification with explicit DoF/motor/sensor tables, bus bandwidth analysis, thermal budget, and an experimental protocol that isolates the architectural effect from sensor-level effects, including calibration drift, thermal drift, and factor graph ablations as primary failure-mode measurements.
+Appendices
+
+Appendix A. Notation and Dimensional Consistency
+
+A.1 State Variables
+
+Symbol Space Dimension Description
+q \mathcal{Q} \subset \mathbb{R}^n n Joint configuration
+\dot{q} T\mathcal{Q} \cong \mathbb{R}^n n Joint velocities
+L \mathcal{L} \subset \mathbb{R}^m m Tendon lengths (configuration-dependent)
+\tau \mathcal{T} \subset \mathbb{R}^m m Tendon tensions
+c \mathcal{C} 9k Contact state, k points
+w \mathcal{W} d_w World state (pose, geometry, texture)
+x \mathcal{X} 2n + 2m + 9k + d_w Complete state
+
+A.2 Contact State Decomposition
+
+c = (p, n, f, \mu) \in \mathbb{R}^3 \times S^2 \times \mathbb{R}^3 \times \mathbb{R}_+,
+
+\dim c = 3 + 2 + 3 + 1 = 9.
+
+For k simultaneous contacts, \dim \mathcal{C} = 9k. This corrects the earlier 6k used when \mathcal{C} was identified with SE(3).
+
+A.3 Sensor Indices
+
+\mathcal{S} = \mathcal{S}_{\text{prop}} \cup \mathcal{S}_{\text{tact}} \cup \mathcal{S}_{\text{vis}} \cup \mathcal{S}_{\text{int}}, \qquad |\mathcal{S}| = N.
+
+Family Sensors Measurement
+\mathcal{S}_{\text{prop}} encoders, IMU q, \dot{q}
+\mathcal{S}_{\text{tact}} GelSight, TacTip, F/T c, w
+\mathcal{S}_{\text{vis}} palm, finger, wrist cameras w
+\mathcal{S}_{\text{int}} forearm camera, tension cells, current L, \tau
+
+A.4 Signal Dimensions
+
+d_Q = n, \quad d_{\text{FT}} = 6, \quad d_T = n_T, \quad d_P = n_P, \quad d_V = n_V.
+
+Total measurement dimension:
+
+d_{\text{tot}} = d_Q + d_{\text{FT}} + n_T + n_P + n_V.
+
+---
+
+Appendix B. Full Proof of Proposition 3.2 (Observability Rank Increase under Occlusion)
+
+B.1 Setup
+
+Consider the discrete-time nonlinear system on the window \{t-L, \dots, t\}:
+
+x_{s+1} = f(x_s, u_s), \qquad z_s = h(x_s) + v_s.
+
+The local observability matrix is
+
+\mathcal{O}(x_{t-L:t}) =
+\begin{bmatrix}
+H_t \\
+H_{t-1} F_{t-1} \\
+\vdots \\
+H_{t-L} \prod_{k=0}^{L-1} F_{t-1-k}
+\end{bmatrix},
+
+where H_s = \partial h / \partial x |_{x_s} and F_s = \partial f / \partial x |_{x_s}.
+
+The unobservable subspace at x_0 is
+
+\mathcal{N}(x_0) = \ker \mathcal{O}(x_0).
+
+Local observability holds iff \dim \mathcal{N}(x_0) = 0.
+
+B.2 External Architecture
+
+The external architecture has measurement map
+
+h_{\text{ext}} = (h_{\text{prop}}, h_{\text{FT}}, h_{\text{vis, ext}}),
+
+h_{\text{prop}}(x) = q, \qquad h_{\text{FT}}(x) = g_{\text{FT}}(c, w), \qquad h_{\text{vis, ext}}(x) = g_{\text{vis}}(w, q) \cdot M_{\text{vis}}(q, w).
+
+Jacobian block structure:
+
+H_{\text{ext}} =
+\begin{bmatrix}
+I_n & 0 & 0 & 0 & 0 & 0 \\
+0 & 0 & 0 & 0 & \partial g_{\text{FT}}/\partial c & \partial g_{\text{FT}}/\partial w \\
+0 & 0 & 0 & 0 & 0 & \partial g_{\text{vis}}/\partial w \cdot M_{\text{vis}} + g_{\text{vis}} \cdot \partial M_{\text{vis}}/\partial w
+\end{bmatrix}.
+
+B.3 Occlusion Condition
+
+Definition B.1. The object is occluded from the external camera at configuration (q, w) if
+
+M_{\text{vis}}(q, w) = 0.
+
+Under this condition,
+
+\partial h_{\text{vis, ext}} / \partial x = 0
+
+for all components except through g_{\text{vis}} \cdot \partial M_{\text{vis}}/\partial w, which is supported only on the occlusion boundary. In the interior of the occluded region, the visual row contributes zero rank.
+
+B.4 Lemma (Rank Deficiency of the External Architecture)
+
+Lemma B.2. Let x_0 = (q_0, \dot{q}_0, L_0, \tau_0, c_0, w_0) be a state with M_{\text{vis}}(q_0, w_0) = 0 and k \geq 2 simultaneous contact points. Suppose the two contact points (p_1, n_1, f_1, \mu_1) and (p_2, n_2, f_2, \mu_2) satisfy the force-balance constraint
+
+f_1 + f_2 = f_{\text{ext}}, \qquad p_1 \times f_1 + p_2 \times f_2 = \tau_{\text{ext}},
+
+for fixed external wrench (f_{\text{ext}}, \tau_{\text{ext}}). Then
+
+\dim \mathcal{N}_{\text{ext}}(x_0) \geq 2.
+
+Proof. Consider the infinitesimal perturbation
+
+\delta c = (\delta p_1, \delta n_1, \delta f_1, \delta \mu_1, \delta p_2, \delta n_2, \delta f_2, \delta \mu_2),
+
+with
+
+\delta f_1 = -\delta f_2, \qquad \delta p_1 \times f_1 + p_1 \times \delta f_1 + \delta p_2 \times f_2 + p_2 \times \delta f_2 = 0.
+
+This defines a 2-dimensional subspace of contact perturbations that preserve the external wrench. By construction,
+
+\partial g_{\text{FT}} / \partial c \cdot \delta c = 0.
+
+Since M_{\text{vis}} = 0,
+
+\partial h_{\text{vis, ext}} / \partial c \cdot \delta c = 0.
+
+And h_{\text{prop}} depends only on q, so
+
+\partial h_{\text{prop}} / \partial c \cdot \delta c = 0.
+
+Therefore \delta c \in \ker H_{\text{ext}}. Since the dynamics f are independent of c at first order (contact does not enter the joint dynamics directly except through \tau, which is unperturbed), the full observability matrix satisfies
+
+\mathcal{O}_{\text{ext}}(x_0) \cdot \delta c = 0.
+
+Hence \dim \mathcal{N}_{\text{ext}}(x_0) \geq 2. \square
+
+The factor 2 is a lower bound; in general, the null space includes the friction coefficient \mu (unobservable from static normal force) and the contact geometry (p, n) when the tactile channel is absent.
+
+B.5 Distributed Architecture
+
+The distributed architecture adds the measurement rows
+
+h_{\text{tact}}(x) = g_T(c, w), \qquad h_{\text{vis, palm}}(x) = g_{V_p}(c, w), \qquad h_{\text{vis, finger}}(x) = g_{V_f}(c, w), \qquad h_{\text{int}}(x) = \Phi \circ \Psi(\tau, q, L).
+
+Lemma B.3. Under the same occlusion condition M_{\text{vis, ext}} = 0, the tactile and palm rows satisfy
+
+\partial g_T / \partial c \neq 0, \qquad \partial g_{V_p} / \partial c \neq 0
+
+on an open set of contact configurations \mathcal{X}_{\text{occ}}.
+
+Proof. GelSight and TacTip produce depth maps and shear fields that are locally injective in (p, n) and (f, \mu), respectively, on the contact patch. The palm cameras observe the inter-digital space and provide a second viewpoint of the contact geometry. The injectivity of these maps on an open set follows from the spatial resolution of the sensors and the non-degeneracy of the contact patch. \square
+
+B.6 Proposition (Restated)
+
+Proposition B.4. Under the hypotheses of Lemmas B.2 and B.3, there exists an open set \mathcal{X}_{\text{occ}} \subset \mathcal{X} such that for all x \in \mathcal{X}_{\text{occ}},
+
+\operatorname{rank} \mathcal{O}_{\text{ext}}(x) < \dim \mathcal{X}, \qquad \operatorname{rank} \mathcal{O}_{\text{dist}}(x) = \dim \mathcal{X}.
+
+Proof. By Lemma B.2, \dim \mathcal{N}_{\text{ext}}(x) \geq 2 on \mathcal{X}_{\text{occ}}, so
+
+\operatorname{rank} \mathcal{O}_{\text{ext}}(x) \leq \dim \mathcal{X} - 2 < \dim \mathcal{X}.
+
+For the distributed architecture, the additional rows H_{\text{tact}}, H_{\text{vis, palm}}, and H_{\text{int}} contribute independent constraints. Specifically, the tactile Jacobian \partial g_T / \partial c has rank \dim \mathcal{C} = 9k on \mathcal{X}_{\text{occ}} by Lemma B.3, which exceeds the dimension of the null space of \mathcal{O}_{\text{ext}}. The internal forearm row \partial h_{\text{int}} / \partial (L, \tau) adds independent constraints on the tendon state, which in turn constrains (q, \tau) and thus the contact force balance. Combining the rows,
+
+\operatorname{rank} \mathcal{O}_{\text{dist}}(x) = \operatorname{rank} \mathcal{O}_{\text{ext}}(x) + \Delta,
+
+where \Delta \geq 2 on \mathcal{X}_{\text{occ}}. Therefore \operatorname{rank} \mathcal{O}_{\text{dist}}(x) = \dim \mathcal{X} if the total number of independent rows is at least \dim \mathcal{X}, which holds for the sensor count in the V0.1 specification. \square
+
+B.7 Rank Increase Lower Bound
+
+Corollary B.5. Under the hypotheses of Proposition B.4,
+
+\operatorname{rank} \mathcal{O}_{\text{dist}}(x) - \operatorname{rank} \mathcal{O}_{\text{ext}}(x) \geq \dim(\mathcal{C}) - \dim(\mathcal{W}_{\text{FT}}),
+
+where \mathcal{W}_{\text{FT}} is the subspace of \mathcal{W} observable through the wrist F/T sensor alone. For k \geq 2 contacts and an occluded external camera, this lower bound is at least 2.
+
+Proof. The external architecture observes at most the 6-dimensional wrench space through F/T, so
+
+\dim(\mathcal{W}_{\text{FT}}) \leq 6.
+
+The distributed architecture observes \dim(\mathcal{C}) = 9k contact dimensions through the tactile and palm channels. Subtracting the shared subspace, the rank increase is at least 9k - 6, which is \geq 2 for k \geq 1 and strictly larger for k \geq 2. \square
+
+---
+
+Appendix C. Information-Theoretic Occlusion Analysis
+
+C.1 Setup
+
+Let M \in \{0, 1\} be the occlusion indicator. Under M = 0, the external visual channel provides no information about the object state:
+
+I(w; z_{\text{vis, ext}} \mid M = 0, q) = 0.
+
+This follows from the data processing inequality applied to the Markov chain
+
+w \to \text{object surface} \to \text{occluded image} \to z_{\text{vis, ext}},
+
+where the occluded image is independent of w given M = 0.
+
+C.2 Theorem (Positive Information under Occlusion)
+
+Theorem C.1. Under M = 0, the distributed architecture provides strictly positive information about the object state:
+
+I(w; S_{\text{tact}}, S_{\text{vis, palm}} \mid M = 0, q, \tau) > 0.
+
+Proof. The tactile measurement z_T = h_T(c, w) + v_T depends on w through the contact geometry and local object surface. Since the tactile sensor is in physical contact with the object, the mutual information
+
+I(w; z_T \mid M = 0, q, \tau) > 0
+
+holds whenever the contact patch contains local geometric information about w and the sensor noise covariance R_T \succ 0 is finite. The palm cameras similarly observe the inter-digital space, which is not occluded by the external view. Therefore
+
+I(w; S_{\text{tact}}, S_{\text{vis, palm}} \mid M = 0, q, \tau) \geq I(w; z_T \mid M = 0, q, \tau) > 0.
+
+\square
+
+C.3 Information Gain
+
+Definition C.2. The architectural information gain under occlusion is
+
+\Delta I_{\text{occ}} = I(w; S_{\text{dist}} \mid M = 0) - I(w; S_{\text{ext}} \mid M = 0).
+
+Corollary C.3. \Delta I_{\text{occ}} > 0 and is bounded below by
+
+\Delta I_{\text{occ}} \geq I(w; z_T \mid M = 0) - 0 = I(w; z_T \mid M = 0).
+
+C.4 Connection to Estimation Error
+
+Proposition C.4. Let \hat{w} be the MMSE estimate from S_{\text{dist}} under occlusion. Then
+
+\mathbb{E}[\|w - \hat{w}\|^2] \geq \frac{1}{2\pi e} \exp\left(\frac{2}{d_w} h(w \mid S_{\text{dist}}, M=0)\right),
+
+and the reduction in conditional entropy relative to S_{\text{ext}} is
+
+h(w \mid S_{\text{ext}}, M=0) - h(w \mid S_{\text{dist}}, M=0) = \Delta I_{\text{occ}}.
+
+Proof. The first inequality is the entropy power inequality (Shannon lower bound). The second follows from the definition of mutual information:
+
+I(w; S_{\text{dist}} \mid M=0) = h(w \mid M=0) - h(w \mid S_{\text{dist}}, M=0),
+
+I(w; S_{\text{ext}} \mid M=0) = h(w \mid M=0) - h(w \mid S_{\text{ext}}, M=0).
+
+Subtracting gives the claim. \square
+
+C.5 Empirical Justification
+
+Recent results on simultaneous tactile-visual perception report 85.5% average success over five challenging manipulation tasks, compared with 55.4% for vision-only policies, with the largest advantage in contact detection for thin and soft objects where visual occlusion is severe. This gap is consistent with \Delta I_{\text{occ}} > 0 and provides an empirical lower bound on the architectural information gain.
+
+---
+
+Appendix D. Tendon Elasticity and Internal Perception
+
+D.1 Hill-Type Actuation with Passive Compliance (H-PAC)
+
+The tendon force–length relationship is modeled as
+
+\tau(\Delta L, \dot{L}) = \tau_{\text{active}}(u) + \tau_{\text{passive}}(\Delta L) + \tau_{\text{damping}}(\dot{L}),
+
+where u is the motor command and
+
+\tau_{\text{passive}}(\Delta L) =
+\begin{cases}
+k_{\text{tendon}} \Delta L, & \Delta L > 0, \\
+0, & \Delta L \leq 0,
+\end{cases}
+
+with k_{\text{tendon}} the tendon stiffness. The tendon elongation under restoring spring loading introduces configuration-dependent joint error:
+
+q_{\text{actual}} = q_{\text{commanded}} + C^{-1}(q) \cdot \Delta L(\tau, q),
+
+where C^T(q) \in \mathbb{R}^{m \times n} is the coupling matrix mapping tendon tensions to joint torques. This is the H-PAC-like structure: actuation and passive compliance are modeled jointly, and the configuration-dependent term is not negligible.
+
+D.2 Bowden-Cable Friction
+
+For a tendon routed through a Bowden sheath with wrap angle \theta(s) and Coulomb friction coefficient \mu_c, the tension transmission follows the capstan equation
+
+\tau_{\text{out}} = \tau_{\text{in}} \exp\left(-\mu_c \int_0^s \kappa(s') \, ds'\right),
+
+where \kappa(s') is the local curvature. The configuration-dependent friction introduces hysteresis:
+
+\tau_{\text{joint}}(t) =
+\begin{cases}
+\tau_{\text{in}} e^{-\mu_c \theta(q)}, & \dot{q} > 0, \\
+\tau_{\text{in}} e^{+\mu_c \theta(q)}, & \dot{q} < 0.
+\end{cases}
+
+The internal forearm camera observes the deformation of the tendon/spring bundle directly, providing an estimate of \Delta L that compensates for this hysteresis.
+
+D.3 Internal Perception Map
+
+Definition D.1. The internal perception map is
+
+\Psi : \mathbb{R}^m \times \mathcal{Q} \times \mathbb{R}^m \to \mathcal{D}, \qquad \delta = \Psi(\tau, q, L),
+
+where \delta \in \mathcal{D} is the deformation field of the spring/tendon bundle observed by the forearm camera.
+
+Linearization. Around (\tau_0, q_0, L_0),
+
+\delta \approx \delta_0 + J_\Psi
+\begin{bmatrix}
+\Delta \tau \\
+\Delta q \\
+\Delta L
+\end{bmatrix},
+\qquad J_\Psi = \begin{bmatrix} \partial \Psi/\partial \tau & \partial \Psi/\partial q & \partial \Psi/\partial L \end{bmatrix}.
+
+The camera observation is
+
+z_P = \Phi(\delta) + v_P, \qquad \Phi: \mathcal{D} \to \mathbb{R}^{n_P}.
+
+Linearizing,
+
+z_P \approx \Phi(\delta_0) + J_\Phi J_\Psi
+\begin{bmatrix}
+\Delta \tau \\
+\Delta q \\
+\Delta L
+\end{bmatrix}
++ v_P,
+\qquad J_\Phi = \partial \Phi / \partial \delta.
+
+D.4 Proposition (Internal Perception Constrains Tendon Length)
+
+Proposition D.2. If \operatorname{rank}(J_\Phi J_\Psi) \geq m, then the internal camera observation z_P provides an independent constraint on \Delta L that is not available from motor current and encoders alone.
+
+Proof. Motor current provides a noisy estimate of \tau_{\text{in}}, and encoders provide q. The map from (\tau_{\text{in}}, q) to \Delta L requires the friction model of Appendix D.2, which is uncertain. The internal camera observes \delta, which depends on (\Delta \tau, \Delta q, \Delta L). If the Jacobian has rank at least m, the map is locally invertible in \Delta L, providing a direct measurement that bypasses the friction uncertainty. \square
+
+---
+
+Appendix E. Factor Graph Derivation and Message Passing
+
+E.1 Factor Graph Definition
+
+The factor graph \mathcal{G} = (\mathcal{V}, \mathcal{F}) has variable nodes
+
+\mathcal{V} = \{x_t, x_{t-1}, \dots, x_{t-L}\}
+
+and factor nodes
+
+\mathcal{F} = \mathcal{F}_{\text{dyn}} \cup \mathcal{F}_{\text{prop}} \cup \mathcal{F}_{\text{tact}} \cup \mathcal{F}_{\text{vis}} \cup \mathcal{F}_{\text{int}}.
+
+The joint distribution factorizes as
+
+p(\mathcal{V} \mid \mathcal{Z}) \propto \prod_{f_i \in \mathcal{F}} f_i(\mathcal{V}_i),
+
+where \mathcal{V}_i is the set of variables connected to factor f_i.
+
+E.2 Factor Definitions
+
+Dynamics factor.
+
+f_{\text{dyn}}(x_t, x_{t+1}) = \exp\left(-\tfrac{1}{2} \|x_{t+1} - f(x_t, u_t)\|_Q^2\right).
+
+Proprioceptive factor.
+
+f_{\text{prop}}(x_t) = \exp\left(-\tfrac{1}{2} \|z_Q - q_t\|_{R_Q^{-1}}^2\right).
+
+Tactile factor.
+
+f_{\text{tact}}(x_t) = \exp\left(-\tfrac{1}{2} \|z_T - h_T(c_t, w_t)\|_{R_T^{-1}}^2\right).
+
+Visual factor.
+
+f_{\text{vis}}(x_t) = \exp\left(-\tfrac{1}{2} \|z_V - h_V(w_t, q_t) \cdot M_{\text{vis}}\|_{R_V^{-1}}^2\right).
+
+Internal factor.
+
+f_{\text{int}}(x_t) = \exp\left(-\tfrac{1}{2} \|z_P - \Phi \circ \Psi(\tau_t, q_t, L_t)\|_{R_P^{-1}}^2\right).
+
+E.3 MAP Estimation as Nonlinear Least Squares
+
+The MAP estimate is
+
+\hat{\mathcal{V}} = \arg\min_{\mathcal{V}} \sum_{f_i \in \mathcal{F}} \|r_i(\mathcal{V}_i)\|_{R_i^{-1}}^2,
+
+where r_i is the residual of factor f_i. This is a nonlinear least-squares problem solved by Gauss–Newton:
+
+\mathcal{V}^{(k+1)} = \mathcal{V}^{(k)} - \left(J^T R^{-1} J\right)^{-1} J^T R^{-1} r(\mathcal{V}^{(k)}),
+
+with J the stacked Jacobian of all residuals.
+
+E.4 Sparse Structure and Marginalization
+
+The sparsity pattern of J^T R^{-1} J reflects the mechanical topology. The wrist separator node induces a block-arrow structure:
+
+J^T R^{-1} J =
+\begin{bmatrix}
+\Lambda_A & 0 & \Lambda_{A,W} \\
+0 & \Lambda_B & \Lambda_{B,W} \\
+\Lambda_{A,W}^T & \Lambda_{B,W}^T & \Lambda_W
+\end{bmatrix},
+
+where \Lambda_A is the hand block, \Lambda_B the forearm block, and \Lambda_W the wrist coupling. Marginalizing the wrist node yields
+
+\Lambda_A' = \Lambda_A - \Lambda_{A,W} \Lambda_W^{-1} \Lambda_{A,W}^T,
+
+\Lambda_B' = \Lambda_B - \Lambda_{B,W} \Lambda_W^{-1} \Lambda_{B,W}^T.
+
+This is the algebraic form of the conditional independence statement in Section 2.2.
+
+E.5 Message Passing
+
+For Gaussian factors, sum-product message passing is equivalent to the Gauss–Newton update. The message from factor f_i to variable x_j is
+
+m_{f_i \to x_j}(x_j) \propto \exp\left(-\tfrac{1}{2} \|x_j - \mu_{i \to j}\|_{\Sigma_{i \to j}^{-1}}^2\right),
+
+with
+
+\Sigma_{i \to j} = \left(J_{ij}^T R_i^{-1} J_{ij}\right)^{-1}, \qquad \mu_{i \to j} = \Sigma_{i \to j} J_{ij}^T R_i^{-1} (z_i - r_i^{(0)}).
+
+The belief at variable x_j is the product of incoming messages:
+
+b(x_j) \propto \prod_{f_i \in \text{ne}(x_j)} m_{f_i \to x_j}(x_j).
+
+---
+
+Appendix F. Contact Parameter Identifiability
+
+F.1 Identifiability Definition
+
+Definition F.1. The contact state c = (p, n, f, \mu) is identifiable from measurements (z_T, z_V, z_Q) if the map
+
+(c, w) \mapsto (z_T, z_V, z_Q)
+
+is injective on the domain of interest.
+
+F.2 Theorem (Sufficient Conditions for Identifiability)
+
+Theorem F.2. The contact state c = (p, n, f, \mu) is identifiable if:
+
+1. the tactile sensor has sufficient spatial resolution to resolve the pressure map z_T at the contact patch;
+2. the visual system observes the contact from at least two non-collinear viewpoints;
+3. the tactile sensor is sensitive to shear (for \mu);
+4. the finger F/T sensor provides tangential force measurements.
+
+Proof. Condition 1 ensures that (p, n) are recoverable from the pressure map via photometric stereo or marker tracking. Condition 2 ensures that the local object geometry w is constrained from multiple viewpoints, removing the depth ambiguity of a single view. Condition 3 ensures that the tangential displacement field is observed, from which \mu is recoverable via the relation
+
+f_t = \mu f_n
+
+at the slip boundary. Condition 4 provides an independent measurement of the tangential force, which disambiguates \mu from f_n when the normal force is uncertain. Together, these conditions make the map injective. \square
+
+F.3 Heterogeneous Sensor Configuration
+
+The GelSight360 sensor satisfies conditions 1 and 2 (omnidirectional depth maps from photometric stereo). The TacTip sensor satisfies condition 3 (shear via lateral marker displacement). The finger F/T sensor satisfies condition 4. Therefore the heterogeneous configuration — GelSight on thumb and index, TacTip on middle, ring, and little — satisfies the sufficient conditions of Theorem F.2.
+
+F.4 Rank Condition
+
+Corollary F.3. Under the conditions of Theorem F.2,
+
+\operatorname{rank}\left(\frac{\partial (z_T, z_V, z_Q)}{\partial (c, w)}\right) = \dim(\mathcal{C}) + \dim(\mathcal{W}).
+
+Proof. Injectivity of a differentiable map on an open set implies full column rank of its Jacobian. \square
+
+---
+
+Appendix G. Sensor Degradation and Thermal Noise Models
+
+G.1 Wear Model
+
+Let n_g be the cumulative number of grasps. The GelSight signal strength decays as
+
+S(n_g) = S_0 \exp(-\lambda_w n_g),
+
+with \lambda_w the wear rate. The noise covariance grows as
+
+R_T(n_g) = R_T^{(0)} \left(1 + \alpha_w n_g\right),
+
+where \alpha_w is the wear coefficient. Empirical data from GelSlim indicate signal strength degradation after approximately 1700 grasps and restoration via online brightness and contrast adjustment over 3300 grasps, implying \lambda_w \approx 1/1700 and a calibration update rate of order 1/1000 grasps.
+
+G.2 Thermal Model
+
+The thermal noise covariance is modeled as
+
+R_i(T) = R_i^{(0)} \left(1 + \beta_T (T - T_0)^2\right),
+
+where T is the sensor temperature and T_0 the calibration temperature. For camera-based tactile sensors, thermal expansion of the elastomer and drift in the illumination source contribute to \beta_T. The total covariance is
+
+R_i(t, T) = R_i^{(0)} + \Sigma_{\text{wear}}(n_g) + \Sigma_{\text{thermal}}(T).
+
+G.3 Calibration Update
+
+Definition G.1. The calibration update at time t is
+
+\hat{R}_i(t) = \arg\min_{R \succ 0} \sum_{s=t-K}^{t} \|z_i(s) - h_i(\hat{x}_s)\|_R^2 + \gamma \|\hat{R}_i(t-1) - R\|_F^2,
+
+with \gamma the regularization weight. This is a recursive covariance estimation that tracks wear and thermal drift.
+
+---
+
+Appendix H. Coupling Matrix and DoF Mapping
+
+H.1 Coupling Matrix
+
+The tendon-to-joint torque map is
+
+\tau_{\text{joint}} = C^T(q) \tau,
+
+with C^T(q) \in \mathbb{R}^{m \times n}. For the underactuated finger with 3 joints and 1 tendon,
+
+C_{\text{finger}}^T(q) =
+\begin{bmatrix}
+r_1(q) & r_2(q) & r_3(q)
+\end{bmatrix},
+
+where r_i(q) is the moment arm of the tendon about joint i. The moment arm is configuration-dependent:
+
+r_i(q) = \frac{\partial L_{\text{tendon}}}{\partial q_i}.
+
+H.2 DoF/Motor/Tendon Mapping
+
+Unit DoF Motors Tendons Coupling rank
+Wrist 2 2 – full
+Thumb 3 2 2 2
+Index 3 2 1 1
+Middle 3 2 1 1
+Ring 3 2 1 1
+Little 3 2 1 1
+Total 17 12 15 –
+
+The underactuation per finger (3 joints, 1 tendon, 1 return spring) introduces a 2-dimensional internal null space per finger, which is observed by the internal forearm camera through the tendon length and tension.
+
+H.3 Null Space and Internal Perception
+
+Proposition H.1. The internal forearm camera reduces the dimension of the unobservable subspace by at least the rank of the finger coupling matrix.
+
+Proof. The finger null space is
+
+\mathcal{N}_{\text{finger}} = \ker C_{\text{finger}}^T(q),
+
+with \dim \mathcal{N}_{\text{finger}} = 3 - \operatorname{rank} C_{\text{finger}}^T = 2. The internal camera observes \Delta L, which depends on the joint configuration through
+
+\Delta L = \sum_i r_i(q) \Delta q_i.
+
+This provides one constraint per tendon, reducing the null space dimension by 1 per finger. The remaining null space is resolved by the tactile and palm channels. \square
+
+---
+
+Appendix I. Bus Bandwidth and FPGA Dimensioning
+
+I.1 Camera Count and Data Rate
+
+Total cameras: 2 palm + 5 finger + 1 forearm + 1 wrist = 9. At 2 Mpix, 60 Hz, 12-bit raw:
+
+R_{\text{cam}} = 9 \times 2 \times 10^6 \times 60 \times 12 = 1.296 \times 10^{10} \text{ bit/s} = 12.96 \text{ Gbps}.
+
+MIPI D-PHY at 2 Gbps per lane requires 7 lanes minimum; practical implementations use 4 lanes per camera with aggregation. The Artix-7 FPGA provides sufficient SerDes lanes for 9 cameras at reduced frame rate (30 Hz) or 5 cameras at 60 Hz.
+
+I.2 FPGA Resource Budget
+
+Resource Requirement Artix-7 XC7A100T
+LUTs 40k 63k
+DSPs 180 240
+Block RAM 3.5 Mb 4.9 Mb
+SerDes lanes 12 16
+
+The FPGA performs MIPI deserialization, photometric stereo preprocessing, and timestamp synchronization. The Orin Nano handles factor graph optimization at 100 Hz.
+
+I.3 Latency Budget
+
+Stage Latency
+Camera exposure 5 ms
+MIPI transmission 2 ms
+FPGA preprocessing 5 ms
+Orin Nano fusion 8 ms
+EtherCAT output 1 ms
+Total 21 ms
+
+This is compatible with the 50 ms slip detection requirement.
+
+---
+
+Appendix J. Calibration Drift Protocol
+
+J.1 Protocol
+
+1. Baseline calibration at n_g = 0.
+2. After n_g = 1000 grasps: measure reconstruction error on a reference object.
+3. After n_g = 3300 grasps: repeat.
+4. Apply online brightness and contrast adjustment after each measurement.
+5. Compare reconstruction error before and after adjustment.
+
+J.2 Metrics
+
+E_{\text{rec}}(n_g) = \frac{1}{|\mathcal{P}|} \sum_{p \in \mathcal{P}} \|z_T(p) - \hat{z}_T(p; n_g)\|^2,
+
+where \mathcal{P} is the set of test points and \hat{z}_T(p; n_g) is the reconstruction after n_g grasps.
+
+J.3 Falsifiable Prediction
+
+The calibration drift of the prototype should satisfy
+
+\frac{E_{\text{rec}}(3300)}{E_{\text{rec}}(0)} \leq 1.2,
+
+following the GelSlim benchmark. If the drift exceeds this threshold, the internal forearm camera must compensate by providing an independent tendon-length estimate.
+
+---
+
+Appendix K. Statistical Power and Falsifiability
+
+K.1 Primary Endpoint
+
+The primary endpoint is the occlusion-conditioned localization error
+
+E_{\text{loc}} = \mathbb{E}\left[\|\hat{p} - p\|^2 \mid M = 0\right].
+
+K.2 Power Analysis
+
+Assume a 20% reduction in E_{\text{loc}} with standard deviation \sigma = 0.5 \bar{E}. For power 1 - \beta = 0.8 and significance \alpha = 0.05, the required sample size per group is
+
+n_{\text{trials}} = \frac{2 (z_{1-\alpha/2} + z_{1-\beta})^2 \sigma^2}{\Delta^2} = \frac{2 (1.96 + 0.84)^2 \times 0.25}{0.04} \approx 98.
+
+We therefore require n_{\text{trials}} \geq 100 per condition.
+
+K.3 Falsifiability
+
+The proposition is falsified if:
+
+1. \operatorname{rank} \mathcal{O}_{\text{dist}} - \operatorname{rank} \mathcal{O}_{\text{ext}} = 0 under occlusion;
+2. \Delta I_{\text{occ}} \leq 0;
+3. the ablation removing internal perception produces no significant drop in task success;
+4. the prototype fails to beat Baseline A by 20% on the primary endpoint at equal mass.
+
+ASCII Diagrams — Complete Set
+
+
+Diagram 1 — Three-Level Architecture Decomposition
+
+```
+                    LEVEL C  —  SHOULDER (STANDARDIZED, NO R&D)
+    ┌──────────────────────────────────────────────────────────────────┐
+    │  ISO 9409-1-50 flange   |   48 V DC   |   EtherCAT 1 kHz        │
+    │  Mounted on: UR10e / Franka / Kinova                             │
+    │  Innovation factor in V0:  NONE  (X_C has no proper factor)      │
+    └──────────────────────────────────────────────────────────────────┘
+                                     │
+                                     │  X_B ↔ X_A coupling
+                                     │  passes ONLY through wrist
+                                     ▼
+                    LEVEL B  —  FOREARM (PERCEPTUAL MECHATRONIC CORE)
+    ┌──────────────────────────────────────────────────────────────────┐
+    │  Length 220–240 mm                                               │
+    │  12 brushless motors (Faulhaber class), ratio 5:1 … 15:1         │
+    │  Tendon transmission: Dyneema Ø0.4 mm, PTFE sheath, idlers       │
+    │  ─────────────────────────────────────────────────────────────   │
+    │  INTERNAL SENSORS                                                │
+    │    • cable tension cells        →  τ ∈ R^m                       │
+    │    • motor current sense        →  τ_in                          │
+    │    • temperature (NTC array)    →  T                             │
+    │    • 512 imp/rev encoders       →  q_motor                       │
+    │    • 6-axis IMU                 →  a, ω                          │
+    │    • wide-angle internal camera →  z_P = Φ∘Ψ(τ, q, L)            │
+    │  COMPUTING:  1× Orin Nano  +  Artix-7 FPGA                       │
+    └──────────────────────────────────────────────────────────────────┘
+                                     │
+                                     ▼
+                    LEVEL A  —  HAND (ACTIVE PERCEPTUAL NETWORK)
+    ┌──────────────────────────────────────────────────────────────────┐
+    │  WRIST (fusion node)    2 DoF | F/T 6-axis | RGB 120° + ToF      │
+    │  PALM  (anti-occlusion) 2 micro-cam (Ø2 mm) | GelSight Svelte    │
+    │  FINGERS  5× underactuated tendon, 1 return spring each          │
+    │           Q | F | T_int | V_ext (V0.1b)                          │
+    └──────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+Diagram 2 — Kinematic Chain with DoF, Motors, Tendons, Sensors
+
+```
+   SHOULDER FLANGE
+        │
+        │  [Level C boundary]
+   ─────┼──────────────────────────────────────────────────────────
+        │
+        ▼
+   ┌─────────┐   DoF n=2,  motors m=2
+   │  WRIST  │   Sensors: F/T-6, RGB120, ToF
+   │  NODE W │   Tendons: —          rank C^T = 2
+   └────┬────┘   null dim = 0
+        │
+        │  ── separator cut ──
+        │  p(X_A | X_B, z_W) = p(X_A|z_W) · p(X_B|z_W)
+        │
+   ┌────┴────┬─────────┬─────────┬─────────┬─────────┐
+   │         │         │         │         │         │
+   ▼         ▼         ▼         ▼         ▼         ▼
+ ┌─────┐  ┌─────┐   ┌─────┐   ┌─────┐   ┌─────┐   ┌─────┐
+ │THUMB│  │INDEX│   │MID  │   │RING │   │LITL │   │PALM │
+ └─────┘  └─────┘   └─────┘   └─────┘   └─────┘   └─────┘
+  DoF 3    DoF 3     DoF 3     DoF 3     DoF 3     DoF 0
+  Mot 2    Mot 2     Mot 2     Mot 2     Mot 2     Mot 0
+  Tend 2   Tend 1    Tend 1    Tend 1    Tend 1    Tend 0
+  rank 2   rank 1    rank 1    rank 1    rank 1    —
+  null 1   null 2    null 2    null 2    null 2    —
+
+  TOTAL:  DoF 17   Motors 12   Tendons 15   Σ null = 9
+```
+
+---
+
+Diagram 3 — Sensor Distribution and Fields of View
+
+```
+   EXTERNAL CAMERA (RealSense)                     [Baseline only]
+        ╲
+         ╲   FOV_ext
+          ╲
+   ┌───────╲───────────────────────────────────────────────┐
+   │        ╲                                              │
+   │   ┌─────╲──────────────────────────────┐              │
+   │   │      ╲   HAND ENVELOPE             │              │
+   │   │  ┌────╲──────────────────────┐     │              │
+   │   │  │  ▓▓▓▓▓ OCCLUSION MASK ▓▓▓ │     │              │
+   │   │  │  ▓▓  M_vis(q,w) = 0     ▓▓ │     │              │
+   │   │  │  ▓▓  (dorsal finger side)▓ │     │              │
+   │   │  │  └───────────────────────┘  │              │
+   │   │  │  [palm cam ×2]    → inter-digital space       │
+   │   │  │  [finger tactile] → contact patch             │
+   │   │  │  [forearm cam]    → tendon / spring bundle    │
+   │   │  └───────────────────────────────┘              │
+   │   └────────────────────────────────────┘              │
+   └───────────────────────────────────────────────────────┘
+
+   COVERAGE MAP — state-space partition, minimal redundancy
+   ┌────────────────────┬──────────────────────────────────┐
+   │ Subspace           │ Primary sensing modality         │
+   ├────────────────────┼──────────────────────────────────┤
+   │ (p, n) contact geo │ GelSight Svelte (thumb, index)   │
+   │ (f, μ) shear/slip  │ TacTip (middle, ring, little)    │
+   │ inter-digital w    │ palm micro-cameras ×2            │
+   │ pre-shaping w      │ wrist RGB 120° + ToF             │
+   │ (L, τ) tendon      │ forearm internal camera          │
+   │ (q, q̇) proprio     │ encoders + IMU                   │
+   │ external wrench    │ wrist F/T 6-axis                 │
+   └────────────────────┴──────────────────────────────────┘
+```
+
+---
+
+Diagram 4 — State-Space Decomposition
+
+```
+   X = Q × TQ × L × T × C × W
+
+   ┌────────────────────────────────────────────────────────────────┐
+   │  q ∈ Q ⊂ R^n        n = 17   joint configuration              │
+   │  q̇ ∈ TQ ≅ R^n       n = 17   joint velocity                   │
+   │  L ∈ L ⊂ R^m        m = 15   tendon length  (config-dep.)     │
+   │  τ ∈ T ⊂ R^m        m = 15   tendon tension                   │
+   │  c ∈ C             9k        contact state                    │
+   │  w ∈ W             d_w       world state                      │
+   └────────────────────────────────────────────────────────────────┘
+
+   dim X = 2n + 2m + 9k + d_w = 34 + 30 + 9k + d_w
+
+   CONTACT DECOMPOSITION (per point)
+   ┌──────────┬──────────────┬───────┬────────────────────────────┐
+   │ symbol   │ space        │ dim   │ meaning                    │
+   ├──────────┼──────────────┼───────┼────────────────────────────┤
+   │ p        │ R^3          │ 3     │ contact position           │
+   │ n        │ S^2          │ 2     │ surface normal             │
+   │ f        │ R^3          │ 3     │ contact force              │
+   │ μ        │ R_+          │ 1     │ friction coefficient       │
+   ├──────────┼──────────────┼───────┼────────────────────────────┤
+   │ c        │              │ 9     │ per contact point          │
+   │ C (k pt) │              │ 9k    │ total                      │
+   └──────────┴──────────────┴───────┴────────────────────────────┘
+   NOTE: corrects earlier dim C = 6k (SE(3) identification was wrong)
+```
+
+---
+
+Diagram 5 — Factor Graph Topology (V0)
+
+```
+   FACTOR GRAPH  G = (V, F)     window length L
+
+   x_{t-L} ──f_dyn── x_{t-L+1} ──f_dyn── ... ──f_dyn── x_t
+      │                  │                              │
+   [f_prop]           [f_prop]                       [f_prop]
+   [f_int]            [f_int]                        [f_int]
+      │                  │                              │
+      └─ z_Q, z_P        └─ z_Q, z_P                    └─ z_Q, z_P
+
+   ─────────────────── ARM SIDE  (X_B) ───────────────────
+                          │
+                     ╔════╧════╗
+                     ║  WRIST  ║   ← separator node
+                     ║   z_W   ║
+                     ╚════╤════╝
+   ─────────────────── HAND SIDE (X_A) ───────────────────
+        │          │          │          │
+     [f_tact]  [f_vis_p]  [f_vis_f]  [f_vis_w]
+        │          │          │          │
+      z_T        z_Vp       z_Vf       z_Vw
+   (GelSight/  (palm ×2) (finger)    (wrist
+    TacTip)                           RGB+ToF)
+
+   FACTOR LIST
+   ┌────────────┬──────────────────────────────────────────────────┐
+   │ f_dyn      │ x_{t+1} = f(x_t, u_t) + w_t ,   w_t ~ N(0, Q)   │
+   │ f_prop     │ z_Q = q_t + v_Q                                  │
+   │ f_tact     │ z_T = h_T(c_t, w_t) + v_T                        │
+   │ f_vis      │ z_V = h_V(w_t, q_t)·M_vis(q_t, w_t) + v_V        │
+   │ f_int      │ z_P = Φ∘Ψ(τ_t, q_t, L_t) + v_P                   │
+   └────────────┴──────────────────────────────────────────────────┘
+```
+
+---
+
+Diagram 6 — Wrist as Separator Node
+
+```
+   FULL JOINT DISTRIBUTION
+
+   p(X_A , X_B | z)  ── factorizes through wrist measurement z_W ──►
+
+   p(X_A | X_B , z_W) = p(X_A | z_W) · p(X_B | z_W)
+
+   GRAPHICAL FORM
+
+        X_A                      X_B
+   (hand, fingers)         (forearm, tendon)
+          ╲                      ╱
+           ╲                    ╱
+            ╲                  ╱
+             ╲                ╱
+              ╲              ╱
+               ▼            ▼
+              ┌──────────────┐
+              │  z_W (F/T)   │
+              │  separator   │
+              └──────────────┘
+
+   MARGINALIZATION — information form
+
+        ┌  Λ_A    0    Λ_AW ┐
+   Λ =  │   0    Λ_B   Λ_BW │
+        └ Λ_AWᵀ Λ_BWᵀ  Λ_W  ┘
+
+   Schur complements:
+        Λ_A' = Λ_A − Λ_AW Λ_W^{-1} Λ_AWᵀ
+        Λ_B' = Λ_B − Λ_BW Λ_W^{-1} Λ_BWᵀ
+```
+
+---
+
+Diagram 7 — Tendon Routing and Internal Perception
+
+```
+   MOTOR (forearm)                                JOINT (finger)
+   ┌──────────┐                                  ┌──────────┐
+   │ Faulhaber│  τ_in                            │  joint i │
+   │ ratio    │───────┐                          │          │
+   │ 5:1–15:1 │       │                          └────┬─────┘
+   └──────────┘       │                               │
+                      ▼                               │
+              ┌───────────────┐                       │
+              │  idler pulley │                       │
+              └───────┬───────┘                       │
+                      │                               │
+                      │  ┌─────────────────────┐      │
+                      │  │  BOWDEN SHEATH      │      │
+                      │  │  PTFE, curvature    │      │
+                      │  │  κ(s), wrap θ(q)    │      │
+                      │  │                     │      │
+                      │  │  capstan:           │      │
+                      │  │  τ_out = τ_in ·     │      │
+                      │  │   exp(−μ_c ∫κ ds)   │      │
+                      │  └──────────┬──────────┘      │
+                      │             │                 │
+                      ▼             ▼                 │
+              ┌───────────────────────────┐           │
+              │  SPRING / TENDON BUNDLE   │           │
+              │  observed by internal cam │           │
+              │  δ = Ψ(τ, q, L)           │           │
+              │        │                  │           │
+              │        ▼                  │           │
+              │   z_P = Φ(δ) + v_P        │           │
+              └───────────────────────────┘           │
+                                                       │
+   RETURN SPRING ◄──────────────────────────────────────┘
+
+   HYSTERESIS — configuration-dependent
+        τ_joint = τ_in · e^{−μ_c θ(q)}   if  q̇ > 0
+        τ_joint = τ_in · e^{+μ_c θ(q)}   if  q̇ < 0
+
+   Internal camera observes ΔL directly  →  compensates hysteresis.
+```
+
+---
+
+Diagram 8 — Observability Rank under Occlusion
+
+```
+   ┌────────────────────────────────────────────────────────────────┐
+   │  EXTERNAL ARCHITECTURE   A_ext                                 │
+   │  rows: h_prop(q) , h_FT(wrench) , h_vis,ext(· M_vis)           │
+   ├────────────────────────────────────────────────────────────────┤
+   │  M_vis = 0   →   visual row contributes 0 rank                 │
+   │                                                                │
+   │  rank O_ext  =  n (prop)  +  ≤ 6 (F/T)                         │
+   │              =  17 + 6 = 23                                    │
+   │                                                                │
+   │  dim X       =  34 + 30 + 9k + d_w                             │
+   │                                                                │
+   │  DEFICIENCY  =  dim X − 23   >>   0                            │
+   │  (contact geo, μ, w, L unobservable)                           │
+   └────────────────────────────────────────────────────────────────┘
+
+   ┌────────────────────────────────────────────────────────────────┐
+   │  DISTRIBUTED ARCHITECTURE   A_dist                             │
+   │  rows: h_prop , h_FT , h_tact , h_vis,palm ,                   │
+   │        h_vis,finger , h_int                                    │
+   ├────────────────────────────────────────────────────────────────┤
+   │  M_vis,ext = 0   →   external row dead                         │
+   │  BUT:                                                          │
+   │    h_tact        →  rank ≥ 9k  (p,n from GelSight; f,μ TacTip) │
+   │    h_vis,palm    →  rank ≥ 2   (inter-digital geometry)        │
+   │    h_int         →  rank ≥ m   (L, τ from forearm cam)         │
+   │                                                                │
+   │  rank O_dist = rank O_ext + Δ ,    Δ ≥ 9k − 6                  │
+   │  For k ≥ 1:  Δ ≥ 3    →  rank O_dist > rank O_ext              │
+   │  For k ≥ 2:  Δ ≥ 12                                            │
+   └────────────────────────────────────────────────────────────────┘
+
+   RANK VISUALIZATION
+
+   rank
+    ^
+    |                                          ████  O_dist (k=2)
+    |                                     ████ ████
+    |                                ████ ████ ████
+    |                           ████ ████ ████ ████
+    |                      ████ ████ ████ ████ ████
+    |                 ████ ████ ████ ████ ████ ████
+    |            ████ ████ ████ ████ ████ ████ ████
+    |       ████ ████ ████ ████ ████ ████ ████ ████
+    |  ████ ████ ████ ████ ████ ████ ████ ████ ████  O_ext
+    +-------------------------------------------------> x ∈ X_occ
+         M_vis = 1                              M_vis = 0
+         (visible)                              (occluded)
+```
+
+---
+
+Diagram 9 — Information-Theoretic Occlusion Analysis
+
+```
+   OCCLUSION CHANNEL
+
+   w ──► object surface ──► occluded image ──► z_vis,ext
+                                    │
+                                    │  M = 0
+                                    │  (data processing inequality)
+                                    ▼
+                      I(w ; z_vis,ext | M=0, q) ≈ 0
+
+   DISTRIBUTED CHANNELS
+
+   w  ──► contact patch  ──► z_T  ──► I(w ; z_T  | M=0) > 0
+   w  ──► inter-digital  ──► z_Vp ──► I(w ; z_Vp | M=0) > 0
+   L,τ ──► tendon δ      ──► z_P  ──► I(L ; z_P) > 0
+
+   INFORMATION GAIN
+
+   ΔI_occ = I(w ; S_dist | M=0) − I(w ; S_ext | M=0)
+          = I(w ; S_dist | M=0) − 0
+          ≥ I(w ; z_T | M=0)
+          > 0
+
+   ENTROPY REDUCTION
+
+   h(w | S_ext , M=0)  ─────────────────────┐
+                                            │  ΔI_occ
+   h(w | S_dist, M=0)  ─────────────────────┘
+
+   MMSE BOUND — Shannon entropy power inequality
+        E[ ‖w − ŵ‖² ] ≥ (1/2πe) exp( (2/d_w) h(w | S_dist, M=0) )
+
+   EMPIRICAL ANCHOR
+   ┌──────────────────────────┬──────────────┐
+   │ policy                   │ success rate │
+   ├──────────────────────────┼──────────────┤
+   │ vision-only              │ 55.4 %       │
+   │ tactile + vision         │ 85.5 %       │
+   ├──────────────────────────┼──────────────┤
+   │ gap (5 tasks, occluded)  │ +30.1 pp     │
+   └──────────────────────────┴──────────────┘
+```
+
+---
+
+Diagram 10 — Bus Architecture
+
+```
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                     ORIN NANO  (forearm)                        │
+  │  factor graph optimizer @ 100 Hz                                │
+  │  output:  \hat{W}(t)                                            │
+  └───────┬────────────────────┬────────────────────┬───────────────┘
+          │                    │                    │
+          │ PCIe / MIPI        │ UART / SPI         │ EtherCAT
+          ▼                    ▼                    ▼
+  ┌───────────────┐   ┌────────────────┐   ┌──────────────────────┐
+  │  ARTIX-7 FPGA │   │ STM32H7 (×N)   │   │  CARRIER ARM (UR10e) │
+  │               │   │                │   │                      │
+  │ MIPI deser    │   │ CAN-FD @1 kHz  │   │  1 kHz control loop  │
+  │ photometric   │   │                │   └──────────────────────┘
+  │ stereo pre-   │   │ encoders       │
+  │ processing    │   │ tension cells  │
+  │ timestamp     │   │ current sense  │
+  │ sync          │   │ temperature    │
+  └───────┬───────┘   │ IMU            │
+          │           └────────────────┘
+          │ 9× camera streams
+          ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │  CAMERA BUS  —  9 cameras, MIPI D-PHY 2 Gbps/lane            │
+  │  ┌──────────────┬─────────┬──────────────┬────────────────┐  │
+  │  │ unit         │ count   │ iface        │ rate           │  │
+  │  ├──────────────┼─────────┼──────────────┼────────────────┤  │
+  │  │ palm micro   │ 2       │ MIPI 2-lane  │ 60 Hz          │  │
+  │  │ finger micro │ 5       │ MIPI 2-lane  │ 60 Hz (V0.1b)  │  │
+  │  │ forearm wide │ 1       │ MIPI 4-lane  │ 60 Hz          │  │
+  │  │ wrist RGB    │ 1       │ MIPI 4-lane  │ 60 Hz          │  │
+  │  ├──────────────┼─────────┼──────────────┼────────────────┤  │
+  │  │ TOTAL        │ 9       │              │ 12.96 Gbps raw │  │
+  │  └──────────────┴─────────┴──────────────┴────────────────┘  │
+  └──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+Diagram 11 — FPGA Resource Budget
+
+```
+  ┌────────────────────┬───────────────┬───────────────┬──────────┐
+  │ Resource           │ Requirement   │ Artix-7       │ Margin   │
+  │                    │               │ XC7A100T      │          │
+  ├────────────────────┼───────────────┼───────────────┼──────────┤
+  │ LUTs               │ 40 000        │ 63 400        │ +58 %    │
+  │ DSP slices         │ 180           │ 240           │ +33 %    │
+  │ Block RAM          │ 3.5 Mb        │ 4.9 Mb        │ +40 %    │
+  │ SerDes lanes       │ 12            │ 16            │ +33 %    │
+  └────────────────────┴───────────────┴───────────────┴──────────┘
+```
+
+---
+
+Diagram 12 — Power Distribution Tree
+
+```
+  48 V DC INPUT
+       │
+       ├──────────────► DC-DC 24 V ──► MOTOR DRIVERS (×12)
+       │                                   continuous 15 W
+       │                                   peak       45 W
+       │
+       ├──────────────► DC-DC 12 V ──► CAMERAS (×9)
+       │                                   continuous  5 W
+       │                                   peak        8 W
+       │
+       ├──────────────► DC-DC 5 V  ──► FPGA + SENSORS
+       │                                   continuous  3 W
+       │                                   peak        5 W
+       │
+       └──────────────► DC-DC 5 V  ──► ORIN NANO
+                                           continuous 10 W
+                                           peak       25 W
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │ TOTAL   continuous 33 W        peak 83 W                     │
+  │ Thermal: passive + optional fan in forearm                   │
+  └──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+Diagram 13 — Thermal Budget and Drift Model
+
+```
+  ┌──────────────────┬──────────┬──────────┬─────────────────────┐
+  │ Subsystem        │ Cont.    │ Peak     │ Cooling path        │
+  ├──────────────────┼──────────┼──────────┼─────────────────────┤
+  │ motors (12×)     │ 15 W     │ 45 W     │ forearm shell       │
+  │ Orin Nano        │ 10 W     │ 25 W     │ heatsink + fan opt. │
+  │ cameras (9×)     │  5 W     │  8 W     │ conduction to shell │
+  │ FPGA + sensors   │  3 W     │  5 W     │ conduction          │
+  ├──────────────────┼──────────┼──────────┼─────────────────────┤
+  │ TOTAL            │ 33 W     │ 83 W     │                     │
+  └──────────────────┴──────────┴──────────┴─────────────────────┘
+
+  THERMAL DRIFT MODEL
+        R_i(T) = R_i^{(0)} · ( 1 + β_T (T − T_0)^2 )
+        measured over T ∈ [0, 50] °C
+
+  R_i(t, T) = R_i^{(0)} + Σ_wear(n_g) + Σ_thermal(T)
+```
+
+---
+
+Diagram 14 — Timing Pipeline
+
+```
+  TIME (ms)
+  0        5        10       15       20       25
+  ├────────┼────────┼────────┼────────┼────────┼────►
+  │◄─ exp ─►│
+           │◄ MIPI ►│
+                    │◄ FPGA preproc ►│
+                                     │◄ Orin fusion ►│
+                                                     │◄ EtherCAT ►│
+
+  ┌──────────────────────────┬──────────┐
+  │ Stage                    │ Latency  │
+  ├──────────────────────────┼──────────┤
+  │ camera exposure          │  5 ms    │
+  │ MIPI transmission        │  2 ms    │
+  │ FPGA preprocessing       │  5 ms    │
+  │ Orin Nano fusion         │  8 ms    │
+  │ EtherCAT output          │  1 ms    │
+  ├──────────────────────────┼──────────┤
+  │ TOTAL                    │ 21 ms    │
+  └──────────────────────────┴──────────┘
+  Requirement: slip detection < 50 ms   →   margin 29 ms
+```
+
+---
+
+Diagram 15 — Contact State and Heterogeneous Tactile Coverage
+
+```
+  c = (p, n, f, μ)                                    dim = 9
+
+  ┌──────────────────────┬──────────────────┬────────────────────┐
+  │ Component            │ Sensor           │ Observation        │
+  ├──────────────────────┼──────────────────┼────────────────────┤
+  │ p  position          │ GelSight Svelte  │ depth map          │
+  │ n  normal            │ GelSight Svelte  │ photometric stereo │
+  │ f  normal force      │ GelSight + F/T   │ pressure + wrench  │
+  │ μ  friction          │ TacTip           │ lateral markers    │
+  │ f_t tangential       │ TacTip + F/T     │ marker + wrench    │
+  └──────────────────────┴──────────────────┴────────────────────┘
+
+  FINGER ASSIGNMENT
+
+   THUMB   ┌────────────────┐
+           │  GelSight      │  →  (p, n, f_n)
+   INDEX   ┌────────────────┐
+           │  GelSight      │  →  (p, n, f_n)
+   MIDDLE  ┌────────────────┐
+           │  TacTip        │  →  (f_t, μ, slip)
+   RING    ┌────────────────┐
+           │  TacTip        │  →  (f_t, μ, slip)
+   LITTLE  ┌────────────────┐
+           │  TacTip        │  →  (f_t, μ, slip)
+
+  RATIONALE
+  Injectivity of  c ↦ (z_T, z_V, z_Q)  requires BOTH
+  geometry (GelSight) and shear (TacTip).
+  Not a design preference — an identifiability condition.
+```
+
+---
+
+Diagram 16 — Underactuation Null Space
+
+```
+  FINGER: 3 joints, 1 tendon, 1 return spring
+
+  τ_joint = C^T(q) τ
+
+  C^T(q) = [ r_1(q)   r_2(q)   r_3(q) ]   ∈ R^{1×3}
+            r_i(q) = ∂L_tendon / ∂q_i
+
+  rank C^T = 1    →    dim ker C^T = 3 − 1 = 2
+
+  NULL SPACE
+        { Δq :  r_1 Δq_1 + r_2 Δq_2 + r_3 Δq_3 = 0 }
+        motions that leave tendon length invariant
+
+  INTERNAL CAMERA CONSTRAINT
+        ΔL = Σ_i r_i(q) Δq_i        (observed by forearm camera)
+        →  reduces null space by 1 per tendon
+        →  residual null space resolved by tactile + palm channels
+
+  ┌──────────────┬──────┬───────┬──────┬─────────┬──────────────┐
+  │ Unit         │ DoF  │ Motor │ Tend │ rank C^T│ null dim     │
+  ├──────────────┼──────┼───────┼──────┼─────────┼──────────────┤
+  │ wrist        │  2   │   2   │  –   │    2    │     0        │
+  │ thumb        │  3   │   2   │  2   │    2    │     1        │
+  │ index        │  3   │   2   │  1   │    1    │     2        │
+  │ middle       │  3   │   2   │  1   │    1    │     2        │
+  │ ring         │  3   │   2   │  1   │    1    │     2        │
+  │ little       │  3   │   2   │  1   │    1    │     2        │
+  ├──────────────┼──────┼───────┼──────┼─────────┼──────────────┤
+  │ TOTAL        │ 17   │  12   │ 15   │    –    │     9        │
+  └──────────────┴──────┴───────┴──────┴─────────┴──────────────┘
+```
+
+---
+
+Diagram 17 — Experimental Protocol Flow
+
+```
+  ┌──────────────────────────────────────────────────────────────┐
+  │  HYPOTHESIS                                                  │
+  │  rank O_dist − rank O_ext ≥ dim(C) under occlusion           │
+  │  ΔI_occ > 0                                                  │
+  └────────────────────────┬─────────────────────────────────────┘
+                           │
+                           ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │  BASELINES                                                   │
+  │  A: Allegro V5 Plus 16 DoF + 360° tactile + RealSense        │
+  │  B: EyeSight Hand 7 DoF + integrated VBTS + QDD              │
+  │  C: OUR PROTOTYPE  (hand–forearm, distributed perception)    │
+  └────────────────────────┬─────────────────────────────────────┘
+                           │
+                           ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │  TASKS                                                       │
+  │  T1  3D reconstruction under quantitative occlusion          │
+  │  T2  contact / slip detection < 50 ms                        │
+  │  T3  grasp object hidden behind another                      │
+  │  T4  fine insertion                                          │
+  │  T5  in-hand manipulation                                    │
+  └────────────────────────┬─────────────────────────────────────┘
+                           │
+                           ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │  METRICS                                                     │
+  │  success rate | localization err | reconstruction err        │
+  │  latency S→Ŵ | mass | power | heating | occlusion robust.    │
+  │  calibration drift | thermal drift                           │
+  └────────────────────────┬─────────────────────────────────────┘
+                           │
+                           ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │  STATISTICAL DESIGN                                          │
+  │  primary endpoint: E_loc under M = 0                         │
+  │  power 0.8, α = 0.05, Δ = 20 %, σ = 0.5 Ē                     │
+  │  n_trials ≥ 100 per condition                                │
+  └──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+Diagram 18 — Ablation Matrix
+
+```
+  ┌────────────────────────┬──────┬──────┬──────┬──────┬──────────┐
+  │ Configuration          │ prop │ tact │ vis  │ int  │ Δrank    │
+  ├────────────────────────┼──────┼──────┼──────┼──────┼──────────┤
+  │ full distributed       │  ✓   │  ✓   │  ✓   │  ✓   │  0       │
+  │ − forearm internal cam │  ✓   │  ✓   │  ✓   │  ✗   │  −m      │
+  │ − finger tactile       │  ✓   │  ✗   │  ✓   │  ✓   │  −9k     │
+  │ − palm cameras         │  ✓   │  ✓   │  ✗   │  ✓   │  −2      │
+  │ − all internal         │  ✓   │  ✗   │  ✗   │  ✗   │  −(9k+m) │
+  │ external only (A_ext)  │  ✓   │  ✗   │  ✓*  │  ✗   │  −(9k+m) │
+  └────────────────────────┴──────┴──────┴──────┴──────┴──────────┘
+   * external camera only; M_vis = 0 under occlusion
+
+  PREDICTION
+  Removing internal perception (forearm camera) produces the
+  largest rank deficiency and the largest success drop under
+  occlusion.
+```
+
+---
+
+Diagram 19 — Calibration Drift
+
+```
+  E_rec(n_g) / E_rec(0)
+     ^
+  2.0│
+     │
+  1.5│                              ╱  no recalibration
+     │                            ╱
+  1.2│- - - - - - - - - - - - -╱- - - - -  threshold
+     │                      ╱
+  1.0│────────────────────╱────────────  with online
+     │                  ╱                brightness / contrast
+  0.5│                ╱                  adjustment
+     │              ╱
+     └──────┬───────┬────────┬───────────► n_g
+            0     1000     1700      3300
+
+  Reference: GelSlim — signal strength decay after ≈1700 grasps;
+  online brightness/contrast adjustment restores consistency
+  over ≈3300 grasps.
+
+  FALSIFIABLE
+  Prototype must satisfy  E_rec(3300) / E_rec(0) ≤ 1.2
+  Else: forearm internal camera must compensate via ΔL estimate.
+```
+
+---
+
+Diagram 20 — Falsifiability Decision Tree
+
+```
+  ┌─────────────────────────────────────────┐
+  │  Proposition B.4 (observability rank)   │
+  └────────────────────┬────────────────────┘
+                       │
+          ┌────────────┴────────────┐
+          ▼                         ▼
+   rank O_dist − rank O_ext      rank O_dist − rank O_ext
+        > 0                            = 0
+          │                         │
+          ▼                         ▼
+   ┌──────────────┐          ┌──────────────┐
+   │ CONFIRMED    │          │ FALSIFIED    │
+   └──────────────┘          └──────────────┘
+          │
+          ▼
+  ┌─────────────────────────────────────────┐
+  │  ΔI_occ > 0 ?                           │
+  └────────────────────┬────────────────────┘
+                       │
+          ┌────────────┴────────────┐
+          ▼                         ▼
+       YES                        NO
+          │                         │
+          ▼                         ▼
+   ┌──────────────┐          ┌──────────────┐
+   │ CONFIRMED    │          │ FALSIFIED    │
+   └──────────────┘          └──────────────┘
+          │
+          ▼
+  ┌─────────────────────────────────────────┐
+  │  Ablation: remove internal perception   │
+  │  produces significant success drop ?    │
+  └────────────────────┬────────────────────┘
+                       │
+          ┌────────────┴────────────┐
+          ▼                         ▼
+       YES                        NO
+          │                         │
+          ▼                         ▼
+   ┌──────────────┐          ┌──────────────┐
+   │ CONFIRMED    │          │ FALSIFIED    │
+   └──────────────┘          └──────────────┘
+          │
+          ▼
+  ┌─────────────────────────────────────────┐
+  │  Prototype C beats Baseline A by >20 %  │
+  │  on E_loc at equal mass ?               │
+  └────────────────────┬────────────────────┘
+                       │
+          ┌────────────┴────────────┐
+          ▼                         ▼
+       YES                        NO
+          │                         │
+          ▼                         ▼
+   ┌──────────────┐          ┌──────────────┐
+   │ CONFIRMED    │          │ FALSIFIED    │
+   └──────────────┘          └──────────────┘
+```
+
+---
+
+Diagram 21 — Full Estimation Pipeline
+
+```
+  SENSORS                 PREPROC               FACTORS            OPTIMIZER
+  ───────                 ────────              ───────            ─────────
+  encoders ──┐
+  IMU ───────┤
+             ├──► STM32H7 ──► z_Q ──► f_prop ──┐
+  tension ───┤                                │
+  current ───┤                                │
+  temp ──────┘                                │
+                                              ▼
+  forearm cam ──► FPGA ──► z_P ──► f_int ──► ┌─────────────────┐
+                                             │  FACTOR GRAPH   │
+  palm cam ×2 ──► MIPI ──► z_Vp ──► f_vis ──►│  Gauss–Newton   │──► x̂
+                                             │  @ 100 Hz       │
+  finger cam ×5 ─► MIPI ──► z_Vf ──► f_vis ──►│  Orin Nano      │──► Ŵ(t)
+                                             │                 │
+  tactile ─────► FPGA ──► z_T ──► f_tact ──► │  marginalize    │──► EtherCAT
+                                             │  wrist node     │
+  F/T ────────► STM32 ──► z_W ──► f_FT ─────►└─────────────────┘
+```
+
+---
+
+Diagram 22 — Mathematical Dependency Graph of the Document
+
+```
+                     ┌────────────────────────────┐
+                     │  State space X             │
+                     │  §1.1 , App. A             │
+                     └─────────────┬──────────────┘
+                                   │
+              ┌────────────────────┼────────────────────┐
+              ▼                    ▼                    ▼
+    ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+    │ Measurement     │  │ Tendon          │  │ Contact         │
+    │ model §1.2      │  │ elasticity §2.3 │  │ model §1.1      │
+    │ App. G          │  │ App. D          │  │ App. F          │
+    └────────┬────────┘  └────────┬────────┘  └────────┬────────┘
+             │                    │                    │
+             └────────────────────┼────────────────────┘
+                                  ▼
+                     ┌────────────────────────────┐
+                     │ Factor graph §2.1          │
+                     │ App. E                     │
+                     └─────────────┬──────────────┘
+                                   │
+                    ┌──────────────┼──────────────┐
+                    ▼              ▼              ▼
+          ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+          │ Observability│ │ Information  │ │ Identifiab.  │
+          │ Prop. B.4    │ │ Thm. C.1     │ │ Thm. F.2     │
+          │ App. B       │ │ App. C       │ │ App. F       │
+          └──────┬───────┘ └──────┬───────┘ └──────┬───────┘
+                 │                │                │
+                 └────────────────┼────────────────┘
+                                  ▼
+                     ┌────────────────────────────┐
+                     │ Experimental protocol §6   │
+                     │ App. J , App. K            │
+                     └────────────────────────────┘
+```
+
+---
+
+Diagram 23 — Hardware Unit Cell (Per Finger)
+
+```
+  ┌────────────────────────────────────────────────────────────────┐
+  │  FINGER UNIT  —  underactuated, 3 joints, 1 tendon, 1 spring   │
+  │                                                                │
+  │   proximal                  middle                 distal      │
+  │   ┌────────┐              ┌────────┐             ┌────────┐   │
+  │   │ joint 1│──────────────│ joint 2│─────────────│ joint 3│   │
+  │   └───┬────┘              └───┬────┘             └───┬────┘   │
+  │       │  r_1(q)               │  r_2(q)              │ r_3(q) │
+  │       └──────────┬────────────┴──────────┬───────────┘        │
+  │                  │  tendon L(q)          │                    │
+  │                  ▼                       ▼                    │
+  │        ┌────────────────────────────────────────┐             │
+  │        │  Q  encoder  (marker tracking)         │             │
+  │        │  F  1D/3D force @ pulp                 │             │
+  │        │  T_int  GelSight360  OR  TacTip        │             │
+  │        │  V_ext  2 Mpix micro-cam   (V0.1b)     │             │
+  │        └────────────────────────────────────────┘             │
+  │                                                                │
+  │   RETURN SPRING  ◄─────  k_return                              │
+  └────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+Diagram 24 — V0 vs V1 Fusion Evolution
+
+```
+  V0  —  FACTOR GRAPH  (interpretable, clean ablations)
+  ┌──────────────────────────────────────────────────────────────┐
+  │  variables: q, L, τ, c, w                                    │
+  │  factors:   f_dyn, f_prop, f_tact, f_vis, f_int              │
+  │  solver:    Gauss–Newton, marginalize wrist node             │
+  │  output:    x̂ , Ŵ(t)                                         │
+  └──────────────────────────────────────────────────────────────┘
+                              │
+                              │  V1 extension
+                              ▼
+  V1  —  CROSS-MODAL TRANSFORMER  (learned, tokenized)
+  ┌──────────────────────────────────────────────────────────────┐
+  │  palm stream  ──► tokens ──┐                                 │
+  │  finger stream ──► tokens ──┼──► cross-attention  ──► head   │
+  │  wrist stream  ──► tokens ──┤                                 │
+  │  forearm stream ──► tokens ─┘                                 │
+  │                                                              │
+  │  factor graph remains as baseline + interpretability anchor  │
+  └──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+Diagram 25 — Final Integrated View
+
+```
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                   HAND–FOREARM PERCEPTUAL MODULE                │
+  │                                                                 │
+  │   ┌───────────────┐   ┌───────────────┐   ┌───────────────┐    │
+  │   │  SHOULDER     │   │  FOREARM      │   │  HAND         │    │
+  │   │  Level C      │   │  Level B      │   │  Level A      │    │
+  │   │  standard     │──►│  perceptual   │──►│  active       │    │
+  │   │  interface    │   │  mechatronic  │   │  perceptual   │    │
+  │   │  no R&D V0    │   │  core         │   │  network      │    │
+  │   └───────────────┘   └───────────────┘   └───────────────┘    │
+  │           │                   │                   │             │
+  │           │                   │                   │             │
+  │           ▼                   ▼                   ▼             │
+  │   ┌───────────────┐   ┌───────────────┐   ┌───────────────┐    │
+  │   │  X_C          │   │  X_B          │   │  X_A          │    │
+  │   │  no factor    │   │  f_int        │   │  f_tact,      │    │
+  │   │               │   │  f_prop       │   │  f_vis_p,     │    │
+  │   │               │   │  f_dyn        │   │  f_vis_f      │    │
+  │   └───────────────┘   └───────────────┘   └───────────────┘    │
+  │                               │                   │             │
+  │                               └─────────┬─────────┘             │
+  │                                         ▼                       │
+  │                              ┌─────────────────────┐            │
+  │                              │  WRIST SEPARATOR    │            │
+  │                              │  z_W  (F/T 6-axis)  │            │
+  │                              └──────────┬──────────┘            │
+  │                                         ▼                       │
+  │                              ┌─────────────────────┐            │
+  │                              │  FACTOR GRAPH       │            │
+  │                              │  @ 100 Hz           │            │
+  │                              │  Orin Nano          │            │
+  │                              └──────────┬──────────┘            │
+  │                                         ▼                       │
+  │                              ┌─────────────────────┐            │
+  │                              │  Ŵ(t)  →  ARM       │            │
+  │                              │  EtherCAT 1 kHz     │            │
+  │                              └─────────────────────┘            │
+  │                                                                 │
+  │  OBSERVABILITY CLAIM                                            │
+  │    rank O_dist − rank O_ext ≥ dim(C)  under occlusion           │
+  │  INFORMATION CLAIM                                              │
+  │    ΔI_occ = I(w ; S_dist | M=0) − I(w ; S_ext | M=0) > 0        │
+  │  IDENTIFIABILITY CLAIM                                          │
+  │    c = (p, n, f, μ) ↦ (z_T, z_V, z_Q)  injective                │
+  └─────────────────────────────────────────────────────────────────┘
+```
+
