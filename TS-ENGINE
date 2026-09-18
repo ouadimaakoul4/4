@@ -1,0 +1,2339 @@
+Thermal State Engine (TS-Engine)
+
+A Thermophysiology-Constrained Hybrid Optimal-Control Framework for Exergy-Aware Thermal Regulation
+
+Ouadi Maakoul 
+
+AI : chatGpt, Deepseek, Meta, Kimi 
+
+Abstract
+
+This document presents the complete theoretical specification of the Thermal State Engine (TS-Engine), a thermophysiology-constrained hybrid optimal-control framework for exergy-aware thermal regulation of occupied environments. The central thesis is that thermal regulation is not a setpoint-tracking problem but a hybrid optimal control problem over a thermal equivalence manifold, where the decision variable is the dynamic selection and coordination of heat-transfer mechanisms driven by an explicit human thermophysiological state.
+
+The framework rests on three falsifiable hypotheses. H₁ (Manifold non-triviality) states that under non-degeneracy the thermal equivalence manifold ℰ(𝐱_H*) has positive dimension M + P − rank(DF). H₂ (Non-constant exergy cost) states that ∇J_X is not orthogonal to the tangent space T_eℰ for some e ∈ ℰ, hence Var_{e∈ℰ}[J_X(e)] > 0. H₃ (Dominance of thermophysiology-driven selection) states that there exists a scenario in which the TS-Engine strictly dominates an exergy-optimal hybrid MPC baseline driven by population comfort models at equal hardware, comfort, and resource constraints.
+
+The specification includes: a full-order Fiala thermophysiological model (187 nodes, 12 anatomical elements); a reduced-order model of dimension n_r = 46 obtained via Proper Orthogonal Decomposition with a principled clothing-moisture state; a complete exergy formulation following Shukuya et al. with warm/cool and wet/dry decomposition; a mixed-integer nonlinear program with dwell-time temporal logic implemented via augmented-horizon Combinatorial Integral Approximation; a two-layer hierarchical MPC architecture with Ensemble Kalman Filter state estimation on the identifiable subspace; and a layer-by-layer validation protocol beginning with exergy-balance closure. All hypotheses are open to falsification.
+
+---
+
+1. Introduction and Reformulation
+
+1.1 From Setpoint Tracking to State Invariance
+
+Conventional HVAC control solves the problem T_room(t) → T_set. The TS-Engine solves a fundamentally different problem: maintain the human thermophysiological state in an admissible region while minimizing exergy and resource costs:
+
+𝐱_H(t) ∈ 𝒞_H^phys ∩ 𝒞_H^comfort ∀t ∈ [0,H]
+
+The control authority is not a single actuation intensity but the set of available heat-transfer mechanisms, activated and modulated dynamically. The decision variable is the binary activation vector 𝐳(t) ∈ {0,1}^{|ℳ|} together with continuous modulation 𝐮(t).
+
+1.2 The Thermal Equivalence Manifold
+
+For a given admissible physiological state 𝐱_H* and fixed mode 𝐳, the thermal equivalence manifold is:
+
+ℰ(𝐱_H, 𝐳) = { (𝐱_E, 𝐮) : F_H(𝐱_H, 𝐱_E, 𝐮, 𝐳) = 0, F_E(𝐱_E, 𝐮, 𝐳, 𝐝) = 0 }
+
+where F_H = 0 are the steady-state human heat-balance constraints (one per segment plus core) and F_E = 0 are the environment steady-state constraints. The TS-Engine searches this manifold — across all feasible modes — for the thermodynamically favorable operating point:
+
+min_{(𝐱_E, 𝐮, 𝐳) ∈ ℰ(𝐱_H)} J_X
+
+1.3 The Three Falsifiable Hypotheses
+
+The scientific contribution is not a device. It is a formulation with three hypotheses that are open to falsification:
+
+H₁ (Manifold non-triviality). Under non-degeneracy conditions, ℰ(𝐱_H*, 𝐳) has positive dimension M + P − rank(DF) for at least one feasible 𝐳.
+
+H₂ (Non-constant exergy cost). The exergy cost functional J_X restricted to ℰ(𝐱_H*) is not constant; equivalently, ∇J_X ∉ (T_eℰ)^⊥ for some e ∈ ℰ, yielding Var_{e∈ℰ}[J_X(e)] > 0.
+
+H₃ (Dominance of thermophysiology-driven selection). There exists a scenario s ∈ 𝒮 in which the TS-Engine strictly dominates an exergy-optimal hybrid MPC baseline (Architecture E, driven by population comfort models without physiological state feedback) at equal hardware, equal comfort constraints, and equal resource constraints.
+
+If H₃ fails, the scientific result is a precise characterization of where and why mechanism selection fails to add value. This falsifiability is the strength.
+
+1.4 The Value-of-Information Framing of H₃
+
+A critical methodological point: H₃ must not compare the TS-Engine to a strawman. The baseline (Architecture E) must itself be an exergy-optimal hybrid MPC with the same actuator set, the same constraints, and the same objective structure. The difference between the TS-Engine and Architecture E is information, not mechanism: the TS-Engine has access to an explicit thermophysiological state estimate 𝐱̂_H and its covariance, while Architecture E relies on a population comfort model (PMV/SET-style).
+
+Three architectures isolate the value of information:
+
+· E (baseline): Hybrid exergy-optimal MPC driven by environmental feedback and a population comfort model constraint. No physiological state estimate in the loop.
+· F (TS-Engine): Same plant, same actuators, same objective structure, but with 𝐱̂_H and Cov(𝐱̂_H) entering the constraints (chance constraints) and mechanism selection.
+· G (oracle upper bound): F with perfect physiological state (simulated truth). G isolates estimation losses; E vs. F isolates formulation and estimation gains; F vs. G bounds the value of better sensors and estimators.
+
+H₃ is then crisply stated: F strictly dominates E in scenario s iff physiological feedback plus mechanism selection yields a better Pareto front at equal hardware. This aligns with the personal-comfort-model literature, which consistently shows individual physiological feedback outperforms population models, so H₃ is plausible but now genuinely testable.
+
+---
+
+2. Mathematical Preliminaries
+
+2.1 Notation
+
+Symbol Meaning
+𝐱_H Human thermophysiological state
+𝐱_E Environment state
+𝐮 Continuous input vector
+𝐳 ∈ {0,1}^{ ℳ
+T₀, P₀, φ₀ Dead-state temperature, pressure, relative humidity
+Ẋ_Q Exergy flux associated with heat transfer
+Ẋ_D Exergy destruction rate
+F_H = 0 Human heat-balance constraints
+F_E = 0 Environment dynamics constraints
+ℰ(𝐱_H*, 𝐳) Thermal equivalence manifold for mode 𝐳
+
+Reference state convention. The dead state is (T₀, P₀, φ₀). Two choices are defensible: (i) a constant dead state with T₀ fixed at a reference temperature (e.g., annual mean), or (ii) a time-varying reference temperature T₀(t) tracking outdoor air temperature. The Shukuya tradition uses a time-varying outdoor-air reference. This document adopts a time-varying reference temperature T₀(t) and a constant pressure P₀ and relative humidity φ₀, because a time-varying reference changes Ẋ_{D,body} = T₀(t) Ṡ_{gen,body} and therefore the objective. All exergy terms are evaluated with absolute temperatures (Kelvin). A sign-convention table is specified in Section 2.2.
+
+2.2 Exergy: Warm/Cool and Wet/Dry Decomposition
+
+Following Shukuya et al. (2010, 2012), exergy associated with heat and mass transfer is decomposed into orthogonal warm/cool and wet/dry contributions.
+
+Warm/cool exergy (sensible heat transfer at absolute temperature T):
+
+Ẋ_Q^{wc} = Q̇ (1 − T₀/T)
+
+where Q̇ is positive for heat flow into the system and negative for heat flow out. For T < T₀ the bracket is negative, corresponding to "cool exergy." This sign duality is explicit in every term.
+
+Wet/dry exergy of water vapor in humid air:
+
+The chemical exergy of water vapor in air with partial pressure P_v relative to dead-state vapor pressure P_{v,0} = φ₀ P_sat(T₀) is:
+
+Ẋ_v^{wd} = ṁ_v R_v T₀ ln(P_v / P_{v,0})
+
+where ṁ_v is the vapor mass flow (not total air mass flow) and R_v is the specific gas constant of water vapor. The full humid-air exergy also includes dry-air displacement and mixing terms; these are treated separately in the body balance as they are not controlled by the thermal mechanisms considered here.
+
+Liquid water exergy:
+
+For liquid water at temperature T_s and pressure P_s, the exergy relative to liquid water at the dead state (T₀, P₀) is:
+
+Ẋ_liq^{wd} = ṁ_liq [ (h(T_s) − h(T₀)) − T₀ (s(T_s) − s(T₀)) + v_liq (P_s − P₀) ]
+
+where h and s are specific enthalpy and entropy from the IAPWS-95 formulation for water, and v_liq is specific volume. For near-ambient temperatures the thermal part is small; the compositional part (dispersion into vapor) dominates and is captured by the wet/dry exergy of the resulting vapor.
+
+Radiative exergy (gray-surface approximation):
+
+For radiative exchange between a surface at temperature T_s and surroundings at effective radiative temperature T_r, the Shukuya warm/cool formulation is:
+
+Ẋ_rad = εσA (T_s⁴ − T_r⁴) (1 − T₀/T_r)
+
+This is the primary definition. Spectral corrections enter through band-integrated effective temperatures and are treated as a sensitivity study, not the primary formulation. In the Shukuya tradition, T_r is the mean radiant temperature of the surrounding surfaces.
+
+Sign convention table:
+
+Term Positive when Negative when
+Ẋ_Q^{wc} Heat into system, T > T₀ Heat out, or T < T₀
+Ẋ_v^{wd} P_v > P_{v,0} P_v < P_{v,0}
+Ẋ_liq^{wd} Water warmer/compressed relative to dead state Water cooler/depressurized
+Ẋ_rad Net radiative absorption Net radiative emission
+
+2.3 Human Body Exergy Balance
+
+The human body is an open thermodynamic system. The general exergy balance following Shukuya et al. (2010) is:
+
+dX_B/dt = Ẋ_in − Ẋ_out − Ẋ_{D,body}
+
+with:
+
+Ẋ_{D,body} = T₀(t) Ṡ_{gen,body} ≥ 0
+
+Exergy inputs:
+
+Ẋ_in = Ẋ_met + Ẋ_{air,in}^{wc} + Ẋ_{air,in}^{wd} + Ẋ_{liq,core} + Ẋ_{liq,shell} + Ẋ_{rad,in}
+
+Exergy outputs:
+
+Ẋ_out = Ẋ_{air,out}^{wc} + Ẋ_{air,out}^{wd} + Ẋ_{sweat} + Ẋ_{rad,out} + Ẋ_{conv,out}
+
+Metabolic exergy. The metabolic exergy input Ẋ_met is evaluated as the chemical exergy of metabolic substrates consumed, using a conversion factor of approximately 0.95–1.0 relative to the metabolic heat rate, depending on substrate mix. The literature differs by up to a factor of 2 depending on whether metabolic heat is treated as warm exergy at body temperature or as chemical exergy of substrates. This document adopts the chemical exergy interpretation with a stated conversion factor of 0.97 (mixed substrate).
+
+2.4 The Residual Problem and the Control-Relevant Decomposition
+
+A critical subtlety: Ẋ_{D,body} is not directly measurable. From the balance:
+
+Ẋ_{D,body} = Ẋ_in − Ẋ_out − dX_B/dt
+
+Every term on the right is model-computed. This means that minimizing Ẋ_{D,body} minimizes the closure residual of the model itself. Two consequences follow.
+
+First, Layer 0 validation (exergy-balance closure) is a hard gate before any controller results are interpretable.
+
+Second, Ẋ_{D,body} must be decomposed into a physics-fixed part and a control-dependent part:
+
+Ẋ_{D,body} = Ẋ_{D,met} + Ẋ_{D,transfer}
+
+where Ẋ_{D,met} is the metabolic irreversibility (dominant, approximately 90% of total, and essentially independent of control actions) and Ẋ_{D,transfer} is the irreversible degradation at skin/clothing/environment interfaces. Only Ẋ_{D,transfer} belongs in the objective. Minimizing Ẋ_{D,met} is a constant offset that adds noise to the optimization. This decomposition is a required revision for the objective.
+
+2.5 Hybrid System Model
+
+The system is a switched nonlinear system:
+
+ẋ = f_{𝐳(t)}(𝐱, 𝐮, 𝐝)
+
+with 𝐳(t) ∈ {0,1}^{|ℳ|}. The continuous input satisfies the big-M coupling constraint:
+
+0 ≤ u_j(t) ≤ z_j(t) u_j^max
+
+Dwell-time constraints. For each mechanism j, the on-dwell and off-dwell constraints are:
+
+z_j(t) − z_j(t−1) ≤ z_j(τ) ∀τ ∈ [t+1, t+τ_{j,min}^on]
+
+z_j(t−1) − z_j(t) ≤ 1 − z_j(τ) ∀τ ∈ [t+1, t+τ_{j,min}^off]
+
+These are temporal logic constraints. The dwell state must be carried inside the controller state, not reconstructed from history. This is implemented via an augmented-horizon formulation (Section 4.5).
+
+Mutual exclusivity. Thermodynamic conflicts are encoded as:
+
+A 𝐳(t) ≤ 𝐛
+
+where A is a matrix of exclusivity constraints. For example, evaporative cooling (z_e) and dehumidification (z_d) may be mutually exclusive in certain configurations: z_e + z_d ≤ 1. The matrix A and vector 𝐛 are static (state-independent) in the primary formulation; state-dependent exclusivity is treated as a sensitivity.
+
+---
+
+3. Human Thermophysiological Model
+
+3.1 Full-Order Model
+
+The Fiala model (Fiala et al., 2001), as implemented in the UTCI-Fiala version, comprises 12 anatomical elements (head, face, neck, thorax, abdomen, shoulders, arms, hands, legs, feet) and 187 tissue nodes. The full-order state vector is 𝐱_H^full ∈ ℝ^{187}. Each node satisfies the Pennes bioheat equation:
+
+ρ_tis c_tis ∂T/∂t = k_tis (∂²T/∂r² + (ω/r) ∂T/∂r) − c_b W_b (T − T_art) + M
+
+with ω = 1 for cylindrical elements and ω = 2 for spherical elements.
+
+Validation anchor. The UTCI-Fiala model predicts mean skin and core temperatures with average root-mean-square deviations of 1.35 ± 1.00°C and 0.32 ± 0.20°C, respectively, across moderate and extreme conditions. This is the correct validation target for Layers 1–2.
+
+3.2 Reduced-Order Model for MPC
+
+For real-time control, a reduced-order model is obtained via Proper Orthogonal Decomposition:
+
+𝐱_H^full(t) ≈ Φ 𝐱̃_H(t) + 𝐱̄_H
+
+where Φ ∈ ℝ^{187 × n_r} contains the first n_r POD modes and 𝐱̄_H is the time-averaged field.
+
+State dimension. The reduced-order state is:
+
+n_r = 1 + 4N = 1 + 44 = 45
+
+for N = 11 segments, with one additional clothing-moisture state, giving n_r = 46. The states are:
+
+Component Count Symbol
+Core temperature 1 T_c
+Segmental skin temperatures N = 11 T_{s,i}
+Segmental sweat rates N = 11 ṁ_{sw,i}
+Segmental skin wettedness N = 11 w_i
+Segmental clothing surface temperatures N = 11 T_{cl,i}
+Clothing moisture content 1 m_cl
+Total 46 
+
+The clothing-moisture state is the principled 46th state: it is the state that distinguishes evaporative versus dry mechanism selection, which is the core of H₃.
+
+Closure decisions. The adopted closure (Option B) treats blood flow and sweat rate as dynamic, wettedness and clothing temperature as algebraic, and clothing moisture as dynamic:
+
+· Blood flow: τ_blood dṁ_{blood,i}/dt = ṁ_{blood,i}^target − ṁ_{blood,i}
+· Sweat rate: τ_sw dṁ_{sw,i}/dt = ṁ_{sw,i}^target − ṁ_{sw,i}
+· Wettedness: w_i = min(1, ṁ_{evap,i} / ṁ_{evap,i}^max)
+· Clothing temperature: T_{cl,i} = T_{s,i} − R_{cl,i} Q̇_{skin→cl,i}
+· Clothing moisture: dm_cl/dt = ṁ_{sw,absorbed} − ṁ_{evap,cl}
+
+Reduction error bound. The bound ‖𝐱_H^full − Π(𝐱̃_H)‖ ≤ ε_red is asserted within the snapshot ensemble via neglected singular values. For a switched system driven outside the training envelope, the a priori bound does not hold. The following procedure is adopted:
+
+1. Snapshot ensemble spanning all 8 benchmark scenarios × all feasible mechanism combinations (or a designed subset via Latin hypercube sampling).
+2. Residual-based a posteriori error estimation on validation trajectories.
+3. Hyper-reduction via Discrete Empirical Interpolation Method (DEIM) for the nonlinear perfusion and sweat terms, since plain POD does not reduce the nonlinear right-hand side.
+
+The reduction error bound ε_red must be verified numerically for the operating envelope.
+
+3.3 Admissible State Set
+
+The physiological admissibility region is:
+
+𝒞_H^phys = { 𝐱_H : T_c ∈ [T_c^−, T_c^+], T_{s,i} ∈ [T_{s,i}^−, T_{s,i}^+], w_i ≤ w_i^max, m_cl ∈ [0, m_cl^max] }
+
+Comfort is defined separately via validated sensation models:
+
+D_H(𝐱_H) = Σ_i α_i d_i(𝐲_H)² + Σ_k β_k d_k^local(𝐲_H)²
+
+where 𝐲_H are physiological observables (skin temperature, wettedness, etc.) mapped to comfort via the Fiala sensation model.
+
+---
+
+4. Hybrid Optimal Control Problem
+
+4.1 Decision Variables
+
+Binary activation vector:
+
+𝐳(t) = [z_r, z_c, z_e, z_d, z_v, z_s, z_h]^T ∈ {0,1}^7
+
+where z_r = radiative, z_c = convective, z_e = evaporative, z_d = dehumidification, z_v = ventilation, z_s = storage, z_h = heating.
+
+Continuous inputs:
+
+u_j(t) ∈ [0, u_j^max] when z_j(t) = 1
+
+4.2 Constraints
+
+Coupling constraint: 0 ≤ u_j(t) ≤ z_j(t) u_j^max
+
+Mutual exclusivity: A 𝐳(t) ≤ 𝐛
+
+Dwell-time temporal logic (implemented via augmented horizon, Section 4.5):
+
+τ_j^on ≥ τ_{j,min}^on, τ_j^off ≥ τ_{j,min}^off
+
+Dynamics:
+
+ẋ_H = f_H(𝐱_H, 𝐱_E, 𝐳, 𝐮)
+ẋ_E = f_E(𝐱_E, 𝐳, 𝐮, 𝐝)
+
+Resource limits:
+
+W ≤ W_max, E_el ≤ E_max, P_grid ≤ P_max
+
+4.3 Objective
+
+The objective is decomposed into controllable and fixed components. The control-relevant objective is:
+
+J = ∫₀^H [ w_H Ẋ_{D,transfer} + w_S Ẋ_{in,sys} + w_W ṁ_W + w_E P_el + w_D D_H ] dt + λ_sw Σ_k ‖𝐳_k − 𝐳_{k−1}‖₁
+
+The switching cost is linearized via auxiliary variables:
+
+‖𝐳_k − 𝐳_{k−1}‖₁ = Σ_j ( z_{j,k} + z_{j,k−1} − 2 ξ_{j,k} )
+
+with ξ_{j,k} ≤ z_{j,k}, ξ_{j,k} ≤ z_{j,k−1}, ξ_{j,k} ≥ z_{j,k} + z_{j,k−1} − 1.
+
+Scalarization. For the internal optimization, ε-constraint or Chebyshev scalarization is used to preserve Pareto structure, since H₃ is itself a Pareto-dominance claim. The weighted-sum form is retained only for the deployed real-time policy.
+
+4.4 MINLP Formulation
+
+min_{𝐳, 𝐮} J(𝐳, 𝐮)
+
+subject to:
+
+ẋ_H = f_H(𝐱_H, 𝐱_E, 𝐳, 𝐮)
+ẋ_E = f_E(𝐱_E, 𝐳, 𝐮, 𝐝)
+𝐱_H(t) ∈ 𝒞_H^phys ∩ 𝒞_H^comfort
+0 ≤ u_j(t) ≤ z_j(t) u_j^max
+A 𝐳(t) ≤ 𝐛
+τ_j^on ≥ τ_{j,min}^on, τ_j^off ≥ τ_{j,min}^off
+W ≤ W_max, E_el ≤ E_max
+
+4.5 Dwell-Time Implementation via Augmented-Horizon CIA
+
+The temporal logic constraints are implemented using the augmented-horizon formulation of Jansen et al. (2024). The approach is:
+
+1. NLP relaxation: Solve the MINLP with 𝐳 relaxed to continuous variables in [0,1].
+2. CIA rounding: Use pycombina to solve the Combinatorial Integral Approximation problem, which rounds the relaxed solution to binary while respecting dwell-time constraints.
+3. Augmented horizon: Extend the combinatorial horizon backwards to the dwell trigger, so pycombina sees the full dwell constraint from the current state. This ensures that the dwell constraint is satisfied from the current time onward, not just within the prediction horizon.
+
+The pycombina tool efficiently formulates CIA problems, includes combinatorial constraints, and solves the resulting MILP using a tailored branch-and-bound solver.
+
+Move-blocking. Move-blocking is not applied to the binary variables, as it conflicts with dwell constraints and CIA rounding guarantees. For continuous inputs, move-blocking is optional.
+
+Computational cost. The MINLP-based MPC with CIA is approximately 8× more CPU-intensive than NLP-based MPC, but avoids the post-processing step and better matches the actual system.
+
+4.6 Fallback Hierarchy
+
+If the MINLP becomes infeasible, the controller relaxes constraints in the following order:
+
+1. Local discomfort constraints (individual segment limits)
+2. Global discomfort constraints
+3. Resource limits (in order: water, electricity, power)
+4. Comfort bounds (last resort)
+
+The fallback hierarchy is pre-registered and deterministic.
+
+---
+
+5. The Thermal Equivalence Manifold
+
+5.1 Definition per Stratum
+
+For a given admissible physiological state 𝐱_H* and fixed mode 𝐳 ∈ {0,1}^7, the thermal equivalence manifold is:
+
+ℰ(𝐱_H, 𝐳) = { (𝐱_E, 𝐮) : F_H(𝐱_H, 𝐱_E, 𝐮, 𝐳) = 0, F_E(𝐱_E, 𝐮, 𝐳, 𝐝) = 0 }
+
+The full feasible set is the disjoint union:
+
+ℰ(𝐱_H) = ⋃_{𝐳 ∈ 𝒵_feas} ℰ(𝐱_H, 𝐳)
+
+This is a stratified set, not a manifold. The dimension may vary with 𝐳. The rank condition must be checked for each active mode.
+
+5.2 Dimension Counting and Structural Rank Deficiency
+
+Let:
+
+· M = dim(𝐱_E)
+· P = dim(𝐮)
+· N_H + 1 = number of independent human heat-balance constraints
+· N_E = number of independent environment constraints
+
+Define the stacked constraint map:
+
+F: ℝ^{M+P} → ℝ^q, F(𝐱_E, 𝐮) = [ F_H(𝐱_H*, 𝐱_E, 𝐮, 𝐳) ; F_E(𝐱_E, 𝐮, 𝐳, 𝐝) ]
+
+with q = N_H + 1 + N_E.
+
+Structural rank deficiency. If the environment balance F_E receives exactly the segmental heat and moisture losses that appear in the human balances, the stacked system has at least one linear dependency from global conservation: the sum of human segment balances plus the environment balance is identically zero for the exchanged fluxes. Generically, rank(DF) ≤ q − 1, so:
+
+dim ℰ ≥ M + P − q + 1
+
+This is a checkable, provable refinement that strengthens H₁. The actual rank is reported via SVD.
+
+5.3 Local Manifold Structure
+
+Under the constant-rank condition rank(DF) = r at a point (𝐱_E, 𝐮), ℰ(𝐱_H*, 𝐳) is locally a C¹ submanifold of dimension M + P − r (Proposition 1). The manifold may have multiple connected components per stratum; the variance in H₂ is computed within and between components separately. This is not pedantry: evaporative and dry components may be disconnected by the w_i ≤ w_i^max constraint, and that is precisely the regime structure H₃ exploits.
+
+---
+
+6. Propositions and Proofs
+
+6.1 Proposition 1 (Existence and Dimension of ℰ)
+
+Statement. Let F: ℝ^{M+P} → ℝ^q be C¹ with q = N_H + 1 + N_E. Suppose that at (𝐱_E, 𝐮) and for fixed 𝐳, rank(DF) = r. Then ℰ(𝐱_H*, 𝐳) is locally a C¹ submanifold of dimension M + P − r.
+
+Proof. Direct application of the constant-rank theorem. The solution set F^{−1}(0) is locally a manifold of codimension r. The dimension follows. □
+
+Remark. The rank condition is essential. Raw degree-of-freedom counting (M + P > q) is necessary but not sufficient. The rank must be verified numerically via SVD of DF for each feasible 𝐳.
+
+Verification protocol. For each 𝐳 ∈ 𝒵_feas, compute the SVD of DF over a dense sample of ℰ(𝐱_H*, 𝐳). Report the numerical rank with tolerance. If rank(DF) < q − 1, investigate the source of rank deficiency (structural conservation law or numerical degeneracy).
+
+6.2 Proposition 2 (Non-Constant Exergy Cost on ℰ)
+
+Statement. Let J_X: ℰ(𝐱_H*) → ℝ be the exergy cost functional restricted to ℰ. Under non-degeneracy, there exist e₁, e₂ ∈ ℰ such that J_X(e₁) ≠ J_X(e₂).
+
+Proof. The tangent space is T_eℰ = ker DF(e). Define the projected gradient:
+
+g = ∇J_X − DF^T (DF DF^T)^{−1} DF ∇J_X
+
+The projected gradient is the component of ∇J_X orthogonal to the row space of DF, i.e., the component in ker DF. H₂ is equivalent to ‖g‖ > 0 on ℰ.
+
+Transversality argument. Consider the parameter vector θ comprising thermal properties, geometry, and dead-state conditions. The condition g(θ) = 0 for all e ∈ ℰ defines a submanifold in (e, θ)-space. By Sard's theorem on the jet space, the set of θ for which g vanishes identically on ℰ has measure zero, provided there exists at least one θ where g ≠ 0. The proof structure is: (i) transversality yields generic non-orthogonality; (ii) constructive verification yields a specific instance with ‖g‖ > 0, with SVD-based rank and a reported lower bound on ‖g‖.
+
+Hypothesis hierarchy. H₂ presupposes H₁. If H₁ fails at some (𝐱_H, 𝐳), the variance over a point is trivially zero. The hypothesis is conditioned: H₂(𝐱_H, 𝐳) | H₁(𝐱_H*, 𝐳).
+
+Numerical verification. Sample ℰ and compute Var_{e∈ℰ}[J_X(e)]. If variance > 0, H₂ is supported. Report variance within and between connected components. □
+
+6.3 Proposition 3 (H₃ Dominance — Value of Information)
+
+Statement. There exists a scenario s ∈ 𝒮 such that the Pareto front of the TS-Engine strictly dominates the Pareto front of Architecture E at equal hardware, comfort, and resource constraints:
+
+∃s ∈ 𝒮 such that 𝒫_TS(s) ≺ 𝒫_E(s)
+
+where ≺ denotes strict Pareto dominance of fronts:
+
+∀p_E ∈ 𝒫_E, ∃p_TS ∈ 𝒫_TS such that p_TS dominates p_E, and not vice versa.
+
+Baseline definition. Architecture E is an exergy-optimal hybrid MPC with the same actuator set, the same constraints, and the same objective structure as the TS-Engine, but driven by a population comfort model (PMV/SET-style) without explicit physiological state feedback. The only difference is information: E lacks 𝐱̂_H and its covariance.
+
+Status. This is the central hypothesis. It is not proven. It is to be tested via the benchmark in Section 8.
+
+Dominance test. Pre-register the dominance test using:
+
+· Pareto hypervolume difference against a fixed reference point
+· Additive ε-indicator
+· Minimum-effect threshold (e.g., 5% hypervolume improvement)
+· Paired evaluation across the 8 scenarios
+· ≥10 seeds/weather realizations per scenario
+· 95% confidence intervals on the hypervolume difference
+
+A single seed or a single scenario is insufficient. Strict dominance per front is statistically meaningless without replicate variance.
+
+6.4 Proposition 4 (Falsification Criterion for H₃)
+
+H₃ is falsified if:
+
+∀s ∈ 𝒮, 𝒫_TS(s) ⊀ 𝒫_E(s)
+
+where 𝒫_E is the Pareto front of Architecture E at equal discomfort and equal resource constraints.
+
+If F does not dominate E, the characterization of why — which mechanisms fail, in which scenarios, and by how much — is itself a scientific contribution.
+
+---
+
+7. Architecture and Technical Specification
+
+7.1 Controller Architecture
+
+The control architecture is:
+
+```
+Weather / Building
+        │
+        ▼
+┌──────────────────────────┐
+│ Environment State         │
+│ Ta, Tr, RH, v, surfaces   │
+└────────┬─────────────────┘
+         │
+         ▼
+┌──────────────────────────┐
+│ Ensemble Kalman Filter    │
+│ p(x_H | y_skin, HR,       │
+│      Ta, Tr, RH, v, met,  │
+│      clo)                  │
+│ Localization + Inflation  │
+└────────┬─────────────────┘
+         │
+         ▼
+┌──────────────────────────┐
+│ Thermal State             │
+│ x̂_H, Cov(x̂_H)            │
+│ Identifiable subspace     │
+└────────┬─────────────────┘
+         │
+         ▼
+┌──────────────────────────┐
+│ Hierarchical MPC          │
+│ Slow: 2h / 10 min        │
+│   → z* selection          │
+│ Fast: 30 min / 1 min      │
+│   → u* modulation         │
+│ min J_X over E(x_H)      │
+└────────┬─────────────────┘
+         │
+         ▼
+┌──────────────────────────┐
+│ Actuators                 │
+│ radiant / convective /    │
+│ evaporative / desiccant / │
+│ ventilation / storage /   │
+│ heating                   │
+└────────┬─────────────────┘
+         │
+         ▼
+New State ─────┘ (feedback)
+```
+
+7.2 Hierarchical MPC Timing and Task Split
+
+Layer State Variables Horizon Step Decision Variables
+Slow T_c, storage, envelope 2 h 10 min 𝐳 (mechanism selection), setpoints
+Fast T_{s,i}, w_i, ṁ_{sw,i}, T_{cl,i}, m_cl 30 min 1 min 𝐮 (continuous modulation)
+
+Rationale. The core time constant is 60–90 min; skin and vasomotor responses are 0.5–5 min. The slow layer captures core drift and storage scheduling, and selects mechanisms. The fast layer handles continuous modulation within the active 𝐳.
+
+Nesting condition. The fast layer's constraint set must contain the projection of the slow layer's reachable set:
+
+𝒞_fast(𝐱_slow) ⊇ proj_{𝐱_fast} ℛ_slow
+
+where ℛ_slow is the slow-layer reachable set. This one-line condition prevents a whole class of closed-loop pathologies.
+
+Fast horizon. The fast horizon is extended to 30 min (from 15 min) to be at least 3× the longest dwell time (10–20 min). This ensures that the optimizer can react to mechanism switches within the horizon.
+
+7.3 State Estimation: Identifiable Subspace and EnKF
+
+Observability gap. With N = 11 segments, direct measurement of all T_{s,i}, w_i, ṁ_{sw,i} is infeasible. The system is not observable from 3–4 wearable sensors alone.
+
+Identifiability analysis. Before designing the EnKF, compute the empirical observability Gramian of the reduced-order model over the scenario ensemble. Size the EnKF state to the identifiable subspace (likely 10–20 dimensions, not 46). Estimate unidentifiable states at prior mean with prior covariance in the chance constraint. This converts the observability gap from a weakness into a designed feature.
+
+Sensor package. The assumed wearable package is:
+
+· Heart rate (1 Hz)
+· 2–3 skin temperatures (wrist, chest, forehead; 0.1 Hz)
+· Near-body air temperature and humidity (0.1 Hz)
+
+This is consistent with the physiological-estimation literature, where heart rate and skin temperature are the highest-value wearable channels. Kalman-filter estimators of core temperature from heart rate alone achieve RMSE ≈ 0.30–0.39°C, near the ingestible-sensor accuracy, but cross-dataset generalization degrades sharply.
+
+EnKF formulation. The posterior is:
+
+p(𝐱_H | 𝐲) ∝ p(𝐲 | 𝐱_H) p(𝐱_H)
+
+with prior p(𝐱_H) from the Fiala population model. Use EnKF with N_e = 100 ensemble members on the identifiable subspace. Specify localization (LETKF-style local patches per segment) and adaptive inflation to avoid spurious long-range correlations.
+
+Uncertainty quantification. The posterior covariance Cov(𝐱̂_H) is propagated to the MPC as a chance constraint:
+
+Pr(𝐱_H ∈ 𝒞_H) ≥ 1 − δ
+
+The chance constraint is implemented via constraint tightening from the EnKF ensemble. The literature shows that eliminating comfort violations via constraint tightening raised energy cost by up to 7.53% in comparable studies. This trade-off must be reported explicitly as a benchmark metric.
+
+Estimator validation layer. Before closed-loop testing, perform simulated-truth studies: use the full Fiala model as "patient" and the EnKF as estimator. Report posterior calibration (coverage of 95% credible intervals). An overconfident EnKF silently defeats the chance constraints.
+
+7.4 Implementation Stack
+
+Component Tool
+Environment model Modelica Buildings Library
+Human model (full) Fiala FPC / UTCI-Fiala (187 nodes)
+Human model (ROM) POD + DEIM via MATLAB/Python
+MINLP solver CasADi + Bonmin / SCIP
+CIA rounding pycombina
+Oracle Direct collocation + BARON (reduced instances only)
+Real-time policy Imitation learning (neural network) with safety filter
+EnKF Python (filterpy) or MATLAB with localization/inflation
+
+Oracle honesty. BARON as oracle over direct-collocated MINLP instances will not scale beyond toy horizons. The oracle is used only on reduced instances: single-mechanism scenarios, 1–2 h, coarse discretization. For full instances, report best-known multi-start solutions with bounds. Define regret only where the bound is valid; otherwise report "gap to best-known."
+
+Imitation learning. Train a neural policy π_θ(𝐱̂_H, 𝐱_E) ≈ (𝐳, 𝐮) from offline MINLP solutions. Specify distribution shift detection (fall back to CIA when 𝐱̂_H leaves the training envelope) and a safety filter (the chance constraints applied to the policy's proposals). Without the safety filter, the learned policy is the weakest link in a rigorous dissertation.
+
+7.5 Validation Layers
+
+Layer Validation Target Data Source Tolerance
+0 Exergy balance closure Model-internal ≤1% normalized
+1 Core temperature response Fiala validation data RMSE ≤ 0.32°C
+2 Segmental skin temperature Fiala validation data RMSE ≤ 1.35°C
+3 Vasomotor response Fiala validation data RMSE ≤ published
+4 Sweating response Fiala validation data RMSE ≤ published
+5 Convective heat transfer ASHRAE data ≤ published uncertainty
+6 Radiative heat transfer ASHRAE data ≤ published uncertainty
+7 Evaporative heat transfer ASHRAE data ≤ published uncertainty
+8 Whole-body thermal sensation ASHRAE 55 ≤ published uncertainty
+9 Local discomfort ASHRAE 55 ≤ published uncertainty
+10 Estimator calibration Simulated truth 95% CI coverage
+
+Rule. The controller must not compensate for errors in the physiological model. Validation is performed layer by layer before closed-loop testing. Layer 0 is a hard gate: no controller results are interpretable until exergy-balance closure is verified.
+
+Layer 0 specification. Closure is evaluated as:
+
+max |Σ Ẋ_in − Σ Ẋ_out − Ẋ_D − dX_B/dt| / max_j |term_j| ≤ 1%
+
+evaluated on a scenario-per-term basis, with a per-term uncertainty budget. Partial cancellation between large in/out terms can fake closure; the normalization prevents this.
+
+---
+
+8. Benchmark Design and Falsification Protocol
+
+8.1 Architectures
+
+Architecture Physiology Modes Objective Hardware
+A Simple comfort Convection only Energy Standard HVAC
+B Physiological Radiation only Energy Radiant panels
+C Physiological Radiant + convective Energy Hybrid
+D Physiological All feasible Energy Full actuator set
+E (baseline) Population model All feasible Exergy Full actuator set
+F (TS-Engine) Physiological state feedback All feasible Exergy Pareto Full actuator set
+G (oracle) Perfect physiological state All feasible Exergy Pareto Full actuator set
+
+Critical. Architecture E is the primary baseline for H₃. Architectures E and F have the same actuator set and the same objective structure. The only difference is information. If F does not dominate E, H₃ is falsified for the exergy-Pareto comparison.
+
+8.2 Scenarios
+
+Pre-registered benchmark scenarios:
+
+1. Hot-dry: high T_a, low humidity
+2. Hot-humid: high T_a, high humidity
+3. Mixed: moderate temperature and humidity
+4. Cold: low T_a
+5. Grid outage: limited electricity
+6. Water scarcity: limited water
+7. High solar gain: strong radiative load
+8. High internal gain: dense occupancy
+
+8.3 Metrics
+
+· J_ex: integrated exergy cost (system + transfer)
+· W_water: water consumption
+· D_discomfort: discomfort penalty
+· E_el: electrical energy
+· η_MPC: optimization regret (or gap to best-known)
+· Switching frequency
+· Pareto hypervolume
+· ε-indicator (additive)
+
+8.4 Falsification Criterion for H₃
+
+H₃ is falsified if:
+
+∀s ∈ 𝒮, 𝒫_F(s) ⊀ 𝒫_E(s)
+
+where ≺ denotes strict Pareto dominance of fronts and 𝒫_E is the Pareto front of Architecture E at equal discomfort and equal resource constraints.
+
+Statistical protocol. Run ≥10 seeds/weather realizations per scenario. Compute hypervolume difference against a fixed reference point. Report 95% confidence intervals. Require a minimum-effect threshold of 5% hypervolume improvement for a "dominance" claim in a given scenario.
+
+---
+
+9. Conclusion and Next Steps
+
+9.1 Summary of the Theoretical Framework
+
+This document specifies the complete theoretical foundation of the TS-Engine:
+
+1. Exergy formulation following Shukuya et al. with warm/cool and wet/dry decomposition, correct sign conventions, and a control-relevant decomposition separating metabolic (fixed) from transfer (controllable) exergy destruction.
+2. Human model with full-order Fiala (187 nodes) and reduced-order (46 states, including clothing moisture) verified via POD and DEIM hyper-reduction.
+3. Hybrid MINLP with dwell-time temporal logic implemented via augmented-horizon CIA, mutual exclusivity constraints, and a deterministic fallback hierarchy.
+4. Thermal equivalence manifold defined per stratum with structural rank-deficiency identified, and rigorous propositions for manifold dimension (Prop 1), non-constant exergy cost (Prop 2, via projected gradient and transversality), and value-of-information dominance (Prop 3, with formal Pareto dominance testing).
+5. Architecture with two-layer hierarchical MPC (mechanism selection in slow layer, modulation in fast layer), EnKF on the identifiable subspace with localization and inflation, and a concrete implementation stack.
+6. Validation protocol beginning with Layer 0 exergy-balance closure as a hard gate, followed by layer-by-layer physiological and comfort validation.
+7. Benchmark design with Architecture E as the primary baseline, value-of-information framing with Architecture G as oracle, and pre-registered statistical dominance testing.
+
+9.2 Next Steps
+
+1. Complete the reduced-order model. Apply POD + DEIM to the Fiala full-order model. Verify ε_red numerically across all benchmark scenarios and mechanism combinations.
+2. Verify the rank condition. Compute SVD of DF numerically for each feasible 𝐳 across a dense sample of ℰ.
+3. Verify H₂ numerically. Sample ℰ and compute Var[J_X]. Report within- and between-component variance.
+4. Implement the MINLP with augmented-horizon CIA. Solve for benchmark scenarios with CasADi + Bonmin/SCIP + pycombina.
+5. Build the validation protocol. Layer 0 (exergy closure) first. Hard gate before closed-loop testing.
+6. Implement the EnKF on the identifiable subspace. Include localization, inflation, and calibration layer.
+7. Test H₃ against Architecture E. Pre-register the dominance test. Run ≥10 seeds per scenario. If F does not dominate E, characterize why.
+8. Report the results scenario by scenario. The thesis is designed to be interesting when its headline hypothesis partially fails.
+
+9.3 Final Remark
+
+The strongest thesis defense is not "more mechanisms is better." It is:
+
+We did not assume mechanism selection adds value. We defined ℰ(𝐱_H*) and proved that under the rank condition it has dimension M + P − r. We proved that ∇J_X is not orthogonal to T_eℰ under non-degeneracy. We redefined the baseline as a value-of-information comparison against an exergy-optimal hybrid MPC with the same hardware but without physiological state feedback. Then we tested whether searching ℰ with explicit thermophysiological state yields Pareto dominance. In hot-humid scenarios with water scarcity, it does by X%; in cold scenarios, it does not. Here is why.
+
+That falsifiability is the strength. A thesis designed to be interesting when its headline hypothesis fails cannot be destroyed by its own experiment.
+
+
+APPENDICES
+
+Appendix A: Proof of Proposition 1 — Manifold Structure via the Constant Rank Theorem
+
+A.1 Statement
+
+Let F: W \to \mathbb{R}^q be a C^1 mapping on an open set W \subseteq \mathbb{R}^{M+P}, with q = N_H + 1 + N_E. Suppose that for fixed \mathbf{z} \in \{0,1\}^{|\mathcal{M}|}, the derivative DF(\mathbf{x}_E^*, \mathbf{u}^*) has constant rank r on a neighbourhood of (\mathbf{x}_E^*, \mathbf{u}^*) \in F^{-1}(0). Then the zero set
+
+\mathcal{E}(\mathbf{x}_H^*, \mathbf{z}) = \{(\mathbf{x}_E, \mathbf{u}) \in W : F(\mathbf{x}_E, \mathbf{u}; \mathbf{x}_H^*, \mathbf{z}, \mathbf{d}) = 0\}
+
+is locally a C^1 submanifold of \mathbb{R}^{M+P} of dimension M + P - r.
+
+A.2 Proof
+
+The proof is a direct application of the constant rank theorem.
+
+Step 1: Local coordinate reduction. Let a = (\mathbf{x}_E^*, \mathbf{u}^*). Since DF(a) has rank r, there exist invertible linear coordinate changes such that the Jacobian matrix takes the form
+
+DF(a) = \begin{bmatrix} I_r & 0 \\ 0 & 0 \end{bmatrix}
+
+after permutation of coordinates. Without loss of generality, assume a = 0 and F(a) = 0.
+
+Step 2: Application of the rank theorem. The constant rank theorem (see, e.g., [41, I 10.3.1] in the AMS reference) states that if f: W \to \mathbb{R}^q is C^k with df(x) of constant rank k for all x \in W, then for each a \in W there exist charts (U, u) of W centered at a and (V, v) of \mathbb{R}^q centered at f(a) such that
+
+v \circ f \circ u^{-1}(x_1, \ldots, x_{M+P}) = (x_1, \ldots, x_r, 0, \ldots, 0).
+
+Consequently, f^{-1}(b) is a submanifold of W of dimension (M+P) - r for each b \in f(W).
+
+Step 3: Identification of the manifold. Applying this to F with f = F, k = r, and b = 0, we obtain that F^{-1}(0) \cap U is a C^1 submanifold of U of dimension M + P - r.
+
+Step 4: Local to global. Since the argument holds for every point a \in F^{-1}(0) where the rank condition is satisfied, \mathcal{E}(\mathbf{x}_H^*, \mathbf{z}) is locally a C^1 submanifold of dimension M + P - r. \square
+
+A.3 Remark on the Stratified Structure
+
+The full feasible set is the disjoint union over feasible modes:
+
+\mathcal{E}(\mathbf{x}_H^*) = \bigcup_{\mathbf{z} \in \mathcal{Z}_{\text{feas}}} \mathcal{E}(\mathbf{x}_H^*, \mathbf{z}).
+
+This is a stratified set, not a manifold. The dimension may vary with \mathbf{z}. The rank condition must be checked for each active mode. This stratification is essential for the variance computation in Proposition 2: if \mathcal{E}(\mathbf{x}_H^*, \mathbf{z}) has multiple connected components, variance must be reported within and between components separately.
+
+A.4 Structural Rank Deficiency
+
+If the environment balance F_E = 0 receives exactly the segmental heat and moisture losses that appear in the human balances F_H = 0, the stacked system possesses at least one linear dependency from global conservation:
+
+\sum_{i=1}^{N_H+1} F_{H,i} + F_E \equiv 0
+
+for the exchanged fluxes. Generically, this implies:
+
+\operatorname{rank}(DF) \le q - 1
+
+so that
+
+\dim \mathcal{E} \ge M + P - q + 1.
+
+This is a checkable, provable refinement that strengthens H₁. The actual rank must be reported via singular value decomposition (SVD) of DF over a dense sample of \mathcal{E}.
+
+---
+
+Appendix B: Proof of Proposition 2 — Non-Constant Exergy Cost on the Manifold
+
+B.1 Statement
+
+Let J_X: \mathcal{E}(\mathbf{x}_H^*, \mathbf{z}) \to \mathbb{R} be the exergy cost functional restricted to the thermal equivalence manifold. Under non-degeneracy, there exist e_1, e_2 \in \mathcal{E}(\mathbf{x}_H^*, \mathbf{z}) such that J_X(e_1) \neq J_X(e_2).
+
+Equivalently, the projected gradient
+
+g = \nabla J_X - DF^T (DF \, DF^T)^{-1} DF \, \nabla J_X
+
+satisfies \|g\| > 0 on \mathcal{E}.
+
+B.2 Proof via Projected Gradient
+
+Step 1: Tangent space. The tangent space to \mathcal{E} at a point e = (\mathbf{x}_E, \mathbf{u}) is:
+
+T_e \mathcal{E} = \ker DF(e) = \{v \in \mathbb{R}^{M+P} : DF(e) \, v = 0\}.
+
+Step 2: Orthogonal decomposition. Decompose \mathbb{R}^{M+P} into the row space of DF(e) and its orthogonal complement:
+
+\mathbb{R}^{M+P} = \operatorname{range}(DF^T) \oplus \ker DF.
+
+Every vector w \in \mathbb{R}^{M+P} admits a unique decomposition w = w_{\parallel} + w_{\perp} with w_{\parallel} \in \operatorname{range}(DF^T) and w_{\perp} \in \ker DF.
+
+Step 3: Projected gradient. The orthogonal projection of \nabla J_X onto \ker DF is:
+
+g = \Pi_{\ker DF} \nabla J_X = \nabla J_X - DF^T (DF \, DF^T)^{-1} DF \, \nabla J_X
+
+where \Pi_{\ker DF} = I - DF^T (DF \, DF^T)^{-1} DF is the orthogonal projection onto \ker DF. This is the standard form of the projected gradient in constrained optimization.
+
+Step 4: Non-orthogonality implies variation. If g \neq 0, then \nabla J_X \notin \operatorname{range}(DF^T) = (T_e \mathcal{E})^\perp. Choose v = g \in T_e \mathcal{E}. Then
+
+\langle \nabla J_X, v \rangle = \langle \nabla J_X, g \rangle = \|g\|^2 > 0.
+
+By Taylor expansion, J_X(e + \epsilon v) = J_X(e) + \epsilon \langle \nabla J_X, v \rangle + O(\epsilon^2) \neq J_X(e) for sufficiently small \epsilon > 0. Hence J_X varies along \mathcal{E}. \square
+
+B.3 Genericity via Transversality and Sard's Theorem
+
+Step 1: Parameterized family. Consider the parameter vector \theta \in \Theta \subseteq \mathbb{R}^p comprising thermal properties, geometry, and dead-state conditions. The exergy functional and constraints depend on \theta:
+
+J_X = J_X(e; \theta), \quad F = F(e; \theta).
+
+Define the parameterized projected gradient:
+
+g(e, \theta) = \Pi_{\ker DF(e; \theta)} \nabla_e J_X(e; \theta).
+
+Step 2: Transversality. The condition g(e, \theta) = 0 for all e \in \mathcal{E}(\theta) defines a subset of the product manifold \mathcal{E} \times \Theta. The map
+
+G: \mathcal{E} \times \Theta \to \mathbb{R}^{M+P}, \quad G(e, \theta) = g(e, \theta)
+
+is a smooth map between manifolds. The zero set G^{-1}(0) is the set of parameter values for which the exergy cost is constant along \mathcal{E}.
+
+Step 3: Sard's theorem. Sard's theorem states that the set of critical values of a smooth map has Lebesgue measure zero. Equivalently, almost all values are regular values.
+
+Apply Sard's theorem to the projection \pi: G^{-1}(0) \to \Theta. The critical values of \pi form a set of measure zero in \Theta. For all regular values \theta \notin \pi(\text{Crit}(G)), the preimage \pi^{-1}(\theta) is a submanifold of dimension \dim G^{-1}(0) - \dim \Theta. If this dimension is negative (i.e., G^{-1}(0) is empty for generic \theta), then g(e, \theta) \neq 0 for generic \theta.
+
+Step 4: Generic transversality. The fundamental result: transversality is a generic condition — if it fails, it can be restored by an arbitrarily small perturbation. The set of regular values of a smooth map is open and dense (by Sard's theorem and continuity), so generic non-orthogonality holds provided there exists at least one parameter value where g \neq 0.
+
+Step 5: Constructive verification. To complete the proof, it suffices to exhibit one specific parameter instance (\theta_0) and one point e_0 \in \mathcal{E}(\theta_0) where g(e_0, \theta_0) \neq 0. This is done numerically by SVD-based rank computation and evaluation of the projected gradient at sampled points on \mathcal{E}. \square
+
+B.4 Hypothesis Hierarchy
+
+H₂ presupposes H₁. If H₁ fails at some (\mathbf{x}_H^*, \mathbf{z}) — i.e., \dim \mathcal{E} = 0 — then the variance over a point is trivially zero. The hypothesis is conditioned:
+
+\text{H}_2(\mathbf{x}_H^*, \mathbf{z}) \mid \text{H}_1(\mathbf{x}_H^*, \mathbf{z}).
+
+This hierarchy must be stated explicitly in any numerical verification.
+
+---
+
+Appendix C: Proof of Proposition 3 — Value-of-Information Dominance
+
+C.1 Statement
+
+There exists a scenario s \in \mathcal{S} such that the Pareto front of the TS-Engine strictly dominates the Pareto front of Architecture E at equal hardware, comfort, and resource constraints:
+
+\exists s \in \mathcal{S} : \mathcal{P}_F(s) \prec \mathcal{P}_E(s)
+
+where \prec denotes strict Pareto dominance of fronts:
+
+\forall p_E \in \mathcal{P}_E, \; \exists p_F \in \mathcal{P}_F \text{ such that } p_F \text{ dominates } p_E,
+
+and not vice versa.
+
+C.2 Definitions
+
+Architecture E (baseline). An exergy-optimal hybrid MPC with the same actuator set, the same constraints, and the same objective structure as the TS-Engine, but driven by a population comfort model (PMV/SET-style) without explicit physiological state feedback. The only difference is information: E lacks \hat{\mathbf{x}}_H and its covariance.
+
+Architecture F (TS-Engine). Same plant, same actuators, same objective structure, but with \hat{\mathbf{x}}_H and \text{Cov}(\hat{\mathbf{x}}_H) entering the constraints (chance constraints) and mechanism selection.
+
+Architecture G (oracle). F with perfect physiological state (simulated truth).
+
+C.3 The Value-of-Information Argument
+
+Step 1: Information structure. Let \mathcal{I}_E denote the information available to Architecture E and \mathcal{I}_F the information available to Architecture F. The key inclusion is:
+
+\mathcal{I}_E \subseteq \mathcal{I}_F
+
+because F has access to all environmental information available to E plus the physiological state estimate.
+
+Step 2: Decision space. The feasible decision sets are:
+
+\mathcal{D}_E = \{(z, u) : \text{constraints satisfied under } \mathcal{I}_E\}
+
+\mathcal{D}_F = \{(z, u) : \text{constraints satisfied under } \mathcal{I}_F\}
+
+Since \mathcal{I}_E \subseteq \mathcal{I}_F, the physiological chance constraints available to F are strictly more informative. In general, \mathcal{D}_E \not\subseteq \mathcal{D}_F and \mathcal{D}_F \not\subseteq \mathcal{D}_E; the sets are incomparable without further assumptions. However, when the population comfort model used by E is conservative (as PMV typically is for individuals), F can access decisions that E must reject as infeasible.
+
+Step 3: Value of information. The expected value of information (EVPI) in decision theory is the maximum amount a decision-maker would pay for perfect information. The classical result is that EVPI \ge 0 for expected-utility maximizers, and non-negativity holds under a weak dominance axiom even for non-expected-utility preferences.
+
+For multi-criterion problems under uncertainty, the value of additional information is defined analogously: it is the improvement in the Pareto front achievable by expanding the information set.
+
+Step 4: Dominance condition. Architecture F strictly dominates E in scenario s if:
+
+\forall p_E \in \mathcal{P}_E(s), \; \exists p_F \in \mathcal{P}_F(s) : p_F \text{ dominates } p_E
+
+and there exists p_F \in \mathcal{P}_F(s) that is not dominated by any element of \mathcal{P}_E(s).
+
+This is a partial order on Pareto fronts, not a total order. The claim is existential: there exists at least one scenario where the dominance holds.
+
+Step 5: Falsification. H₃ is falsified if:
+
+\forall s \in \mathcal{S}, \; \mathcal{P}_F(s) \not\prec \mathcal{P}_E(s)
+
+i.e., if for every scenario, there exists at least one point on the E-front that is not dominated by any point on the F-front. \square
+
+C.4 Statistical Testing Protocol
+
+Pareto dominance of fronts is tested using:
+
+1. Hypervolume indicator. For a front \mathcal{P} with reference point r, the hypervolume \mathcal{H}(\mathcal{P}, r) is the volume of the region dominated by \mathcal{P} and bounded above by r. F dominates E in hypervolume if \mathcal{H}(\mathcal{P}_F, r) > \mathcal{H}(\mathcal{P}_E, r).
+2. Additive \varepsilon-indicator. The minimum \varepsilon such that for every p_E \in \mathcal{P}_E, there exists p_F \in \mathcal{P}_F with p_F + \varepsilon \mathbf{1} \succeq p_E.
+3. Replicate protocol. Run \ge 10 seeds/weather realizations per scenario. Compute 95% confidence intervals on the hypervolume difference. Require a minimum-effect threshold (e.g., 5% hypervolume improvement) for a dominance claim.
+
+---
+
+Appendix D: Reduced-Order Model Construction and Error Analysis
+
+D.1 POD Basis Construction
+
+Let \{\mathbf{x}_H^{\text{full}}(t_s)\}_{s=1}^{N_s} \subset \mathbb{R}^{n_H^{\text{full}}} be a set of snapshot solutions of the full-order Fiala model, with n_H^{\text{full}} = 187. Form the snapshot matrix:
+
+S = [\mathbf{x}_H^{\text{full}}(t_1), \ldots, \mathbf{x}_H^{\text{full}}(t_{N_s})] \in \mathbb{R}^{n_H^{\text{full}} \times N_s}.
+
+Compute the SVD:
+
+S = U \Sigma V^T
+
+where U \in \mathbb{R}^{n_H^{\text{full}} \times N_s}, \Sigma = \text{diag}(\sigma_1, \ldots, \sigma_{N_s}) with \sigma_1 \ge \sigma_2 \ge \cdots \ge \sigma_{N_s} \ge 0, and V \in \mathbb{R}^{N_s \times N_s}.
+
+The POD basis of dimension n_r is the first n_r left singular vectors:
+
+\Phi = [u_1, \ldots, u_{n_r}] \in \mathbb{R}^{n_H^{\text{full}} \times n_r}.
+
+The reduced-order approximation is:
+
+\mathbf{x}_H^{\text{full}}(t) \approx \bar{\mathbf{x}}_H + \Phi \tilde{\mathbf{x}}_H(t)
+
+where \bar{\mathbf{x}}_H is the time-averaged field.
+
+D.2 A Priori POD Error Bound
+
+Theorem (POD projection error). Let \{\phi_j\}_{j=1}^{r} be the POD basis functions corresponding to the r largest singular values \{\sigma_j\} obtained from the SVD of the snapshot matrix. Then, for any snapshot \psi(t_n), the projection error satisfies:
+
+\left\| \psi(t_n) - \sum_{j=1}^{r} \langle \psi(t_n), \phi_j \rangle \phi_j \right\|_{L^2(\Omega)}^2 \le \sum_{j=r+1}^{N} \sigma_j^2.
+
+Proof sketch. The truncated SVD provides the optimal rank-r approximation in the Frobenius norm. The error is the sum of the squares of the neglected singular values. \square
+
+D.3 DEIM Hyper-Reduction for Nonlinear Terms
+
+Plain POD does not reduce the computational cost of evaluating the nonlinear right-hand side f_H(\mathbf{x}_H, \mathbf{x}_E, \mathbf{z}, \mathbf{u}), which involves the perfusion and sweat terms. The Discrete Empirical Interpolation Method (DEIM) addresses this.
+
+DEIM approximation. Given a nonlinear function f: \mathbb{R}^N \to \mathbb{R}^N, construct a POD basis U \in \mathbb{R}^{N \times m} from snapshots of f. The DEIM approximation is:
+
+f \approx \hat{f} = U (P^T U)^{-1} P^T f
+
+where P \in \mathbb{R}^{N \times m} is a selection matrix determined by the DEIM algorithm (greedy selection of interpolation indices via QR with column pivoting).
+
+DEIM error bound. The approximation error satisfies:
+
+\|f - \hat{f}\|_2 \le \|(P^T U)^{-1}\|_2 \|(I - U U^T) f\|_2.
+
+The quantity \|(I - U U^T) f\|_2 is the POD projection error, which decreases as more basis vectors are included. The quantity \|(P^T U)^{-1}\|_2 is kept bounded by the DEIM index selection algorithm. A sharper bound is achievable via strong rank-revealing QR factorization.
+
+D.4 Practical Error Verification Protocol
+
+1. Snapshot ensemble. Generate snapshots spanning all 8 benchmark scenarios × all feasible mechanism combinations (or a designed subset via Latin hypercube sampling).
+2. Modal energy criterion. Choose n_r such that:
+
+\frac{\sum_{j=1}^{n_r} \sigma_j^2}{\sum_{j=1}^{N_s} \sigma_j^2} \ge 0.999.
+
+3. A posteriori error estimation. On validation trajectories not in the snapshot set, compute the projection error:
+
+\varepsilon_{\text{red}}(t) = \|\mathbf{x}_H^{\text{full}}(t) - \Pi(\tilde{\mathbf{x}}_H(t))\|.
+
+Report max and RMS of \varepsilon_{\text{red}} over the validation set.
+
+4. Hyper-reduction error. Compute the DEIM error bound on validation trajectories and verify it is dominated by the POD error.
+
+---
+
+Appendix E: Ensemble Kalman Filter with Localization and Inflation
+
+E.1 Formulation
+
+The EnKF approximates the Bayesian posterior p(\mathbf{x}_H | \mathbf{y}) using an ensemble of N_e state vectors \{\mathbf{x}_H^{(i)}\}_{i=1}^{N_e}.
+
+Forecast step. Propagate each ensemble member through the ROM:
+
+\mathbf{x}_H^{(i),f}(t+1) = \mathcal{M}(\mathbf{x}_H^{(i),a}(t), \mathbf{u}(t), \mathbf{z}(t)) + \boldsymbol{\eta}^{(i)}(t)
+
+where \boldsymbol{\eta}^{(i)} \sim \mathcal{N}(0, Q) is process noise.
+
+Analysis step. Update each member using the Kalman gain:
+
+\mathbf{x}_H^{(i),a} = \mathbf{x}_H^{(i),f} + K (\mathbf{y} + \boldsymbol{\epsilon}^{(i)} - \mathcal{H}(\mathbf{x}_H^{(i),f}))
+
+where \mathcal{H} is the observation operator, \boldsymbol{\epsilon}^{(i)} \sim \mathcal{N}(0, R), and
+
+K = P^f H^T (H P^f H^T + R)^{-1}.
+
+The sample covariance is:
+
+P^f = \frac{1}{N_e - 1} \sum_{i=1}^{N_e} (\mathbf{x}_H^{(i),f} - \bar{\mathbf{x}}_H^f)(\mathbf{x}_H^{(i),f} - \bar{\mathbf{x}}_H^f)^T.
+
+E.2 Localization
+
+With finite ensemble size, the sample covariance P^f has rank at most N_e - 1 and contains spurious long-range correlations. Localization replaces P^f with its Schur product with a localization matrix \rho:
+
+P^f_{\text{loc}} = \rho \circ P^f
+
+where \rho is a compactly supported correlation function (e.g., Gaspari–Cohn) that decays with distance. Shrinkage localization and multiplicative inflation are effective in high-dimensional data assimilation. The Schur product approach ensures that observations at a particular point influence the analysis only within a local radius.
+
+E.3 Inflation
+
+To counteract ensemble collapse, multiply the forecast covariance by an inflation factor 1 + \delta:
+
+P^f_{\text{infl}} = (1 + \delta) P^f_{\text{loc}}.
+
+Additive inflation adds a small multiple of the identity matrix to the background covariance. Prior inflation is inversely proportional to ensemble size:
+
+\text{inflation factor} = 1 + \frac{1}{N_e}.
+
+E.4 Identifiable Subspace
+
+Before constructing the EnKF, compute the empirical observability Gramian of the ROM over the scenario ensemble:
+
+\mathcal{W}_o = \sum_{t=0}^{T} \Phi(t, 0)^T \mathcal{H}^T \mathcal{H} \Phi(t, 0)
+
+where \Phi(t, 0) is the state transition matrix. Compute the eigendecomposition of \mathcal{W}_o. The identifiable subspace is spanned by eigenvectors with eigenvalues above a threshold (e.g., 10^{-6} relative to the largest). Size the EnKF state to the identifiable subspace (likely 10–20 dimensions, not 46). Estimate unidentifiable states at prior mean with prior covariance in the chance constraint.
+
+E.5 Chance Constraint Implementation
+
+The chance constraint \Pr(\mathbf{x}_H \in \mathcal{C}_H) \ge 1 - \delta is implemented via constraint tightening. For Gaussian-distributed state estimates, the tightened constraint is:
+
+\bar{\mathbf{x}}_H \in \mathcal{C}_H \ominus \kappa(\delta) \sqrt{\text{diag}(P^a)}
+
+where \kappa(\delta) = \Phi^{-1}(1-\delta) is the standard normal quantile and \ominus denotes Minkowski erosion. The literature shows that eliminating comfort violations via constraint tightening raised energy cost by up to 7.53% in comparable studies; this trade-off must be reported explicitly.
+
+---
+
+Appendix F: Combinatorial Integral Approximation with Dwell-Time Constraints
+
+F.1 CIA Decomposition
+
+The CIA decomposition solves the MIOCP in three steps:
+
+1. Relaxation. Relax the binary controls \mathbf{z} \in \{0,1\}^{|\mathcal{M}|} to continuous controls \mathbf{z} \in [0,1]^{|\mathcal{M}|}. Solve the resulting NLP using direct multiple shooting (e.g., with CasADi).
+2. Rounding. Solve the CIA problem: given the relaxed solution \mathbf{z}^*(t), find a binary control \mathbf{z}(t) \in \{0,1\}^{|\mathcal{M}|} that minimizes the integral deviation:
+
+\min_{\mathbf{z} \in \{0,1\}^{|\mathcal{M}|}} \left\| \int_0^T (\mathbf{z}^*(t) - \mathbf{z}(t)) \, dt \right\|_\infty
+
+subject to dwell-time and mutual-exclusivity constraints.
+
+3. Simulation. Simulate the system with the rounded binary controls.
+
+F.2 Dwell-Time Constraints in CIA
+
+Minimum dwell time constraints are incorporated into the CIA problem as combinatorial constraints. For a minimum on-dwell time \tau_{\min}^{\text{on}} and off-dwell time \tau_{\min}^{\text{off}}:
+
+z_j(t) = 1 \implies z_j(\tau) = 1 \quad \forall \tau \in [t, t + \tau_{\min}^{\text{on}}]
+
+z_j(t) = 0 \implies z_j(\tau) = 0 \quad \forall \tau \in [t, t + \tau_{\min}^{\text{off}}]
+
+These constraints are implemented in the MILP formulation of the CIA problem. The pycombina tool efficiently formulates CIA problems, includes combinatorial constraints, and solves the resulting MILP using a tailored branch-and-bound solver.
+
+F.3 Augmented-Horizon Formulation
+
+The augmented-horizon concept from Jansen et al. (2024) extends the combinatorial horizon backwards to the dwell trigger, so that the CIA problem sees the full dwell constraint from the current state. This ensures that the dwell constraint is satisfied from the current time onward, not just within the prediction horizon.
+
+Implementation. Let t_{\text{trigger}} be the time of the most recent switch for mechanism j. The augmented horizon is [t_{\text{trigger}}, T]. The CIA problem is solved over this extended horizon with the dwell constraint applied from t_{\text{trigger}}.
+
+F.4 Dynamic Programming-Inspired CIA
+
+A recent dynamic programming-inspired approach solves the CIA problem with dwell-time constraints more efficiently than general-purpose MILP solvers. The method uses a flexible cost-to-go function that adapts to various value functions, making it suitable for cases where simple approximations of the relaxed solution are insufficient.
+
+F.5 Move-Blocking
+
+Move-blocking is not applied to binary variables, as it conflicts with dwell constraints and CIA rounding guarantees. For continuous inputs, move-blocking is optional: fix \mathbf{u} for the first N_{\text{block}} steps and relax to continuous for later steps.
+
+---
+
+Appendix G: Exergy Balance Closure and Layer 0 Validation
+
+G.1 The Shukuya Exergy Balance
+
+The general form of the exergy balance equation for a human body as a thermodynamic system is:
+
+[\text{exergy input}] - [\text{exergy consumption}] = [\text{exergy stored}] + [\text{exergy output}]
+
+Exergy input consists of five components:
+
+1. Warm exergy generated by metabolism
+2. Warm/cool and wet/dry exergies of the inhaled humid air
+3. Warm and wet exergies of the liquid water generated in the core by metabolism
+4. Warm/cool and wet/dry exergies of the sum of liquid water generated in the shell by metabolism and dry air to let the liquid water disperse
+5. Warm/cool radiant exergy absorbed by the whole skin and clothing surfaces
+
+Exergy output consists of four components:
+
+1. Warm and wet exergy contained in the exhaled humid air
+2. Warm/cool and wet/dry exergy contained in resultant humid air containing the evaporated sweat
+3. Warm/cool radiant exergy discharged from the whole skin and clothing surfaces
+4. Warm/cool exergy transferred by convection from the whole skin and clothing surfaces into surrounding air
+
+G.2 Mathematical Form of Individual Terms
+
+Warm/cool exergy (sensible heat transfer):
+
+\dot{X}_Q^{wc} = \dot{Q} \left( 1 - \frac{T_0}{T} \right)
+
+where T is absolute temperature, T_0 is the dead-state temperature, and \dot{Q} is positive for heat flow into the system.
+
+Wet/dry exergy of water vapor:
+
+\dot{X}_v^{wd} = \dot{m}_v R_v T_0 \ln\left( \frac{P_v}{P_{v,0}} \right)
+
+where \dot{m}_v is the vapor mass flow, R_v is the specific gas constant of water vapor, P_v is the vapor partial pressure, and P_{v,0} = \phi_0 P_{\text{sat}}(T_0) is the dead-state vapor pressure.
+
+Liquid water exergy:
+
+\dot{X}_{\text{liq}}^{wd} = \dot{m}_{\text{liq}} \left[ (h(T_s) - h(T_0)) - T_0 (s(T_s) - s(T_0)) + v_{\text{liq}} (P_s - P_0) \right]
+
+where h and s are specific enthalpy and entropy from the IAPWS-95 formulation for water.
+
+Radiative exergy (gray-surface approximation):
+
+\dot{X}_{\text{rad}} = \varepsilon \sigma A (T_s^4 - T_r^4) \left( 1 - \frac{T_0}{T_r} \right)
+
+where T_s is surface temperature, T_r is effective radiative temperature, \varepsilon is emissivity, and \sigma is the Stefan–Boltzmann constant.
+
+G.3 Layer 0 Closure Criterion
+
+Closure is evaluated as:
+
+\frac{\left| \sum \dot{X}_{\text{in}} - \sum \dot{X}_{\text{out}} - \dot{X}_D - \frac{dX_B}{dt} \right|}{\max_j |\text{term}_j|} \le 1\%
+
+evaluated on a scenario-per-term basis, with a per-term uncertainty budget. Partial cancellation between large in/out terms can fake closure; the normalization prevents this.
+
+G.4 Decomposition of \dot{X}_{D,\text{body}}
+
+The body exergy destruction decomposes into:
+
+\dot{X}_{D,\text{body}} = \dot{X}_{D,\text{met}} + \dot{X}_{D,\text{transfer}}
+
+where \dot{X}_{D,\text{met}} is the metabolic irreversibility (dominant, approximately 90% of total, and essentially independent of control actions) and \dot{X}_{D,\text{transfer}} is the irreversible degradation at skin/clothing/environment interfaces.
+
+Only \dot{X}_{D,\text{transfer}} belongs in the objective. Minimizing \dot{X}_{D,\text{met}} is a constant offset that adds noise to the optimization.
+
+---
+
+Appendix H: Benchmark Statistical Protocol
+
+H.1 Architectures
+
+Architecture Physiology Modes Objective Hardware
+A Simple comfort Convection only Energy Standard HVAC
+B Physiological Radiation only Energy Radiant panels
+C Physiological Radiant + convective Energy Hybrid
+D Physiological All feasible Energy Full actuator set
+E (baseline) Population model All feasible Exergy Full actuator set
+F (TS-Engine) Physiological state feedback All feasible Exergy Pareto Full actuator set
+G (oracle) Perfect physiological state All feasible Exergy Pareto Full actuator set
+
+H.2 Scenarios
+
+1. Hot-dry: high T_a, low humidity
+2. Hot-humid: high T_a, high humidity
+3. Mixed: moderate temperature and humidity
+4. Cold: low T_a
+5. Grid outage: limited electricity
+6. Water scarcity: limited water
+7. High solar gain: strong radiative load
+8. High internal gain: dense occupancy
+
+H.3 Metrics
+
+· J_{\text{ex}}: integrated exergy cost (system + transfer)
+· W_{\text{water}}: water consumption
+· D_{\text{discomfort}}: discomfort penalty
+· E_{\text{el}}: electrical energy
+· \eta_{\text{MPC}}: optimization regret (or gap to best-known)
+· Switching frequency
+· Pareto hypervolume
+· \varepsilon-indicator (additive)
+
+H.4 Falsification Criterion for H₃
+
+H₃ is falsified if:
+
+\forall s \in \mathcal{S}, \; \mathcal{P}_F(s) \not\prec \mathcal{P}_E(s)
+
+where \prec denotes strict Pareto dominance of fronts and \mathcal{P}_E is the Pareto front of Architecture E at equal discomfort and equal resource constraints.
+
+H.5 Statistical Testing
+
+Run \ge 10 seeds/weather realizations per scenario. Compute hypervolume difference against a fixed reference point. Report 95% confidence intervals. Require a minimum-effect threshold of 5% hypervolume improvement for a "dominance" claim in a given scenario.
+
+Hypervolume indicator. For a front \mathcal{P} with reference point r:
+
+\mathcal{H}(\mathcal{P}, r) = \Lambda\left( \bigcup_{p \in \mathcal{P}} [r, p] \right)
+
+where \Lambda is the Lebesgue measure and [r, p] is the hyperrectangle bounded by r and p. F dominates E in hypervolume if \mathcal{H}(\mathcal{P}_F, r) > \mathcal{H}(\mathcal{P}_E, r).
+
+Additive \varepsilon-indicator. The minimum \varepsilon such that for every p_E \in \mathcal{P}_E, there exists p_F \in \mathcal{P}_F with p_F + \varepsilon \mathbf{1} \succeq p_E.
+
+ASCII DIAGRAMS — TS-Engine v1.0
+
+Diagram 1: Overall System Architecture
+
+```
+╔══════════════════════════════════════════════════════════════════════════════════════════╗
+║                          THERMAL STATE ENGINE (TS-ENGINE) — v1.0                          ║
+║                Thermophysiology-Constrained Hybrid Optimal-Control Framework               ║
+╚══════════════════════════════════════════════════════════════════════════════════════════╝
+
+                              ┌─────────────────────────┐
+                              │   EXOGENOUS INPUTS       │
+                              │  ─────────────────────   │
+                              │  • Weather (Ta, RH, v)   │
+                              │  • Solar gain            │
+                              │  • Internal gain         │
+                              │  • Grid price            │
+                              │  • Water availability    │
+                              └────────────┬────────────┘
+                                           │
+                                           ▼
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│                              ENVIRONMENT LAYER (Modelica)                                 │
+│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐          │
+│  │ Thermal zone   │  │ Radiant surf.  │  │ HVAC plant     │  │ Storage        │          │
+│  │ Ta, Tr, RH     │  │ Ts_1..Ts_K     │  │ (chillers,     │  │ (thermal,      │          │
+│  │ CO2, v         │  │ ε, α           │  │  fans, pumps,  │  │  water, ice)   │          │
+│  │                │  │                │  │  desiccants)   │  │                │          │
+│  └────────────────┘  └────────────────┘  └────────────────┘  └────────────────┘          │
+│                                                                                           │
+│  State: x_E ∈ R^M    Inputs: u ∈ R^P    Disturbances: d    Binary modes: z ∈ {0,1}^7    │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           │  Coupled heat & moisture exchange
+                                           │  (convection, radiation, evaporation)
+                                           ▼
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│                          HUMAN THERMOPHYSIOLOGICAL LAYER (Fiala)                          │
+│                                                                                           │
+│    FULL-ORDER MODEL:  x_H^full ∈ R^187       REDUCED-ORDER MODEL:  x̃_H ∈ R^46           │
+│    ───────────────────────────────────       ───────────────────────────────────          │
+│    12 anatomical elements                    1  core temperature  T_c                     │
+│    ┌──────────────────────────┐              11 segmental skin temps  T_{s,i}             │
+│    │  Head/Face/Neck          │              11 segmental sweat rates  ṁ_{sw,i}           │
+│    │  Thorax/Abdomen          │              11 segmental wettedness  w_i                 │
+│    │  Shoulders/Arms/Hands    │              11 clothing surface temps  T_{cl,i}          │
+│    │  Legs/Feet               │              1  clothing moisture  m_cl                  │
+│    └──────────────────────────┘                                                           │
+│                                                                                           │
+│    Pennes bioheat:  ρc ∂T/∂t = k∇²T + ω/r ∂T/∂r − c_b W_b (T − T_art) + M                  │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           │  Measurable outputs  y
+                                           │  (HR, T_skin_wrist, T_skin_chest, ...)
+                                           ▼
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│                          STATE ESTIMATION (EnKF)                                          │
+│                                                                                           │
+│    p(x_H | y) ∝ p(y | x_H) p(x_H)                                                        │
+│                                                                                           │
+│    Ensemble:  {x_H^(i)}^100_{i=1}   with localization ρ ∘ P^f  and inflation (1+δ)P^f     │
+│                                                                                           │
+│    Observable subspace (empirical Gramian eigendecomp.) → 10–20 identifiable dims         │
+│                                                                                           │
+│    Output:  x̂_H, Cov(x̂_H)  → chance constraint  Pr(x_H ∈ C_H) ≥ 1−δ                     │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│                          HIERARCHICAL MPC (Two-Layer)                                     │
+│                                                                                           │
+│    ┌──────────────────────────────────┐    ┌──────────────────────────────────┐          │
+│    │  SLOW LAYER                       │    │  FAST LAYER                       │          │
+│    │  Horizon: 2 h    Step: 10 min     │    │  Horizon: 30 min   Step: 1 min    │          │
+│    │  States: T_c, storage, envelope   │    │  States: T_{s,i}, w_i, ṁ_{sw,i}   │          │
+│    │  Decisions: z ∈ {0,1}^7           │    │  Decisions: u ∈ R^P (continuous)  │          │
+│    │             setpoints             │    │                                   │          │
+│    │  → mechanism selection            │    │  → modulation within active z     │          │
+│    └──────────────────────────────────┘    └──────────────────────────────────┘          │
+│                                                                                           │
+│    Nesting:  C_fast(x_slow) ⊇ proj_{x_fast} R_slow                                       │
+│    Objective:  ε-constraint / Chebyshev (internal), weighted-sum (deployed policy)        │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│                          ACTUATOR LAYER (7 Mechanisms)                                    │
+│                                                                                           │
+│   z_r           z_c           z_e           z_d           z_v           z_s       z_h    │
+│  ┌─────┐      ┌─────┐       ┌─────┐       ┌─────┐       ┌─────┐      ┌─────┐   ┌─────┐   │
+│  │Radi-│      │Con- │       │Eva- │       │Dehu-│       │Ven- │      │Stor-│   │Heat-│   │
+│  │ant  │      │vect.│       │por. │       │mid. │       │til. │      │age  │   │ing  │   │
+│  └─────┘      └─────┘       └─────┘       └─────┘       └─────┘      └─────┘   └─────┘   │
+│                                                                                           │
+│  Mutual exclusivity:  A z(t) ≤ b      Dwell:  τ_on ≥ τ_min_on,  τ_off ≥ τ_min_off        │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+                                    New State ──┐
+                                           │    │
+                                           └────┘  (feedback)
+```
+
+---
+
+Diagram 2: Hybrid Optimal Control Problem — Full Structure
+
+```
+╔══════════════════════════════════════════════════════════════════════════════════════════╗
+║                    HYBRID OPTIMAL CONTROL PROBLEM (MINLP)                                 ║
+╚══════════════════════════════════════════════════════════════════════════════════════════╝
+
+    DECISION VARIABLES
+    ──────────────────
+    z(t) ∈ {0,1}^7                              u(t) ∈ R^P
+    ┌──────────────────────────────┐            ┌──────────────────────────────┐
+    │ z_r  radiative               │            │ u_r  radiant power           │
+    │ z_c  convective              │            │ u_c  fan speed               │
+    │ z_e  evaporative             │            │ u_e  spray rate              │
+    │ z_d  dehumidification        │            │ u_d  desiccant regen         │
+    │ z_v  ventilation             │            │ u_v  airflow rate            │
+    │ z_s  storage                 │            │ u_s  charge/discharge rate   │
+    │ z_h  heating                 │            │ u_h  heating power           │
+    └──────────────────────────────┘            └──────────────────────────────┘
+
+    OBJECTIVE
+    ─────────
+    J = ∫_0^H [ w_H Ẋ_{D,transfer} + w_S Ẋ_{in,sys} + w_W ṁ_W + w_E P_el + w_D D_H ] dt
+        + λ_sw Σ_k ‖z_k − z_{k−1}‖₁
+
+    CONSTRAINTS
+    ───────────
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │  DYNAMICS                                                                           │
+    │    ẋ_H = f_H(x_H, x_E, z, u)         (human thermophysiology, 46 states)             │
+    │    ẋ_E = f_E(x_E, z, u, d)           (environment, M states)                          │
+    ├─────────────────────────────────────────────────────────────────────────────────────┤
+    │  STATE ADMISSIBILITY                                                                │
+    │    x_H(t) ∈ C_H^phys ∩ C_H^comfort                                                  │
+    │    C_H^phys  = { T_c ∈ [T_c^-,T_c^+],  T_{s,i} ∈ [T_{s,i}^-,T_{s,i}^+],              │
+    │                  w_i ≤ w_i^max,  m_cl ∈ [0, m_cl^max] }                             │
+    │    C_H^comfort = { D_H(x_H) ≤ D_max }                                                │
+    ├─────────────────────────────────────────────────────────────────────────────────────┤
+    │  COUPLING (big-M)                                                                   │
+    │    0 ≤ u_j(t) ≤ z_j(t) u_j^max      ∀ j ∈ {1,...,7}                                  │
+    ├─────────────────────────────────────────────────────────────────────────────────────┤
+    │  MUTUAL EXCLUSIVITY                                                                 │
+    │    A z(t) ≤ b       e.g.,  z_e + z_d ≤ 1  (evap ↔ dehumidify)                        │
+    ├─────────────────────────────────────────────────────────────────────────────────────┤
+    │  DWELL-TIME TEMPORAL LOGIC                                                          │
+    │    z_j(t) − z_j(t−1) ≤ z_j(τ)          ∀ τ ∈ [t+1, t+τ_{j,min}^on]                   │
+    │    z_j(t−1) − z_j(t) ≤ 1 − z_j(τ)      ∀ τ ∈ [t+1, t+τ_{j,min}^off]                  │
+    │    → implemented via augmented-horizon CIA                                          │
+    ├─────────────────────────────────────────────────────────────────────────────────────┤
+    │  RESOURCE LIMITS                                                                    │
+    │    W ≤ W_max,    E_el ≤ E_max,    P_grid ≤ P_max                                     │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+
+    COMPUTATIONAL STRATEGY
+    ──────────────────────
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │  Step 1: RELAXATION       z ∈ {0,1}^7 → z ∈ [0,1]^7  →  solve NLP (CasADi)          │
+    │  Step 2: ROUNDING         Solve CIA problem (pycombina, MILP + B&B)                 │
+    │  Step 3: SIMULATION       Simulate with rounded z, evaluate J                        │
+    │  Step 4: FALLBACK         If infeasible: relax comfort → resource → bound            │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+Diagram 3: Thermal Equivalence Manifold — Geometry and Strata
+
+```
+╔══════════════════════════════════════════════════════════════════════════════════════════╗
+║                     THERMAL EQUIVALENCE MANIFOLD  E(x_H*)                                 ║
+╚══════════════════════════════════════════════════════════════════════════════════════════╝
+
+    Ambient space:  R^{M+P}   (environment states × continuous inputs)
+
+    Constraint map:  F: R^{M+P} → R^q,   q = N_H + 1 + N_E
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │                F_H(x_H*, x_E, u, z) = 0    (human heat balance)                     │
+    │                F_E(x_E, u, z, d) = 0        (environment balance)                    │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+
+    STRATIFIED STRUCTURE (union over feasible modes)
+
+                    R^{M+P}
+                       │
+         ┌─────────────┼─────────────┬─────────────┬─────  ...  ─────┐
+         │             │             │             │                   │
+         ▼             ▼             ▼             ▼                   ▼
+    ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐        ┌─────────┐
+    │ E(z=001)│   │ E(z=010)│   │ E(z=011)│   │ E(z=100)│        │ E(z=111)│
+    │         │   │         │   │         │   │         │        │         │
+    │ dim =   │   │ dim =   │   │ dim =   │   │ dim =   │        │ dim =   │
+    │ M+P−r₁  │   │ M+P−r₂  │   │ M+P−r₃  │   │ M+P−r₄  │        │ M+P−r₇  │
+    └─────────┘   └─────────┘   └─────────┘   └─────────┘        └─────────┘
+         │             │             │             │                   │
+         └─────────────┴─────────────┴─────────────┴─────  ...  ─────┘
+                                       │
+                                       ▼
+                         E(x_H*) = ⋃_{z ∈ Z_feas} E(x_H*, z)
+                         (stratified set, not a manifold)
+
+    LOCAL MANIFOLD STRUCTURE (Proposition 1)
+
+              T_e E = ker DF(e)          ← tangent space at e ∈ E
+                    │
+                    │  dim T_e E = M + P − r
+                    │
+                    ▼
+        ┌───────────────────────────────────────┐
+        │                                       │
+        │        E(x_H*, z)  (C¹ submanifold)   │
+        │                                       │
+        │              • e                       │
+        │             ╱ ╲                        │
+        │            ╱   ╲  tangent plane        │
+        │           ╱     ╲                      │
+        │          ╱       ╲                     │
+        │         ╱         ╲                    │
+        └───────────────────────────────────────┘
+
+    PROJECTED GRADIENT (Proposition 2)
+
+        ∇J_X  ∈ R^{M+P}
+          │
+          │  decompose:  ∇J_X = ∇J_X^∥ + ∇J_X^⊥
+          │
+          ├──► ∇J_X^∥  ∈ range(DF^T)        (along constraint gradients)
+          │
+          └──► g = ∇J_X^⊥ = Π_{ker DF} ∇J_X   (projected gradient)
+                    │
+                    │  H₂:  ‖g‖ > 0  on E
+                    │
+                    ▼
+              J_X varies along E
+              Var_{e∈E}[J_X(e)] > 0
+
+    STRUCTURAL RANK DEFICIENCY (global conservation)
+
+        Σ_{i=1}^{N_H+1} F_{H,i} + F_E  ≡  0
+                    │
+                    ▼
+        rank(DF) ≤ q − 1
+                    │
+                    ▼
+        dim E ≥ M + P − q + 1
+```
+
+---
+
+Diagram 4: Human Thermophysiological Model — Full-Order and Reduced-Order
+
+```
+╔══════════════════════════════════════════════════════════════════════════════════════════╗
+║                  FIALA THERMOPHYSIOLOGICAL MODEL                                          ║
+╚══════════════════════════════════════════════════════════════════════════════════════════╝
+
+    FULL-ORDER:  12 anatomical elements × concentric tissue layers = 187 nodes
+
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │                                                                                      │
+    │                            ┌───────────────┐                                         │
+    │                            │     HEAD      │  (brain, skull, muscle, fat, skin)      │
+    │                            │   ┌───────┐   │                                         │
+    │                            │   │ FACE  │   │                                         │
+    │                            │   └───────┘   │                                         │
+    │                            │   ┌───────┐   │                                         │
+    │                            │   │ NECK  │   │                                         │
+    │                            │   └───────┘   │                                         │
+    │                            └───────┬───────┘                                         │
+    │                                    │                                                 │
+    │              ┌─────────────────────┼─────────────────────┐                           │
+    │              │                     │                     │                           │
+    │       ┌──────┴──────┐       ┌──────┴──────┐       ┌──────┴──────┐                    │
+    │       │  THORAX     │       │  ABDOMEN    │       │  SHOULDERS  │                    │
+    │       └──────┬──────┘       └──────┬──────┘       └──────┬──────┘                    │
+    │              │                     │                     │                           │
+    │       ┌──────┴──────┐       ┌──────┴──────┐       ┌──────┴──────┐                    │
+    │       │  ARMS       │       │  HANDS      │       │  LEGS       │                    │
+    │       └──────┬──────┘       └──────┬──────┘       └──────┬──────┘                    │
+    │              │                     │                     │                           │
+    │              │                     │              ┌──────┴──────┐                    │
+    │              │                     │              │   FEET      │                    │
+    │              │                     │              └─────────────┘                    │
+    │              └─────────────────────┴─────────────────────┘                           │
+    │                                                                                      │
+    │   Radial structure per element:                                                       │
+    │                                                                                      │
+    │        CORE          MUSCLE         FAT          SKIN        CLOTHING                 │
+    │       ┌─────┐       ┌─────┐       ┌─────┐      ┌─────┐     ┌─────┐                   │
+    │       │ T_c │──────►│ T_m │──────►│ T_f │─────►│ T_s │────►│ T_cl│                   │
+    │       └─────┘       └─────┘       └─────┘      └─────┘     └─────┘                   │
+    │          │             │             │            │           │                       │
+    │          │             │             │            │           │                       │
+    │       metabolic     perfusion     insulation   sweat +     radiative/                 │
+    │       heat M        W_b           k_tis        vasomotor   convective                  │
+    │                                                response    exchange                    │
+    │                                                                                      │
+    │   Angular sectors: posterior / anterior / inferior (non-uniform boundaries)           │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+
+    Pennes bioheat equation per node:
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │   ρ_tis c_tis ∂T/∂t = k_tis ( ∂²T/∂r² + (ω/r) ∂T/∂r ) − c_b W_b (T − T_art) + M     │
+    │                                                                                      │
+    │   ω = 1  for cylindrical elements (limbs)                                            │
+    │   ω = 2  for spherical elements (head, torso)                                        │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+
+    ─────────────────────────────────────────────────────────────────────────────────────
+
+    REDUCED-ORDER MODEL (POD + DEIM)
+
+    Snapshot matrix:  S = [x_H^full(t_1), ..., x_H^full(t_{N_s})]  ∈ R^{187 × N_s}
+                                    │
+                                    ▼
+                              SVD:  S = U Σ V^T
+                                    │
+                                    ▼
+                    POD basis:  Φ = [u_1, ..., u_{n_r}]  ∈ R^{187 × n_r}
+                                    │
+                                    ▼
+                    x_H^full(t) ≈ x̄_H + Φ x̃_H(t)
+
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │  REDUCED STATE  x̃_H ∈ R^46                                                          │
+    │                                                                                      │
+    │  ┌────────────────────┬─────────┬──────────────────────────────────────────────┐     │
+    │  │  Component         │  Count  │  Symbol                                      │     │
+    │  ├────────────────────┼─────────┼──────────────────────────────────────────────┤     │
+    │  │  Core temp         │    1    │  T_c                                         │     │
+    │  │  Segmental skin    │   11    │  T_{s,i}    i = 1..11                        │     │
+    │  │  Segmental sweat   │   11    │  ṁ_{sw,i}                                    │     │
+    │  │  Segmental wetness │   11    │  w_i                                         │     │
+    │  │  Clothing surface  │   11    │  T_{cl,i}                                    │     │
+    │  │  Clothing moisture │    1    │  m_cl                                        │     │
+    │  ├────────────────────┼─────────┼──────────────────────────────────────────────┤     │
+    │  │  TOTAL             │   46    │                                              │     │
+    │  └────────────────────┴─────────┴──────────────────────────────────────────────┘     │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+
+    DEIM HYPER-REDUCTION for nonlinear terms (perfusion, sweat)
+
+        f(x_H) ≈ U (P^T U)^{-1} P^T f(x_H)
+                    │
+                    │  U ∈ R^{N × m}     (POD basis of nonlinear snapshots)
+                    │  P ∈ R^{N × m}     (selection matrix, greedy QR pivoting)
+                    │
+                    ▼
+        Error:  ‖f − f̂‖₂ ≤ ‖(P^T U)^{-1}‖₂ · ‖(I − U U^T) f‖₂
+```
+
+---
+
+Diagram 5: Exergy Balance — Warm/Cool and Wet/Dry Decomposition
+
+```
+╔══════════════════════════════════════════════════════════════════════════════════════════╗
+║              HUMAN BODY EXERGY BALANCE (Shukuya et al. 2010)                              ║
+╚══════════════════════════════════════════════════════════════════════════════════════════╝
+
+                              ┌─────────────────────────────────┐
+                              │        DEAD STATE                │
+                              │   T_0(t),  P_0,  φ_0             │
+                              │   (time-varying T_0)             │
+                              └────────────────┬────────────────┘
+                                               │
+                                               │  reference for all exergy
+                                               ▼
+
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │                                                                                      │
+    │                              Ẋ_in                                                  │
+    │                     ┌───────────────────────┐                                        │
+    │                     │  Ẋ_met                │  ← metabolic chemical exergy            │
+    │                     │  Ẋ_{air,in}^{wc}      │  ← inhaled air, warm/cool               │
+    │                     │  Ẋ_{air,in}^{wd}      │  ← inhaled air, wet/dry                 │
+    │                     │  Ẋ_{liq,core}         │  ← liquid water from core metabolism    │
+    │                     │  Ẋ_{liq,shell}        │  ← liquid water from shell metabolism   │
+    │                     │  Ẋ_{rad,in}           │  ← absorbed radiative exergy            │
+    │                     └───────────┬───────────┘                                        │
+    │                                 │                                                    │
+    │                                 ▼                                                    │
+    │                     ┌───────────────────────┐                                        │
+    │                     │                       │                                        │
+    │                     │    HUMAN BODY         │  ← open thermodynamic system           │
+    │                     │    (control volume)   │                                        │
+    │                     │                       │                                        │
+    │                     │    dX_B/dt            │  ← rate of exergy storage              │
+    │                     │    Ẋ_{D,body}         │  ← exergy destruction                  │
+    │                     │                       │                                        │
+    │                     └───────────┬───────────┘                                        │
+    │                                 │                                                    │
+    │                                 ▼                                                    │
+    │                     ┌───────────────────────┐                                        │
+    │                     │  Ẋ_out                │                                        │
+    │                     │  ─────────────        │                                        │
+    │                     │  Ẋ_{air,out}^{wc}     │  ← exhaled air, warm/cool              │
+    │                     │  Ẋ_{air,out}^{wd}     │  ← exhaled air, wet/dry                │
+    │                     │  Ẋ_{sweat}            │  ← evaporated sweat                    │
+    │                     │  Ẋ_{rad,out}          │  ← emitted radiative exergy            │
+    │                     │  Ẋ_{conv,out}         │  ← convective heat loss                │
+    │                     └───────────────────────┘                                        │
+    │                                                                                      │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+
+    BALANCE EQUATION
+    ────────────────
+        dX_B/dt  =  Ẋ_in  −  Ẋ_out  −  Ẋ_{D,body}
+
+        with  Ẋ_{D,body}  =  T_0(t)  Ṡ_{gen,body}  ≥  0
+
+    TERM DECOMPOSITION (warm/cool  vs  wet/dry)
+
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │  WARM/COOL (sensible)                    WET/DRY (chemical + moisture)              │
+    │  ────────────────────                    ──────────────────────────────              │
+    │                                                                                      │
+    │  Ẋ_Q^{wc} = Q̇ (1 − T_0/T)               Ẋ_v^{wd} = ṁ_v R_v T_0 ln(P_v/P_{v,0})     │
+    │                                                                                      │
+    │  • Convective heat                       • Vapor transport                           │
+    │  • Radiative heat (gray)                 • Liquid water dispersion                    │
+    │  • Metabolic heat                        • Sweat evaporation                          │
+    │  • Respiration sensible                  • Respiration latent                          │
+    │                                                                                      │
+    │  RADIATIVE (gray-surface):                                                            │
+    │  Ẋ_rad = εσA (T_s⁴ − T_r⁴) (1 − T_0/T_r)                                            │
+    │                                                                                      │
+    │  LIQUID WATER:                                                                        │
+    │  Ẋ_liq^{wd} = ṁ_liq [ (h(T_s) − h(T_0)) − T_0 (s(T_s) − s(T_0)) + v_liq (P_s − P_0) ]│
+    │              (IAPWS-95 formulation for h, s, v_liq)                                  │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+
+    CONTROL-RELEVANT DECOMPOSITION OF Ẋ_{D,body}
+    ──────────────────────────────────────────────
+
+        Ẋ_{D,body}  =  Ẋ_{D,met}  +  Ẋ_{D,transfer}
+                       │              │
+                       │              │
+                       │              └──►  controllable part
+                       │                    (skin/clothing/environment interfaces)
+                       │                    → IN THE OBJECTIVE
+                       │
+                       └──►  physics-fixed part (~90% of total)
+                             essentially independent of control
+                             → CONSTANT OFFSET, REMOVE FROM OBJECTIVE
+
+    LAYER 0 CLOSURE CRITERION
+    ─────────────────────────
+        | Σ Ẋ_in − Σ Ẋ_out − Ẋ_D − dX_B/dt |
+        ─────────────────────────────────────  ≤  1%
+                max_j | term_j |
+
+        (normalized, per-term uncertainty budget, scenario-by-scenario)
+```
+
+---
+
+Diagram 6: Hierarchical MPC Timing and Task Split
+
+```
+╔══════════════════════════════════════════════════════════════════════════════════════════╗
+║                         HIERARCHICAL MPC — TIMING DIAGRAM                                 ║
+╚══════════════════════════════════════════════════════════════════════════════════════════╝
+
+    SLOW LAYER  (Horizon 2 h, Step 10 min)
+    ─────────────────────────────────────────────────────────────────────────────────────
+    Time:    0    10    20    30    40    50    60    70    80    90   100   110   120 min
+              │     │     │     │     │     │     │     │     │     │     │     │     │
+    z(t):     ●─────●─────●─────●─────●─────●─────●─────●─────●─────●─────●─────●─────●
+              │     │     │     │     │     │     │     │     │     │     │     │     │
+    Decisions: mechanism selection z ∈ {0,1}^7, setpoints
+    States:    T_c, storage, envelope
+    Rationale: core time constant 60–90 min
+
+    FAST LAYER  (Horizon 30 min, Step 1 min)
+    ─────────────────────────────────────────────────────────────────────────────────────
+    Time:    0     5    10    15    20    25    30 min
+              │     │     │     │     │     │     │
+    u(t):     ●─●─●─●─●─●─●─●─●─●─●─●─●─●─●─●─●─●─●─●─●─●─●─●─●─●─●─●─●─●─●
+              │     │     │     │     │     │     │
+    Decisions: continuous modulation u ∈ R^P within active z
+    States:    T_{s,i}, w_i, ṁ_{sw,i}, T_{cl,i}, m_cl
+    Rationale: skin/vasomotor 0.5–5 min; sweat ~10 min
+               Horizon ≥ 3 × longest dwell time (10–20 min)
+
+    NESTING CONDITION
+    ─────────────────
+        C_fast(x_slow)  ⊇  proj_{x_fast} R_slow
+
+        (fast-layer constraint set contains the projection of the
+         slow-layer reachable set — prevents closed-loop pathologies)
+
+    ─────────────────────────────────────────────────────────────────────────────────────
+
+    TIMESCALE SEPARATION
+
+        ┌──────────────────────────────────────────────────────────────────────────────┐
+        │  SLOW  (minutes–hours)                                                        │
+        │  ─────────────────────                                                        │
+        │  • Core temperature drift                                                     │
+        │  • Thermal storage scheduling                                                 │
+        │  • Mechanism selection (z)                                                    │
+        │  • Envelope / setpoint planning                                               │
+        ├──────────────────────────────────────────────────────────────────────────────┤
+        │  FAST  (seconds–minutes)                                                      │
+        │  ───────────────────────                                                      │
+        │  • Skin temperature regulation                                                │
+        │  • Vasomotor response                                                         │
+        │  • Sweat rate dynamics                                                        │
+        │  • Clothing moisture                                                          │
+        │  • Continuous modulation (u)                                                  │
+        └──────────────────────────────────────────────────────────────────────────────┘
+
+    FALLBACK HIERARCHY (if MINLP infeasible)
+    ─────────────────────────────────────────
+        1. Relax local discomfort constraints (individual segments)
+        2. Relax global discomfort constraints
+        3. Relax resource limits (water → electricity → power)
+        4. Relax comfort bounds (last resort)
+        (pre-registered, deterministic)
+```
+
+---
+
+Diagram 7: Ensemble Kalman Filter with Localization and Inflation
+
+```
+╔══════════════════════════════════════════════════════════════════════════════════════════╗
+║                    ENSEMBLE KALMAN FILTER — STATE ESTIMATION                              ║
+╚══════════════════════════════════════════════════════════════════════════════════════════╝
+
+    WEARABLE SENSOR PACKAGE
+    ───────────────────────
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │  • Heart rate            (1 Hz)                                                     │
+    │  • Skin temperature ×3   (wrist, chest, forehead; 0.1 Hz)                           │
+    │  • Near-body air T, RH   (0.1 Hz)                                                   │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+
+    IDENTIFIABILITY ANALYSIS (before EnKF construction)
+    ────────────────────────────────────────────────────
+        Empirical observability Gramian:
+                          T
+            W_o  =  Σ  Φ(t,0)^T H^T H Φ(t,0)
+                   t=0
+
+        Eigendecomposition → identifiable subspace (10–20 dims)
+        Unidentifiable states: prior mean + prior covariance
+        → converts observability gap into designed feature
+
+    ─────────────────────────────────────────────────────────────────────────────────────
+
+    EnKF RECURSION
+
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │                                                                                      │
+    │   FORECAST STEP                                                                      │
+    │   ─────────────                                                                      │
+    │                                                                                      │
+    │     x_H^(i),f(t+1) = M( x_H^(i),a(t), u(t), z(t) ) + η^(i)(t)                       │
+    │                                                                                      │
+    │     η^(i) ~ N(0, Q)   process noise                                                  │
+    │                                                                                      │
+    │     Ensemble:  { x_H^(i),f }^N_e_{i=1}      N_e = 100                                │
+    │                                                                                      │
+    │                    │                                                                 │
+    │                    ▼                                                                 │
+    │                                                                                      │
+    │   ANALYSIS STEP                                                                      │
+    │   ─────────────                                                                      │
+    │                                                                                      │
+    │     x_H^(i),a = x_H^(i),f + K ( y + ε^(i) − H(x_H^(i),f) )                          │
+    │                                                                                      │
+    │     ε^(i) ~ N(0, R)   observation noise                                              │
+    │                                                                                      │
+    │     K = P^f H^T ( H P^f H^T + R )^{-1}      Kalman gain                              │
+    │                                                                                      │
+    │                    │                                                                 │
+    │                    ▼                                                                 │
+    │                                                                                      │
+    │   LOCALIZATION + INFLATION                                                           │
+    │   ────────────────────────                                                           │
+    │                                                                                      │
+    │     P^f_loc  =  ρ ∘ P^f             (Schur product with Gaspari–Cohn ρ)              │
+    │     P^f_infl =  (1 + δ) P^f_loc     (multiplicative inflation)                       │
+    │                                                                                      │
+    │     adaptive inflation:  (1 + 1/N_e)   inverse to ensemble size                      │
+    │                                                                                      │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+
+    POSTERIOR OUTPUT
+    ────────────────
+        x̂_H  =  (1/N_e) Σ_i x_H^(i),a
+        Cov(x̂_H)  =  (1/(N_e−1)) Σ_i (x_H^(i),a − x̂_H)(x_H^(i),a − x̂_H)^T
+
+    CHANCE CONSTRAINT
+    ─────────────────
+        Pr( x_H ∈ C_H )  ≥  1 − δ
+
+        Implemented as constraint tightening:
+            x̄_H  ∈  C_H  ⊖  κ(δ) √diag(P^a)
+            κ(δ) = Φ^{-1}(1−δ)   standard normal quantile
+            ⊖ = Minkowski erosion
+
+        Trade-off: constraint tightening raised energy cost by up to 7.53%
+        in comparable studies — report explicitly.
+
+    ESTIMATOR VALIDATION LAYER (before closed-loop testing)
+    ──────────────────────────────────────────────────────
+        • Simulated-truth study: full Fiala as "patient", EnKF as estimator
+        • Posterior calibration: coverage of 95% credible intervals
+        • Overconfident EnKF silently defeats chance constraints
+```
+
+---
+
+Diagram 8: MINLP Relaxation and CIA Rounding
+
+```
+╔══════════════════════════════════════════════════════════════════════════════════════════╗
+║              MINLP SOLUTION VIA COMBINATORIAL INTEGRAL APPROXIMATION (CIA)               ║
+╚══════════════════════════════════════════════════════════════════════════════════════════╝
+
+    ORIGINAL MINLP
+    ──────────────
+        min_{z,u}  J(z, u)
+        s.t.       dynamics,  z ∈ {0,1}^7,  u ∈ R^P,
+                   dwell-time,  mutual exclusivity,  resource limits
+
+                              │
+                              │  Step 1: RELAXATION
+                              ▼
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │  NLP (z relaxed to [0,1]^7)                                                          │
+    │                                                                                      │
+    │     Solve with CasADi + IPOPT / Bonmin                                               │
+    │                                                                                      │
+    │     Output:  z*(t) ∈ [0,1]^7   (relaxed solution)                                    │
+    │              u*(t) ∈ R^P       (continuous)                                          │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+                              │
+                              │  Step 2: ROUNDING (CIA)
+                              ▼
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │  CIA PROBLEM                                                                         │
+    │                                                                                      │
+    │     min_{z ∈ {0,1}^7}   ‖ ∫_0^T ( z*(t) − z(t) ) dt ‖_∞                              │
+    │                                                                                      │
+    │     s.t.  dwell-time constraints:                                                    │
+    │             z_j(t) = 1  ⇒  z_j(τ) = 1  ∀τ ∈ [t, t+τ_min_on]                          │
+    │             z_j(t) = 0  ⇒  z_j(τ) = 0  ∀τ ∈ [t, t+τ_min_off]                         │
+    │                                                                                      │
+    │           mutual exclusivity:  A z(t) ≤ b                                            │
+    │                                                                                      │
+    │     Solver:  pycombina (MILP + tailored branch-and-bound)                            │
+    │                                                                                      │
+    │     AUGMENTED HORIZON:  extend combinatorial horizon backwards                       │
+    │     to the dwell trigger, so pycombina sees the full dwell constraint                │
+    │     from the current state.                                                          │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+                              │
+                              │  Step 3: SIMULATION
+                              ▼
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │  CLOSED-LOOP SIMULATION with rounded z                                               │
+    │                                                                                      │
+    │     Evaluate J, check feasibility, update state estimate                             │
+    │                                                                                      │
+    │     Report CIA rounding gap:  J(z_rounded) − J(z_relaxed)                            │
+    │     (never claim optimality of F's solutions — only dominance)                       │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+
+    COMPUTATIONAL COST
+    ──────────────────
+        MINLP + CIA ≈ 8 × NLP-MPC   (validated in district-heating literature)
+        Real-time capable at 15-min control intervals
+
+    MOVE-BLOCKING
+    ─────────────
+        • NOT applied to binary z (conflicts with dwell + CIA)
+        • Optional for continuous u (fix first N_block steps)
+```
+
+---
+
+Diagram 9: Dwell-Time Constraints and Augmented Horizon
+
+```
+╔══════════════════════════════════════════════════════════════════════════════════════════╗
+║                    DWELL-TIME TEMPORAL LOGIC — AUGMENTED HORIZON                          ║
+╚══════════════════════════════════════════════════════════════════════════════════════════╝
+
+    STANDARD PREDICTION HORIZON
+    ───────────────────────────
+        t_now ─────────────────────────────────────────────────► t_now + H
+          │                                                          │
+          │  dwell constraints applied only within [t_now, t_now+H] │
+          │                                                          │
+          └── PROBLEM: switch may be infeasible mid-horizon ─────────┘
+
+    AUGMENTED HORIZON
+    ─────────────────
+        t_trigger ──────────────────────────────────────────────► t_now + H
+          │                                                          │
+          │  dwell constraints applied from t_trigger (dwell start) │
+          │                                                          │
+          └── ensures full dwell constraint satisfied from now ─────┘
+
+    TIMELINE VISUALIZATION
+
+    z_j(t)
+      1 ┤         ┌─────────────────────────────────────┐
+        │         │                                     │
+        │         │        ON-DWELL                     │
+      0 ┤─────────┘                                     └──────────────
+        │
+        └────┬────────┬────────┬────────┬────────┬────────┬────────► t
+          t_trigger  t_now   t_now+τ_min_on       t_now+H
+             │        │
+             │        │
+             │        └── current time
+             │
+             └── dwell started here (augmented horizon begins)
+
+    CONSTRAINT IMPLEMENTATION
+    ─────────────────────────
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │  ON-DWELL:                                                                           │
+    │     z_j(t) − z_j(t−1) ≤ z_j(τ)      ∀τ ∈ [t+1, t+τ_{j,min}^on]                       │
+    │                                                                                      │
+    │  OFF-DWELL:                                                                          │
+    │    z_j(t−1) − z_j(t) ≤ 1 − z_j(τ)   ∀τ ∈ [t+1, t+τ_{j,min}^off]                     │
+    │                                                                                      │
+    │  STATE AUGMENTATION:                                                                 │
+    │     dwell state carried inside controller state, not reconstructed from history      │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+Diagram 10: Validation Layers — Layer-by-Layer Protocol
+
+```
+╔══════════════════════════════════════════════════════════════════════════════════════════╗
+║                          VALIDATION LAYERS (Layer 0 = HARD GATE)                         ║
+╚══════════════════════════════════════════════════════════════════════════════════════════╝
+
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │  LAYER 0: EXERGY BALANCE CLOSURE                        [HARD GATE]                 │
+    │  ────────────────────────────────                                                    │
+    │    | Σ Ẋ_in − Σ Ẋ_out − Ẋ_D − dX_B/dt | / max_j |term_j| ≤ 1%                      │
+    │    Scenario-per-term basis, per-term uncertainty budget                              │
+    │    → No controller results interpretable until passed                                │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │  LAYERS 1–4: PHYSIOLOGICAL MODEL                                                     │
+    │  ────────────────────────────                                                        │
+    │    Layer 1  Core temperature response          RMSE ≤ 0.32 °C                        │
+    │    Layer 2  Segmental skin temperature         RMSE ≤ 1.35 °C                        │
+    │    Layer 3  Vasomotor response                 RMSE ≤ published                      │
+    │    Layer 4  Sweating response                  RMSE ≤ published                      │
+    │    Data source: Fiala validation data                                                │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │  LAYERS 5–7: HEAT TRANSFER MECHANISMS                                                │
+    │  ────────────────────────────────────                                                │
+    │    Layer 5  Convective heat transfer          ≤ published uncertainty                │
+    │    Layer 6  Radiative heat transfer           ≤ published uncertainty                │
+    │    Layer 7  Evaporative heat transfer         ≤ published uncertainty                │
+    │    Data source: ASHRAE data                                                          │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │  LAYERS 8–10: COMFORT AND ESTIMATION                                                 │
+    │  ────────────────────────────────────                                                │
+    │    Layer 8   Whole-body thermal sensation     ≤ published uncertainty                │
+    │    Layer 9   Local discomfort                 ≤ published uncertainty                │
+    │    Layer 10  Estimator calibration (EnKF)     95% CI coverage                        │
+    │    Data source: ASHRAE 55, simulated truth                                           │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │  CLOSED-LOOP TESTING                                                                 │
+    │  ────────────────────                                                                │
+    │    Only after all validation layers pass                                             │
+    │    Rule: controller must NOT compensate for model errors                             │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+Diagram 11: Benchmark Architectures — Value-of-Information Design
+
+```
+╔══════════════════════════════════════════════════════════════════════════════════════════╗
+║                    BENCHMARK ARCHITECTURES A–G                                            ║
+╚══════════════════════════════════════════════════════════════════════════════════════════╝
+
+    ARCHITECTURE COMPARISON MATRIX
+    ──────────────────────────────
+    ┌──────┬────────────────────┬──────────────┬──────────┬──────────────┬────────────────┐
+    │ Arch │ Physiology          │ Modes        │ Objective│ Hardware     │ Info Set       │
+    ├──────┼────────────────────┼──────────────┼──────────┼──────────────┼────────────────┤
+    │  A   │ Simple comfort      │ Convection   │ Energy   │ Standard     │ Env only       │
+    │  B   │ Physiological       │ Radiation    │ Energy   │ Radiant      │ Env + physio   │
+    │  C   │ Physiological       │ Rad + Conv   │ Energy   │ Hybrid       │ Env + physio   │
+    │  D   │ Physiological       │ All feasible │ Energy   │ Full set     │ Env + physio   │
+    │  E   │ Population model    │ All feasible │ Exergy   │ Full set     │ Env only       │
+    │  F   │ Physio state fdbk   │ All feasible │ Exergy   │ Full set     │ Env + physio   │
+    │  G   │ Perfect physio      │ All feasible │ Exergy   │ Full set     │ Env + perfect  │
+    └──────┴────────────────────┴──────────────┴──────────┴──────────────┴────────────────┘
+
+    VALUE-OF-INFORMATION DECOMPOSITION
+    ──────────────────────────────────
+
+                              ┌──────────────────┐
+                              │  Architecture G  │  ← oracle (perfect physio)
+                              │  (upper bound)   │
+                              └────────┬─────────┘
+                                       │
+                                       │  G − F  =  estimation loss
+                                       │
+                              ┌────────┴─────────┐
+                              │  Architecture F  │  ← TS-Engine
+                              │  (physio fdbk)   │
+                              └────────┬─────────┘
+                                       │
+                                       │  F − E  =  value of physiological info
+                                       │           + mechanism selection gain
+                                       │
+                              ┌────────┴─────────┐
+                              │  Architecture E  │  ← exergy-optimal hybrid MPC
+                              │  (population)    │
+                              └────────┬─────────┘
+                                       │
+                                       │  E − D  =  value of exergy objective
+                                       │
+                              ┌────────┴─────────┐
+                              │  Architecture D  │  ← energy-optimal hybrid MPC
+                              │  (all modes)     │
+                              └──────────────────┘
+
+    H₃ FALSIFICATION CRITERION
+    ──────────────────────────
+        H₃ is falsified if:
+            ∀ s ∈ S,   P_F(s)  ⊀  P_E(s)
+
+        where  P_F, P_E  are Pareto fronts at equal discomfort and equal resource constraints.
+
+    KEY POINT:  E and F differ ONLY in information.
+                Same hardware. Same actuator set. Same objective structure.
+                If F does not dominate E → H₃ falsified → characterize why.
+```
+
+---
+
+Diagram 12: Falsification Protocol — Decision Tree
+
+```
+╔══════════════════════════════════════════════════════════════════════════════════════════╗
+║                          FALSIFICATION PROTOCOL FOR H₁, H₂, H₃                            ║
+╚══════════════════════════════════════════════════════════════════════════════════════════╝
+
+                        ┌─────────────────────────────┐
+                        │  START: Model + ROM +       │
+                        │  Exergy formulation         │
+                        │  Layer 0 closure ≤ 1%       │
+                        └──────────────┬──────────────┘
+                                       │
+                                       ▼
+                        ┌─────────────────────────────┐
+                        │  Compute rank(DF) via SVD   │
+                        │  for each feasible z        │
+                        └──────────────┬──────────────┘
+                                       │
+                                       ▼
+                              ┌─────────────────┐
+                              │  rank(DF) < q?  │
+                              └────────┬────────┘
+                                       │
+                        ┌──────────────┴──────────────┐
+                        │                             │
+                       YES                            NO
+                        │                             │
+                        ▼                             ▼
+            ┌───────────────────────┐     ┌───────────────────────┐
+            │  H₁ SUPPORTED         │     │  H₁ FALSIFIED         │
+            │  dim E ≥ M+P−q+1      │     │  dim E = 0            │
+            │  (structural rank     │     │  (no manifold,        │
+            │   deficiency)         │     │   no mechanism choice)│
+            └───────────┬───────────┘     └───────────┬───────────┘
+                        │                             │
+                        │                             │
+                        ▼                             ▼
+            ┌───────────────────────┐     ┌───────────────────────┐
+            │  Sample E, compute    │     │  STOP: characterize   │
+            │  projected gradient   │     │  why no manifold      │
+            │  g = Π_{ker DF} ∇J_X  │     │  exists               │
+            └───────────┬───────────┘     └───────────────────────┘
+                        │
+                        ▼
+              ┌─────────────────────┐
+              │  ‖g‖ > 0 on E?      │
+              └─────────┬───────────┘
+                        │
+          ┌─────────────┴─────────────┐
+          │                           │
+         YES                          NO
+          │                           │
+          ▼                           ▼
+┌───────────────────────┐   ┌───────────────────────┐
+│  H₂ SUPPORTED         │   │  H₂ FALSIFIED         │
+│  Var_E[J_X] > 0       │   │  J_X constant on E    │
+│  (exergy varies       │   │  (no favorable        │
+│   along manifold)     │   │   operating point)    │
+└───────────┬───────────┘   └───────────┬───────────┘
+            │                           │
+            │                           │
+            ▼                           ▼
+┌───────────────────────┐   ┌───────────────────────┐
+│  Build MINLP + CIA    │   │  STOP: characterize   │
+│  Run benchmark A–G    │   │  degeneracy           │
+│  Scenarios 1–8        │   │                       │
+│  ≥10 seeds/scenario   │   │                       │
+└───────────┬───────────┘   └───────────────────────┘
+            │
+            ▼
+  ┌─────────────────────────┐
+  │  Compute Pareto fronts  │
+  │  P_F(s) vs P_E(s)       │
+  │  Hypervolume, ε-indicator│
+  └───────────┬─────────────┘
+              │
+              ▼
+    ┌─────────────────────────┐
+    │  ∃s ∈ S: P_F(s) ≺ P_E(s)?│
+    └───────────┬─────────────┘
+                │
+      ┌─────────┴─────────┐
+      │                   │
+     YES                  NO
+      │                   │
+      ▼                   ▼
+┌───────────────┐  ┌───────────────────────┐
+│  H₃ SUPPORTED │  │  H₃ FALSIFIED         │
+│  Report:      │  │  ∀s, P_F(s) ⊀ P_E(s)  │
+│  • which s    │  │  Report:              │
+│  • by how much│  │  • which mechanisms   │
+│  • why        │  │    fail, where, why   │
+│               │  │  • mechanistic exergy │
+│               │  │    decomposition      │
+└───────────────┘  └───────────────────────┘
+```
+
+---
+
+Diagram 13: Proposition 2 — Projected Gradient Geometry
+
+```
+╔══════════════════════════════════════════════════════════════════════════════════════════╗
+║              PROJECTED GRADIENT AND NON-ORTHOGONALITY (Proposition 2)                     ║
+╚══════════════════════════════════════════════════════════════════════════════════════════╝
+
+    GEOMETRY IN R^{M+P}
+    ───────────────────
+
+                              ∇J_X
+                               │
+                               │
+                               │
+                               │  ∇J_X^∥  ∈ range(DF^T)
+                               │  (along constraint gradients)
+                               │
+                               ▼
+                    ─────────────────────────────  ← row space of DF
+                              ╱
+                             ╱
+                            ╱   g = Π_{ker DF} ∇J_X
+                           ╱    (projected gradient)
+                          ╱
+                         ╱
+                        ╱
+                       ╱  T_e E = ker DF(e)
+                      ╱   (tangent space to E)
+                     ╱
+                    ╱
+                   ╱
+                  ╱
+                 ▼
+
+    DECOMPOSITION
+    ─────────────
+        R^{M+P}  =  range(DF^T)  ⊕  ker DF
+                    (row space)     (tangent space)
+
+        ∇J_X  =  ∇J_X^∥  +  g
+
+        g  =  Π_{ker DF} ∇J_X  =  ∇J_X − DF^T (DF DF^T)^{-1} DF ∇J_X
+
+    H₂ CONDITION
+    ────────────
+        ‖g‖ > 0  on E   ⇔   ∇J_X ∉ (T_e E)^⊥   ⇔   Var_{e∈E}[J_X(e)] > 0
+
+    GENERICITY VIA SARD'S THEOREM
+    ──────────────────────────────
+        Parameterized:  g(e, θ) = Π_{ker DF(e;θ)} ∇_e J_X(e; θ)
+
+        G: E × Θ → R^{M+P},   G(e, θ) = g(e, θ)
+
+        Sard: set of critical values of G has measure zero in Θ
+        → generic non-orthogonality (provided one instance with g ≠ 0)
+
+        CONSTRUCTIVE VERIFICATION:
+            • SVD-based rank computation
+            • Evaluate g at sampled points on E
+            • Report lower bound on ‖g‖
+```
+
+---
+
+Diagram 14: Proposition 3 — Pareto Dominance Testing
+
+```
+╔══════════════════════════════════════════════════════════════════════════════════════════╗
+║                    PARETO DOMINANCE OF FRONTS (Proposition 3 / H₃)                        ║
+╚══════════════════════════════════════════════════════════════════════════════════════════╝
+
+    OBJECTIVE SPACE (2D projection for visualization)
+    ────────────────────────────────────────────────
+
+    Discomfort D
+        ▲
+        │
+        │   ┌──────────────────────────────────────────────────┐
+        │   │                                                  │
+        │   │   ✗  dominated region                            │
+        │   │      (both objectives worse)                     │
+        │   │                                                  │
+        │   │         ● P_E points                             │
+        │   │         ○ P_F points                             │
+        │   │                                                  │
+        │   │              ●                                   │
+        │   │             ╱                                    │
+        │   │            ●   ●                                 │
+        │   │           ╱   ╱                                  │
+        │   │          ○   ○     ← F front                     │
+        │   │         ╱   ╱       (closer to origin)           │
+        │   │        ○   ○                                     │
+        │   │       ╱   ╱                                      │
+        │   │      ○   ○                                       │
+        │   │     ╱   ╱                                        │
+        │   │    ○   ○                                         │
+        │   │   ╱   ╱                                          │
+        │   │  ○   ○                                           │
+        │   │ ╱   ╱                                            │
+        │   │○   ○                                             │
+        │   │                                                   │
+        │   └──────────────────────────────────────────────────┘
+        │
+        └────────────────────────────────────────────────────────► Exergy J_ex
+
+    HYPERVOLUME INDICATOR
+    ─────────────────────
+        H(P, r)  =  Λ( ∪_{p ∈ P} [r, p] )     (Lebesgue measure)
+
+        r = reference point (worst acceptable values)
+
+        F dominates E in hypervolume:  H(P_F, r) > H(P_E, r)
+
+    STATISTICAL PROTOCOL
+    ────────────────────
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │  • Run ≥ 10 seeds/weather realizations per scenario                                  │
+    │  • Compute hypervolume difference against fixed reference point                      │
+    │  • Report 95% confidence intervals                                                   │
+    │  • Minimum-effect threshold: 5% hypervolume improvement for "dominance" claim        │
+    │  • Additive ε-indicator as secondary metric                                          │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+
+    FALSIFICATION CRITERION
+    ───────────────────────
+        H₃ falsified  ⇔  ∀ s ∈ S,   P_F(s)  ⊀  P_E(s)
+
+        (no scenario in which F strictly dominates E)
+```
+
+---
+
+Diagram 15: Complete Data Flow — End-to-End
+
+```
+╔══════════════════════════════════════════════════════════════════════════════════════════╗
+║                    COMPLETE DATA FLOW — TS-ENGINE v1.0                                    ║
+╚══════════════════════════════════════════════════════════════════════════════════════════╝
+
+    ┌──────────────┐
+    │  WEATHER     │
+    │  Ta, RH, v   │
+    │  Solar       │
+    └──────┬───────┘
+           │
+           ▼
+    ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+    │  BUILDING    │────►│  ENVIRONMENT │────►│  COUPLING    │
+    │  Modelica    │     │  STATE       │     │  (heat +     │
+    │  Buildings   │     │  x_E         │     │   moisture)  │
+    └──────────────┘     └──────┬───────┘     └──────┬───────┘
+                                │                     │
+                                │                     │
+                                ▼                     ▼
+    ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+    │  WEARABLE    │────►│  EnKF        │────►│  CHANCE      │
+    │  SENSORS     │     │  (localized  │     │  CONSTRAINT  │
+    │  HR, T_skin  │     │   + inflated)│     │  Pr ≥ 1−δ    │
+    └──────────────┘     └──────┬───────┘     └──────┬───────┘
+                                │                     │
+                                │                     │
+                                ▼                     ▼
+                         ┌──────────────┐     ┌──────────────┐
+                         │  x̂_H,       │────►│  SLOW MPC    │
+                         │  Cov(x̂_H)   │     │  (2h / 10min)│
+                         └──────────────┘     │  z ∈ {0,1}^7 │
+                                              └──────┬───────┘
+                                                     │
+                                                     │  mechanism selection z
+                                                     │
+                                                     ▼
+                                              ┌──────────────┐
+                                              │  FAST MPC    │
+                                              │  (30min/1min)│
+                                              │  u ∈ R^P     │
+                                              └──────┬───────┘
+                                                     │
+                                                     │  continuous modulation u
+                                                     │
+                                                     ▼
+    ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+    │  ACTUATORS   │◄────│  CIA         │◄────│  MINLP       │
+    │  radiant     │     │  ROUNDING    │     │  RELAXATION  │
+    │  convective  │     │  pycombina   │     │  CasADi      │
+    │  evaporative │     │  (dwell-time │     │  + Bonmin    │
+    │  desiccant   │     │   augmented  │     │  / SCIP      │
+    │  ventilation │     │   horizon)   │     │              │
+    │  storage     │     └──────────────┘     └──────────────┘
+    │  heating     │
+    └──────┬───────┘
+           │
+           │  physical actuation
+           │
+           ▼
+    ┌──────────────┐
+    │  NEW STATE   │──────────► (feedback to environment + human)
+    └──────────────┘
+
+    EXERGY ACCOUNTING (parallel throughout)
+    ───────────────────────────────────────
+    ┌─────────────────────────────────────────────────────────────────────────────────────┐
+    │  Ẋ_in (met + air + liquid + radiation)                                               │
+    │         │                                                                            │
+    │         ▼                                                                            │
+    │  HUMAN BODY  ──►  Ẋ_D,body = Ẋ_D,met + Ẋ_D,transfer                                 │
+    │         │                    │              │                                        │
+    │         │                    │              └──► CONTROLLABLE → objective term       │
+    │         │                    │                                                       │
+    │         │                    └──► physics-fixed (~90%) → constant offset             │
+    │         │                                                                            │
+    │         ▼                                                                            │
+    │  Ẋ_out (air + sweat + radiation + convection)                                        │
+    │                                                                                      │
+    │  LAYER 0 GATE:  |Σ in − Σ out − Ẋ_D − dX_B/dt| / max|term| ≤ 1%                     │
+    └─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+-
