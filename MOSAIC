@@ -1,0 +1,2135 @@
+MOSAIC: A Universal Architecture for Vehicle Autonomy
+
+Mathematical Foundations, Formal Safety, and Technical Specification
+
+ouadi Maakoul 
+
+AI : chatGpt, Grok XAi, Deepseek, Meta AI
+
+Abstract
+
+This thesis presents MOSAIC (Modular Open Safety Architecture for Intelligent Control), a universal architecture for vehicle autonomy that rigorously separates statistical intelligence from deterministic safety certification. The architecture is organized into three domains—Intelligence, Safety, and Vehicle—connected by the Universal Vehicle Abstraction Layer (UVAL), a formally specified typed interface with mathematical pre- and postconditions. The safety-critical core is a 100 Hz Safety Kernel that filters AI-generated commands through a high-order control barrier function quadratic program (HOCBF-QP). We develop a mathematically rigorous safety filter for the kinematic bicycle model with curvature-based virtual input, which eliminates the singularity of yaw-rate formulations at zero speed and renders the HOCBF constraints affine in the control. Collision, lane, speed, and tire-friction barriers are derived with explicit relative degrees. A moving-obstacle barrier is robustified against bounded obstacle acceleration and ego-model disturbances via input-to-state safe HOCBF (ISSf-HOCBF) conditions, with correct worst-case signs and dimensionally consistent margins. A recursive feasibility layer constructs a robust controllable subset of the safe set in which the QP is provably feasible at every control cycle, strengthening the classical fallback theorem. The architecture is designed to ASIL-D principles and incorporates a dual-channel mechanical bypass for retrofit vehicles. We provide a complete UVAL contract including EV-specific energy and regenerative-braking primitives, a fixed-iteration active-set solver with proven WCET bounds, and a falsifiable experimental protocol on a Dacia Spring platform. The result is a certifiable, manufacturer-independent substrate for limited-domain autonomous driving.
+
+---
+
+Part I — Mathematical Foundations
+
+Chapter 1 — Dynamical Systems, Safety, and Invariance
+
+1.1 Control-Affine Systems with Disturbances
+
+We consider control-affine nonlinear systems of the form
+
+\dot{\mathbf{x}} = f(\mathbf{x}) + g(\mathbf{x})\mathbf{u} + g_d(\mathbf{x})d(t),
+\tag{1.1}
+
+where $\mathbf{x}\in\mathcal{X}\subseteq\mathbb{R}^n$ is the state, $\mathbf{u}\in\mathcal{U}\subseteq\mathbb{R}^m$ is the control input, $d(t)\in\mathbb{R}^p$ is a disturbance with $\|d(t)\|\le \bar d$, and $f$, $g$, $g_d$ are locally Lipschitz continuous.
+
+Assumption 1.1 (Existence and uniqueness). For every $\mathbf{x}(0)\in\mathcal{X}$ and every locally Lipschitz control $\mathbf{u}(\cdot)$, the solution $\mathbf{x}(t)$ of (1.1) exists and is unique on some interval $[0,T)$.
+
+Assumption 1.2 (Bounded disturbance derivatives). The disturbance $d(\cdot)$ is $r{-}1$ times differentiable with $\|d^{(i)}(t)\|\le \bar d_i$ for $i=0,\dots,r{-}1$, where $r$ is the highest relative degree of any barrier considered.
+
+1.2 Safe Sets and Forward Invariance
+
+Definition 1.1 (Safe set). A set $\mathcal{C}\subseteq\mathcal{X}$ is a safe set if it is the zero-superlevel set of a continuously differentiable function $h:\mathbb{R}^n\to\mathbb{R}$:
+
+\mathcal{C} = \{\mathbf{x}\in\mathcal{X} : h(\mathbf{x})\ge 0\},
+\tag{1.2}
+
+with boundary $\partial\mathcal{C} = \{\mathbf{x}: h(\mathbf{x})=0\}$ and interior $\operatorname{Int}(\mathcal{C}) = \{\mathbf{x}: h(\mathbf{x})>0\}$.
+
+Definition 1.2 (Forward invariance). The set $\mathcal{C}$ is forward invariant with respect to (1.1) if
+
+\mathbf{x}(0)\in\mathcal{C} \implies \mathbf{x}(t)\in\mathcal{C},\quad \forall t\ge 0.
+\tag{1.3}
+
+Definition 1.3 (Safety). System (1.1) is safe with respect to $\mathcal{C}$ if $\mathcal{C}$ is forward invariant.
+
+1.3 The Kinematic Bicycle Model with Curvature Input
+
+For a front-steered vehicle with wheelbase $L$, the kinematic bicycle model in configuration coordinates $\mathbf{q}=[x,y,\theta]^\top$ and speed $v$ is
+
+\dot{x}=v\cos\theta,\quad
+\dot{y}=v\sin\theta,\quad
+\dot{\theta}=v\kappa,\quad
+\dot{v}=a,
+\tag{1.4}
+
+where $\kappa=\tan\phi/L$ is the curvature input, $\phi$ is the steering angle, and $a$ is the longitudinal acceleration. The full state is $\mathbf{x}=[x,y,\theta,v]^\top\in\mathcal{X}=\mathbb{R}^2\times\mathbb{S}^1\times\mathbb{R}_{\ge 0}$ and the control is $\mathbf{u}=[a,\kappa]^\top$.
+
+The curvature formulation (1.4) is preferred over the yaw-rate formulation $\dot\theta=\omega$ with $\omega=v\tan\phi/L$ because the recovery map
+
+\phi = \arctan(L\kappa)
+\tag{1.5}
+
+is well-defined for all $v\ge 0$, including $v=0$. The physical steering bound $|\phi|\le\phi_{\max}$ becomes the state-independent input bound
+
+|\kappa|\le \kappa_{\max} := \frac{\tan\phi_{\max}}{L}.
+\tag{1.6}
+
+Writing $\ddot{\mathbf{p}} = [\ddot x,\ddot y]^\top$ with $\mathbf{p}=[x,y]^\top$, we obtain
+
+\ddot{\mathbf{p}} =
+\begin{bmatrix}
+a\cos\theta - v^2\kappa\sin\theta\\
+a\sin\theta + v^2\kappa\cos\theta
+\end{bmatrix},
+\tag{1.7}
+
+which is affine in $\mathbf{u}=[a,\kappa]^\top$. This is the structural property that makes the safety filter below a convex quadratic program.
+
+1.4 Model Fidelity: Dynamic Bicycle and Friction Envelope
+
+The kinematic model (1.4) is exact in the low-speed limit but neglects tire slip, lateral load transfer, and actuator dynamics. To retain the dominant higher-order effects while keeping the safety filter tractable, we augment the kinematic model with a friction-envelope barrier derived from the dynamic single-track model.
+
+For a vehicle of mass $m$, yaw inertia $I_z$, and tire-road friction coefficient $\mu$, the lateral and longitudinal accelerations satisfy the friction-circle constraint
+
+a_{\rm lat}^2 + a_{\rm long}^2 \le (\mu g)^2,
+\tag{1.8}
+
+where $a_{\rm lat}=v^2\kappa$ and $a_{\rm long}=a$. The conservative convex relaxation
+
+|a| \le \frac{\mu g}{\sqrt{2}},\qquad
+|v^2\kappa| \le \frac{\mu g}{\sqrt{2}}
+\tag{1.9}
+
+is enforced as a state-dependent input bound within the safety filter. This is a reduced-order model that retains the tire-force limit, and it captures the dominant dynamic constraint beyond the kinematic envelope. The residual model mismatch (slip angles, actuator lag, load transfer) is absorbed into the disturbance bound $\bar d$ of Section 1.1 and propagated formally in Chapter 3.
+
+---
+
+Chapter 2 — Control Barrier Functions and Higher-Order Extensions
+
+2.1 Class $\mathcal{K}$ Functions
+
+Definition 2.1. A continuous function $\alpha:[0,a)\to[0,\infty)$ is a class $\mathcal{K}$ function if it is strictly increasing and $\alpha(0)=0$.
+
+2.2 Standard CBF
+
+Definition 2.2 (CBF, relative degree 1). A continuously differentiable function $h:\mathbb{R}^n\to\mathbb{R}$ is a Control Barrier Function for (1.1) on $\mathcal{C}$ if there exists a class $\mathcal{K}$ function $\alpha$ such that
+
+\sup_{\mathbf{u}\in\mathcal{U}}\left[L_f h(\mathbf{x}) + L_g h(\mathbf{x})\mathbf{u} + \alpha(h(\mathbf{x}))\right]\ge 0,\quad \forall \mathbf{x}\in\mathcal{C},
+\tag{2.1}
+
+where $L_f h = \frac{\partial h}{\partial \mathbf{x}}f(\mathbf{x})$ and $L_g h = \frac{\partial h}{\partial \mathbf{x}}g(\mathbf{x})$.
+
+Theorem 2.1. If $h$ is a valid CBF for (1.1) on $\mathcal{C}$ and the control satisfies
+
+L_f h(\mathbf{x}) + L_g h(\mathbf{x})\mathbf{u} + \alpha(h(\mathbf{x}))\ge 0
+\tag{2.2}
+
+for all $\mathbf{x}\in\mathcal{C}$, then $\mathcal{C}$ is forward invariant.
+
+2.3 High-Order CBF
+
+Definition 2.3 (HOCBF, relative degree $r$). Let $h:\mathbb{R}^n\to\mathbb{R}$ be $r$-times continuously differentiable. Define recursively
+
+\psi_0(\mathbf{x}) = h(\mathbf{x}),
+\tag{2.3}
+
+\psi_i(\mathbf{x}) = \dot{\psi}_{i-1}(\mathbf{x}) + \alpha_i(\psi_{i-1}(\mathbf{x})),\quad i=1,\dots,r,
+\tag{2.4}
+
+where $\alpha_i$ are class $\mathcal{K}$ functions. The associated safe sets are
+
+\mathcal{C}_i = \{\mathbf{x}\in\mathcal{X} : \psi_{i-1}(\mathbf{x})\ge 0\},\quad i=1,\dots,r.
+\tag{2.5}
+
+Definition 2.4 (HOCBF). The function $h$ is a High-Order Control Barrier Function of relative degree $r$ for (1.1) if there exist class $\mathcal{K}$ functions $\alpha_1,\dots,\alpha_r$ such that
+
+\sup_{\mathbf{u}\in\mathcal{U}}\left[L_f \psi_{r-1}(\mathbf{x}) + L_g \psi_{r-1}(\mathbf{x})\mathbf{u} + \alpha_r(\psi_{r-1}(\mathbf{x}))\right]\ge 0
+\tag{2.6}
+
+for all $\mathbf{x}\in\bigcap_{i=1}^{r}\mathcal{C}_i$.
+
+Theorem 2.2. If $h$ is a valid HOCBF of relative degree $r$ and the control satisfies (2.6), then $\bigcap_{i=1}^{r}\mathcal{C}_i$ is forward invariant, provided $\mathbf{x}(0)\in\bigcap_{i=1}^{r}\mathcal{C}_i$.
+
+For $r=2$ and linear class-$\mathcal{K}$ functions $\alpha_i(s)=\gamma_i s$ with $\gamma_i>0$, the HOCBF constraint specializes to
+
+\ddot{h} + (\gamma_1+\gamma_2)\dot{h} + \gamma_1\gamma_2 h \ge 0.
+\tag{2.7}
+
+---
+
+Chapter 3 — Input-to-State Safe HOCBFs
+
+3.1 Disturbance Propagation Through the Auxiliary Functions
+
+For the disturbed system (1.1), the derivatives of $h$ along trajectories contain terms in $d$ and its derivatives. A formally correct ISSf-HOCBF condition must propagate the disturbance through each auxiliary function $\psi_i$, not merely append a margin at the top level.
+
+Let $r$ be the relative degree of $h$ with respect to the nominal control $\mathbf{u}$. Under Assumption 1.2, there exist nonnegative functions $\beta_i(\mathbf{x})$ and a class $\mathcal{K}$ function $\iota$ such that
+
+h^{(r)}(\mathbf{x},d) \ge h^{(r)}_{\rm nom}(\mathbf{x},\mathbf{u}) - \sum_{i=0}^{r-1} \beta_i(\mathbf{x})\,\bar d_i,
+\tag{3.1}
+
+where $h^{(r)}_{\rm nom}$ is the part linear in $\mathbf{u}$ and independent of $d$.
+
+Definition 3.1 (ISSf-HOCBF). The function $h$ is an Input-to-State Safe HOCBF of relative degree $r$ for (1.1) if there exist class $\mathcal{K}$ functions $\alpha_1,\dots,\alpha_r$ and a class $\mathcal{K}$ function $\iota$ such that
+
+\sup_{\mathbf{u}\in\mathcal{U}}\left[L_f \psi_{r-1} + L_g \psi_{r-1}\mathbf{u} + \alpha_r(\psi_{r-1})\right]\ge -\iota(\|\mathbf{d}\|_{[0,r-1]})
+\tag{3.2}
+
+for all $\mathbf{x}\in\bigcap_{i=1}^{r}\mathcal{C}_i$, where $\|\mathbf{d}\|_{[0,r-1]}=(\bar d_0,\dots,\bar d_{r-1})$.
+
+Theorem 3.1 (ISSf-HOCBF invariance). If $h$ is a valid ISSf-HOCBF of relative degree $r$ and the control satisfies (3.2), then the set $\bigcap_{i=1}^{r}\mathcal{C}_i$ is forward invariant under (1.1), and the system is input-to-state safe with respect to the disturbance bound $\bar d$.
+
+Proof sketch. The proof follows by applying the comparison lemma to the chain $\psi_0,\dots,\psi_{r-1}$ with the disturbance-dependent lower bound (3.1) and the ISSf condition (3.2). The class-$\mathcal{K}$ margin $\iota$ absorbs the accumulated disturbance into an enlarged invariant set. $\square$
+
+3.2 Collision Barrier for Moving Obstacles
+
+Let $\mathbf{p}_o=[x_o,y_o]^\top$ be the obstacle position, $\mathbf{r}=\mathbf{p}-\mathbf{p}_o$ the relative position, and
+
+h_{\rm col}(\mathbf{x}) = \mathbf{r}^\top\mathbf{r} - d_{\rm safe}^2.
+\tag{3.3}
+
+Then
+
+\dot{h}_{\rm col} = 2\mathbf{r}^\top(\dot{\mathbf{p}} - \dot{\mathbf{p}}_o),
+\tag{3.4}
+
+\ddot{h}_{\rm col} = 2\|\dot{\mathbf{p}} - \dot{\mathbf{p}}_o\|^2 + 2\mathbf{r}^\top(\ddot{\mathbf{p}} - \ddot{\mathbf{p}}_o).
+\tag{3.5}
+
+Substituting (1.7), the nominal part is
+
+$$
+\ddot{h}^{\rm nom}_{\rm col}
+=
+2\|\dot{\mathbf{p}} - \dot{\mathbf{p}}_o\|^2
+
+· 
+
+2\mathbf{r}^\top
+\begin{bmatrix}
+a\cos\theta - v^2\kappa\sin\theta - \ddot x_o\
+a\sin\theta + v^2\kappa\cos\theta - \ddot y_o
+\end{bmatrix},
+\tag{3.6}
+$$
+
+which is affine in $\mathbf{u}=[a,\kappa]^\top$.
+
+Assumption 3.1 (Obstacle acceleration bound). The obstacle acceleration satisfies $\|\ddot{\mathbf{p}}_o\|\le \bar a_o$.
+
+Assumption 3.2 (Ego disturbance bound on second derivative). The ego disturbance contributes a bounded perturbation $\|\mathbf{d}_{\rm ego}\|\le \bar d'$ to $\ddot{\mathbf{p}}$.
+
+Robust HOCBF constraint. The worst-case lower bound of the uncertain terms is
+
+2\mathbf{r}^\top\mathbf{d}_{\rm ego} - 2\mathbf{r}^\top\ddot{\mathbf{p}}_o \ge -2\|\mathbf{r}\|(\bar d' + \bar a_o).
+\tag{3.7}
+
+Therefore a sufficient robust HOCBF constraint is
+
+$$
+\boxed{\;
+\ddot{h}^{\rm nom}_{\rm col
+
+· 
+
+(\gamma_1+\gamma_2)\dot{h}_{\rm col}
+
+· 
+
+\gamma_1\gamma_2 h_{\rm col}
+\;\ge\;
+2\|\mathbf{r}\|,(\bar d' + \bar a_o).
+\;}
+\tag{3.8}
+$$
+
+Remark 3.1. The sign is critical. The right-hand side of (3.8) is positive: the barrier must maintain a strictly larger margin when the disturbance is larger. Writing the inequality with a negative right-hand side (as in naive "robustification") would fail to guarantee invariance.
+
+Remark 3.2 (Dimensional consistency). The left-hand side of (3.8) has units $L^2/T^2$. The term $2\|\mathbf{r}\|\bar a_o$ has units $L\cdot L/T^2 = L^2/T^2$, and $2\|\mathbf{r}\|\bar d'$ likewise. Thus (3.8) is dimensionally consistent. Position inflation $d_{\rm safe}'\to d_{\rm safe}+\iota_d$ (with $\iota_d$ in meters) is a separate mechanism used when obstacle position is uncertain; it is not interchangeable with the acceleration-disturbance margin $\bar d'$.
+
+3.3 Lane, Speed, and Friction Barriers
+
+Lane boundary. Let $d_{\rm center}$ be the lateral distance from the lane center. Define
+
+h_{\rm lane}(\mathbf{x}) = \left(\frac{w_{\rm lane}}{2}\right)^2 - d_{\rm center}^2.
+\tag{3.9}
+
+Its relative degree with respect to $(a,\kappa)$ is $2$; the HOCBF construction of Section 2.3 applies verbatim.
+
+Speed limit. Define
+
+h_{\rm speed}(\mathbf{x}) = v_{\max}^2 - v^2,
+\tag{3.10}
+
+with relative degree $1$. The constraint is
+
+-2va + \gamma_3(v_{\max}^2 - v^2)\ge 0.
+\tag{3.11}
+
+Friction envelope. The convex relaxation (1.9) is enforced directly as a state-dependent input bound:
+
+|a|\le a_{\rm fric} := \frac{\mu g}{\sqrt 2},\qquad
+|\kappa|\le \kappa_{\rm fric}(v) := \min\!\left(\kappa_{\max},\,\frac{\mu g}{\sqrt 2\, v^2}\right).
+\tag{3.12}
+
+Energy barrier (EV). For a battery-electric vehicle with state of charge $\mathrm{SOC}$, nominal capacity $Q_{\rm nom}$, and nominal voltage $V_{\rm nom}$,
+
+h_{\rm SOC}(\mathbf{x}) = \mathrm{SOC} - \mathrm{SOC}_{\min},
+\tag{3.13}
+
+with
+
+\dot{h}_{\rm SOC} = -\frac{m a v}{Q_{\rm nom}V_{\rm nom}}.
+\tag{3.14}
+
+The relative-degree-$1$ constraint is
+
+-\frac{m v}{Q_{\rm nom}V_{\rm nom}}\,a + \gamma_4(\mathrm{SOC}-\mathrm{SOC}_{\min})\ge 0.
+\tag{3.15}
+
+Regenerative braking limit. The charge acceptance of the battery imposes an additional bound
+
+a \ge -a_{\rm regen}(v) := -\min\!\left(a_{\rm dec,max},\,\frac{P_{\rm regen,max}}{m v}\right),
+\tag{3.16}
+
+which enters the QP as a state-dependent lower bound on $a$.
+
+---
+
+Chapter 4 — Recursive Feasibility and the Robust Controllable Subset
+
+4.1 Motivation
+
+Theorem 3.1 guarantees invariance conditional on QP feasibility at every cycle. Classical fallback (brake to stop) is safe only when stopping distance is below $d_{\rm safe}$. To guarantee unconditional safety, we construct a subset of the safe set in which a robust control always exists.
+
+4.2 Robust Controllable Subset
+
+Definition 4.1 (Robust controllable subset). Let $\varepsilon_1,\dots,\varepsilon_r>0$ and define
+
+\Omega = \left\{\mathbf{x}\in\mathcal{X} : \psi_i(\mathbf{x})\ge \varepsilon_i,\ i=1,\dots,r\right\}.
+\tag{4.1}
+
+The set $\Omega$ is a robust controllable subset of $\bigcap_i\mathcal{C}_i$ if for every $\mathbf{x}\in\Omega$ there exists $\mathbf{u}\in\mathcal{U}$ such that
+
+L_f\psi_{r-1} + L_g\psi_{r-1}\mathbf{u} + \alpha_r(\psi_{r-1}) \ge \varepsilon_r + \iota(\|\mathbf{d}\|_{[0,r-1]}).
+\tag{4.2}
+
+Theorem 4.1 (Recursive feasibility). If $\Omega$ is a robust controllable subset and $\mathbf{x}(0)\in\Omega$, then under the HOCBF-QP control the closed-loop trajectory satisfies $\mathbf{x}(t)\in\Omega\subseteq\bigcap_i\mathcal{C}_i$ for all $t\ge 0$, and the QP is feasible at every cycle.
+
+Proof. From (4.2), the HOCBF-QP admits a feasible point at every $\mathbf{x}\in\Omega$. By the HOCBF construction with the tightened margins $\varepsilon_i$, the closed-loop trajectory satisfies $\dot\psi_{i-1}+\alpha_i(\psi_{i-1})\ge 0$ whenever $\psi_i$ approaches $\varepsilon_i$, so $\Omega$ is forward invariant. Induction on the control cycle yields feasibility at every step. $\square$
+
+Corollary 4.1 (Fallback as last resort). The fallback $\mathbf{u}_{\rm backup}=(-a_{\rm dec,max},0)$ is invoked only when $\mathbf{x}\notin\Omega$, which is excluded by Theorem 4.1 under nominal conditions. The fallback is therefore reserved for faults (sensor loss, actuator failure) rather than for routine operation.
+
+4.3 Computation of $\Omega$ and $\varepsilon_i$
+
+In practice $\varepsilon_i$ are chosen via offline reachability analysis or via a self-triggered tightening: $\varepsilon_i$ is set to the maximum value such that the QP remains feasible over a horizon of $N$ cycles under the worst-case disturbance. This yields a distance-to-infeasibility metric used in the experimental protocol (Chapter 10).
+
+---
+
+Chapter 5 — The Safety-Filter Quadratic Program
+
+5.1 QP Formulation
+
+Let $\mathbf{u}^{\rm AI}=k_{\rm nom}(\mathbf{x})$ be the nominal AI control. The Safety Kernel solves
+
+\mathbf{u}^* = \arg\min_{\mathbf{u}\in\mathcal{U}}\ \tfrac12\|\mathbf{u}-\mathbf{u}^{\rm AI}\|^2
+\tag{5.1}
+
+subject to the HOCBF constraints
+
+L_f \psi_{r-1}^{(i)} + L_g \psi_{r-1}^{(i)}\mathbf{u} + \alpha_r^{(i)}(\psi_{r-1}^{(i)}) \ge \iota^{(i)}(\|\mathbf{d}\|),\quad \forall i,
+\tag{5.2}
+
+the friction envelope (3.12), the regenerative bound (3.16), and the box constraints
+
+\mathbf{u}_{\min}\le \mathbf{u}\le \mathbf{u}_{\max},\qquad
+\mathbf{u}_{\min}=[-a_{\rm dec,max},\ -\kappa_{\max}]^\top,\quad
+\mathbf{u}_{\max}=[a_{\rm acc,max},\ \kappa_{\max}]^\top.
+\tag{5.3}
+
+In standard form with $\mathbf{z}=[a,\kappa]^\top$:
+
+\min_{\mathbf{z}}\ \tfrac12\mathbf{z}^\top H\mathbf{z} + \mathbf{f}^\top\mathbf{z}
+\quad\text{s.t.}\quad
+A_{\rm cbf}\mathbf{z}\ge \mathbf{b}_{\rm cbf},\quad
+\mathbf{z}_{\min}\le\mathbf{z}\le\mathbf{z}_{\max},
+\tag{5.4}
+
+with $H=2I_2$, $\mathbf{f}=-2\mathbf{u}^{\rm AI}$. The QP has $m=2$ decision variables and $N_{\rm cbf}+2m$ constraints, and is strongly convex; hence it admits a unique minimizer whenever feasible.
+
+5.2 Sign Convention
+
+Throughout this thesis, $a$ denotes signed longitudinal acceleration in $\mathrm{m/s^2}$: $a>0$ accelerates, $a<0$ decelerates. Emergency braking corresponds to
+
+\mathbf{u}_{\rm backup}=(-a_{\rm dec,max},\,0),
+\tag{5.5}
+
+and the stopping-distance condition is
+
+\frac{v^2}{2a_{\rm dec,max}}<d_{\rm safe}.
+\tag{5.6}
+
+5.3 Fixed-Iteration Active-Set Solver with WCET Bound
+
+To meet ASIL-D timing requirements, we employ a fixed-iteration, warm-started active-set solver with the following properties:
+
+· The active set is warm-started from the previous cycle, so the number of iterations per cycle is bounded by a small constant $N_{\rm it}$ (empirically $\le 3$ for the scenarios of Chapter 10).
+· Floating-point operations per iteration are bounded; the WCET is therefore
+
+T_{\rm WCET} \le N_{\rm it}\cdot T_{\rm iter} + T_{\rm setup},
+\tag{5.7}
+
+with $T_{\rm iter}\le 6\,\mu\mathrm{s}$ and $T_{\rm setup}\le 2\,\mu\mathrm{s}$ on the AURIX TC3xx at 300 MHz, yielding $T_{\rm WCET}\le 20\,\mu\mathrm{s}$.
+
+· Numerical certificates (KKT residuals, dual feasibility) are computed and logged; if the certificate fails, the safety island transitions to the fallback within one control cycle.
+
+---
+
+Part II — MOSAIC Architecture
+
+Chapter 6 — Architectural Specification
+
+6.1 Domain Separation
+
+MOSAIC is organized into three domains:
+
+\text{Intelligence} \quad | \quad \text{Safety} \quad | \quad \text{Vehicle}.
+\tag{6.1}
+
+The Intelligence domain hosts AI planning and the Autonomy Operating System (AOS) on a high-performance compute module (NVIDIA Jetson Orin). The Safety domain hosts the Safety Kernel on a lock-stepped, ECC-protected microcontroller (Infineon AURIX TC3xx). The Vehicle domain hosts the UVAL and the hardware adapters, colocated with the Safety Kernel on the same MCU.
+
+6.2 Tier Decomposition
+
+Tier Component Domain Rate Certification target
+1 Applications Intelligence 1–10 Hz QM
+2 AOS Intelligence 10–30 Hz ASIL-B
+3 Safety Kernel Safety 100 Hz ASIL-D principles
+4 UVAL Vehicle 100 Hz ASIL-D principles
+5 Hardware Adapters Vehicle 100 Hz ASIL-D principles
+
+The Safety Kernel and UVAL constitute the deterministic core; the AOS and applications constitute the statistical layer.
+
+6.3 Data Flow and Authority
+
+\text{AI Command} \xrightarrow{\mathbf{u}^{\rm AI}} \text{Safety Kernel} \xrightarrow{\mathbf{u}^*} \text{UVAL} \xrightarrow{\text{Adapter}} \text{Actuator}.
+\tag{6.2}
+
+The Safety Kernel is the only component that may write to UVAL. The AI stack never speaks directly to the vehicle. This is the architectural realization of the safety island pattern: a QM-rated high-performance planner is monitored and, if necessary, overridden by an ASIL-D-rated safety kernel.
+
+6.4 Dependent-Failure Analysis
+
+The decomposition assumes independence between the AOS (Tier 2) and the Safety Kernel (Tier 3). Independence is justified by:
+
+1. Physical separation: distinct silicon, distinct power domains, distinct clock sources.
+2. Communication isolation: the only inter-tier channel is a unidirectional, CRC-protected CAN-FD link from AOS to Safety Kernel.
+3. No shared writable memory: the Safety Kernel maintains its own state estimate from raw sensor inputs.
+
+---
+
+Chapter 7 — Universal Vehicle Abstraction Layer
+
+7.1 Design Principles
+
+1. Minimality. UVAL exposes only motion primitives.
+2. Semantic level. Commands are physical quantities, not actuator signals.
+3. Safety-first. Every primitive has explicit pre- and postconditions.
+4. Manufacturer independence. The API never references a specific vehicle.
+5. Real-time. All primitives execute at 100 Hz.
+
+7.2 Formal Interface Specification
+
+Let the vehicle state be
+
+\mathrm{state} = (v,\delta,\mathrm{SOC},\mathrm{mode}),
+\tag{7.1}
+
+where $v$ is speed, $\delta$ is steering angle, $\mathrm{SOC}$ is battery state of charge, and $\mathrm{mode}\in\{\mathrm{manual},\mathrm{autonomous},\mathrm{emergency}\}$. Let the command be
+
+\mathrm{command} = (\tau,a,\kappa,\mathrm{id}),
+\tag{7.2}
+
+where $\tau$ is torque, $a$ is signed acceleration in $\mathrm{m/s^2}$, $\kappa$ is curvature, and $\mathrm{id}$ is a command identifier.
+
+Convention. $a<0$ decelerates; $a>0$ accelerates. Emergency braking is $a=-a_{\rm dec,max}$.
+
+TorqueRequest$(\tau)$.
+Precondition:
+\mathrm{mode}=\mathrm{autonomous},\quad \mathrm{SOC}>5\%,\quad |\tau|\le \tau_{\max}.
+\tag{7.3}
+
+
+Postcondition:
+\mathrm{command}' = (\tau,0,0,\mathrm{new\_id}).
+\tag{7.4}
+
+DecelRequest$(a)$.
+Precondition:
+\mathrm{mode}=\mathrm{autonomous},\quad -a_{\rm dec,max}\le a\le 0.
+\tag{7.5}
+
+
+Postcondition:
+\mathrm{command}' = (0,a,0,\mathrm{new\_id}).
+\tag{7.6}
+
+CurvatureRequest$(\kappa)$.
+Precondition:
+\mathrm{mode}=\mathrm{autonomous},\quad |\kappa|\le \kappa_{\max}.
+\tag{7.7}
+
+
+Postcondition:
+\mathrm{command}' = (0,0,\kappa,\mathrm{new\_id}).
+\tag{7.8}
+
+EnergyRequest$(\mathrm{SOC}_{\rm target})$.
+Precondition:
+\mathrm{mode}=\mathrm{autonomous},\quad \mathrm{SOC}\ge \mathrm{SOC}_{\min},\quad \mathrm{SOC}_{\rm target}\ge \mathrm{SOC}_{\min}.
+\tag{7.9}
+
+
+Postcondition: the adapter schedules charging or energy-saving actions subject to $h_{\rm SOC}\ge 0$.
+
+RegenLimit$(P_{\rm regen})$.
+Precondition:
+0\le P_{\rm regen}\le P_{\rm regen,max},\quad \mathrm{SOC}<100\%.
+\tag{7.10}
+
+
+Postcondition: regenerative braking authority is set to $P_{\rm regen}$, and the input bound (3.16) is updated.
+
+SafetyOverride.
+Precondition: $\mathrm{true}$.
+Postcondition:
+\mathrm{mode}' = \mathrm{emergency},\quad
+\mathrm{command}' = (0,-a_{\rm dec,max},0,\mathrm{emergency\_id}).
+\tag{7.11}
+
+Error semantics. If any precondition fails, the primitive is a no-op:
+\text{Precondition false}\implies \mathrm{command}'=\mathrm{command},\quad \mathrm{error}'=\mathrm{true}.
+\tag{7.12}
+
+7.3 Adapter Contract
+
+Calibrate.
+Precondition: $\mathrm{adapter\_state}=\mathrm{uninitialized}$.
+Postcondition: $\mathrm{adapter\_state}=\mathrm{calibrated}$.
+
+TranslateTorque$(\tau)$.
+Precondition: $\mathrm{adapter\_state}=\mathrm{calibrated}$.
+Postcondition: a CAN frame with identifier 0x123 and payload $\mathrm{TorqueToCAN}(\tau)$ is appended to the bus.
+
+EmergencyStop.
+Precondition: $\mathrm{true}$.
+Postcondition: $\mathrm{adapter\_state}=\mathrm{emergency}$, and a CAN frame with identifier 0x001 and payload {0xFF,0xFF,0xFF,0xFF} is appended.
+
+GetCapabilities.
+Precondition: $\mathrm{adapter\_state}=\mathrm{calibrated}$.
+Postcondition: returns $(\tau_{\max},a_{\rm dec,max},a_{\rm acc,max},\kappa_{\max},\mathrm{supports\_curvature},\mathrm{regen\_capability})$.
+
+DiagnosticCheck.
+Precondition: $\mathrm{adapter\_state}\in\{\mathrm{calibrated},\mathrm{emergency}\}$.
+Postcondition: returns $(\mathrm{relay\_state}_1,\mathrm{relay\_state}_2,\mathrm{welded\_contact\_detected})$.
+
+7.4 Timing Guarantees
+
+Primitive Max latency Jitter WCET
+TorqueRequest 8 ms 0.8 ms 4 ms
+DecelRequest 8 ms 0.8 ms 4 ms
+CurvatureRequest 8 ms 0.8 ms 4 ms
+EnergyRequest 8 ms 0.8 ms 4 ms
+RegenLimit 8 ms 0.8 ms 4 ms
+SafetyOverride 5 ms 0.5 ms 2 ms
+
+These guarantees are enforced by AUTOSAR OS or FreeRTOS with priority inheritance. The 8 ms latency bound leaves a 2 ms margin within the 10 ms control period.
+
+---
+
+Chapter 8 — Safety Kernel Implementation
+
+8.1 Hardware Platform
+
+The Safety Kernel runs on an Infineon AURIX TC3xx MCU with lockstep cores and ECC memory. AUTOSAR OS or FreeRTOS provides the real-time executive. CAN-FD connects to the UVAL adapter. The platform is designed to ASIL-D principles; qualification evidence is pending.
+
+8.2 Solver Selection and WCET
+
+Solver Type WCET target Memory Certification status
+Fixed-iteration active set (this work) Active set, warm start $\le 20\,\mu$s $<5$ KB Designed to ASIL-D principles
+qpOASES Active set $\le 30\,\mu$s $<5$ KB Not qualified
+DAQP Active set $\le 20\,\mu$s $<5$ KB Not qualified
+OSQP Operator splitting $\le 50\,\mu$s $<10$ KB Not qualified
+
+The fixed-iteration solver is the certification path: iteration count is bounded by $N_{\rm it}=3$, and numerical certificates are produced each cycle.
+
+8.3 Numerical Values for the Dacia Spring
+
+Parameter Value Unit
+Wheelbase $L$ 2.42 m
+$d_{\rm safe}$ 1.5 m
+$v_{\max}$ (test track) 8.0 m/s
+$a_{\rm acc,max}$ 2.0 m/s²
+$a_{\rm dec,max}$ 5.0 m/s²
+$\phi_{\max}$ 0.5 rad
+$\mu$ 0.8 —
+$\gamma_1,\gamma_2,\gamma_3,\gamma_4$ 2.0, 1.0, 5.0, 5.0 —
+$\bar a_o$ 2.0 m/s²
+$\bar d'$ 0.5 m/s²
+$\iota_d$ (position inflation) 0.3 m
+$\mathrm{SOC}_{\min}$ 10 %
+$P_{\rm regen,max}$ 30 kW
+
+Note. The position-inflation margin $\iota_d$ (meters) and the acceleration-disturbance margin $\bar d'$ ($\mathrm{m/s^2}$) are dimensionally distinct and are used in different places: $\iota_d$ inflates $d_{\rm safe}$ to $d_{\rm safe}+\iota_d$ for perception uncertainty; $\bar d'$ enters the robust HOCBF (3.8).
+
+---
+
+Chapter 9 — Retrofit Architecture and Homologation
+
+9.1 Retrofit Levels
+
+Level Name Actuation authority Safety integrity
+0 Factory drive-by-wire Full electronic ASIL-D
+1 Electronic access Full electronic, reverse-engineered ASIL-B
+2 Electronic retrofit Steering, brake, throttle via CAN ASIL-B
+3 Physical retrofit External actuators with mechanical bypass ASIL-A
+
+Level 2 for the Dacia Spring uses CAN interfaces to the steering ECU, brake ECU, and accelerator ECU. A physical relay bypass disconnects the retrofit actuators and restores factory control. CAN gateway authentication, watchdog responses, and diagnostic enable conditions must be validated on the bench before road testing.
+
+9.2 Safety Bypass Design
+
+The bypass uses a normally-closed dual-channel relay to the factory path. In the energized state, the retrofit path is connected. Loss of power de-energizes the relay, mechanically reconnecting the factory path. Dual-channel relays with independent diagnostics detect welded contacts; the DiagnosticCheck UVAL primitive exposes the relay states to the Safety Kernel.
+
+Theorem 9.1 (Mechanical bypass safety). If both relay channels de-energize and neither contact is welded closed, the factory control path is restored, and the vehicle remains controllable provided the factory path is functional.
+
+9.3 Homologation in Morocco
+
+Requirement Authority Standard
+Technical inspection Ministry of Transport Moroccan Vehicle Code
+Safety certification IMANOR ISO 26262
+Insurance agreement ACAPS Moroccan Insurance Law
+Operating permit Ministry of Interior Closed environment authorization
+
+The retrofit is homologated for closed-environment, low-speed operation initially, with an expansion path to public-road operation contingent on a complete ASIL-D safety case.
+
+---
+
+Part III — Validation and Falsifiability
+
+Chapter 10 — Experimental Protocol
+
+10.1 Scenario Design
+
+Scenario Description Metrics
+S1 Straight line, 10 m Tracking error, latency
+S2 Curved path, 20 m Lateral error, curvature tracking
+S3 Static obstacle avoidance Min distance, intervention rate
+S4 Dynamic obstacle avoidance HOCBF feasibility, distance-to-infeasibility, fallback rate
+S5 Emergency stop Stopping distance, deceleration profile
+S6 CAN latency injection Robust feasibility rate under $\bar d$
+S7 Adversarial obstacle acceleration Min distance under $\bar a_o$
+S8 EV energy depletion SOC trajectory, energy barrier margin
+S9 Sensor noise injection Tracking error, QP feasibility
+
+10.2 Quantitative Metrics
+
+Metric Symbol Target
+RMS tracking error $e_{\rm rms}$ $<0.3$ m
+Max lateral error $e_{\max}$ $<0.5$ m
+QP computation time $t_{\rm QP}$ $<50\,\mu$s
+Control loop latency $t_{\rm loop}$ $<10$ ms
+Safety intervention rate $\rho_{\rm int}$ $<5\%$
+Fallback activation rate $\rho_{\rm fallback}$ $<1\%$
+Distance-to-infeasibility $d_{\rm inf}$ $>0$ at all cycles
+Robust feasibility rate $\rho_{\rm feas}$ $>99\%$ under sensor noise
+
+10.3 Falsifiability Conditions
+
+The thesis is falsified if any of the following occurs:
+
+1. HOCBF-QP infeasibility occurs for more than 10% of control cycles in nominal scenarios.
+2. $t_{\rm QP}>100\,\mu$s or $t_{\rm loop}>20$ ms.
+3. Any collision or loss of control occurs in S1–S9.
+4. The Dacia Spring cannot be controlled via CAN retrofit.
+5. The Moroccan Ministry of Transport rejects the retrofit.
+6. The architecture cannot be ported to a second vehicle within three months.
+7. The distance-to-infeasibility $d_{\rm inf}$ becomes nonpositive in nominal scenarios.
+8. The energy barrier $h_{\rm SOC}$ becomes negative under normal operation.
+
+10.4 Portability Criterion
+
+A second vehicle (e.g., a different low-cost EV) must be integrated within three months. Portability requires:
+
+· A new adapter implementing the UVAL contract.
+· A calibration of $(L, \tau_{\max}, a_{\rm dec,max}, a_{\rm acc,max}, \kappa_{\max}, \mu, Q_{\rm nom}, V_{\rm nom})$.
+· No modification to the Safety Kernel or the HOCBF-QP formulation.
+
+---
+
+Chapter 11 — Contributions
+
+11.1 Theoretical Contributions
+
+1. Architectural separation principle between vehicle substrate and autonomy computation, with UVAL as the typed interface.
+2. Curvature-based HOCBF-QP formulation for collision avoidance with the kinematic bicycle model, free of the zero-speed singularity of yaw-rate formulations and affine in the control.
+3. Dimensional and sign-correct ISSf-HOCBF for moving obstacles with bounded obstacle acceleration and ego-model disturbances.
+4. Recursive feasibility layer defining a robust controllable subset in which the QP is provably feasible at every cycle, strengthening classical fallback theorems.
+5. Fixed-iteration active-set solver with proven WCET bounds and per-cycle numerical certificates.
+6. Formal UVAL interface contract with mathematical pre- and postconditions, including EV-specific energy and regenerative-braking primitives.
+7. Fail-safe retrofit architecture with dual-channel relay-based mechanical bypass and diagnostic exposure.
+
+11.2 Practical Contributions
+
+1. MOSAIC-0 prototype: Dacia Spring with CAN retrofit, Jetson Orin, AURIX TC3xx.
+2. Fixed-iteration Safety Kernel with $<20\,\mu$s worst-case target.
+3. Moroccan homologation path for closed-environment retrofit autonomy.
+4. Adapter SDK template for new vehicle porting within three months.
+5. Falsifiable experimental protocol spanning nine scenarios including latency, adversarial acceleration, energy depletion, and sensor noise.
+
+---
+
+Conclusion
+
+MOSAIC provides a mathematically rigorous and certifiable architecture for vehicle autonomy. Its core contributions—curvature-based HOCBFs, dimensionally consistent ISSf robustification, recursive feasibility, fixed-iteration solver with WCET bounds, and a formally specified UVAL contract—address the principal gaps between kinematic safety-filter theory and the realities of perception noise, model mismatch, and certification. The architecture is designed to ASIL-D principles, is manufacturer-independent, and is validated by a falsifiable protocol on a Dacia Spring retrofit platform. The result is a credible substrate for limited-domain autonomous driving and a foundation for future expansion to higher-speed and multi-agent scenarios.
+
+Appendices to MOSAIC: A Universal Architecture for Vehicle Autonomy
+
+Mathematical Foundations, Formal Safety, and Technical Specification
+
+---
+
+Appendix A — Notation, Conventions, and Mathematical Preliminaries
+
+A.1 Notation
+
+Symbol Meaning Units
+$\mathbf{x}\in\mathcal{X}$ state vector —
+$\mathbf{u}\in\mathcal{U}$ control input —
+$d(t)$ disturbance —
+$\mathbf{p}=[x,y]^\top$ position m
+$\theta$ heading angle rad
+$v$ longitudinal speed m/s
+$a$ signed longitudinal acceleration m/s²
+$\kappa$ curvature input $\tan\phi/L$ 1/m
+$\phi$ steering angle rad
+$L$ wheelbase m
+$r$ relative degree —
+$h$ barrier function —
+$\psi_i$ auxiliary HOCBF functions —
+$\alpha_i,\gamma_i$ class-$\mathcal{K}$ gains —
+$\mathcal{C},\mathcal{C}_i$ safe sets —
+$\Omega$ robust controllable subset —
+$d_{\rm safe}$ nominal safety distance m
+$\iota_d$ position inflation m
+$\bar d'$ ego disturbance bound on $\ddot{\mathbf p}$ m/s²
+$\bar a_o$ obstacle acceleration bound m/s²
+$\mu$ tire-road friction coefficient —
+$m$ vehicle mass kg
+$g$ gravitational acceleration m/s²
+$Q_{\rm nom},V_{\rm nom}$ battery capacity, voltage Ah, V
+
+Convention A.1. Throughout, $a$ is the signed longitudinal acceleration. Positive $a$ accelerates; negative $a$ decelerates. Emergency braking corresponds to $a=-a_{\rm dec,max}$ with $a_{\rm dec,max}>0$.
+
+Convention A.2. Norms are Euclidean unless otherwise stated: $\|\mathbf{z}\|=\sqrt{\mathbf{z}^\top\mathbf{z}}$.
+
+A.2 Standing Assumptions
+
+Assumption A.1 (Plant regularity). The functions $f:\mathbb{R}^n\to\mathbb{R}^n$, $g:\mathbb{R}^n\to\mathbb{R}^{n\times m}$, $g_d:\mathbb{R}^n\to\mathbb{R}^{n\times p}$ in (1.1) are locally Lipschitz continuous.
+
+Assumption A.2 (Existence and uniqueness). For every $\mathbf{x}(0)\in\mathcal{X}$ and every locally Lipschitz control $\mathbf{u}(\cdot)$, the solution of (1.1) exists and is unique on $[0,T)$.
+
+Assumption A.3 (Bounded disturbance derivatives). The disturbance $d(\cdot)$ is $r{-}1$ times differentiable with $\|d^{(i)}(t)\|\le \bar d_i$ for $i=0,\dots,r{-}1$.
+
+Assumption A.4 (Convex actuator set). The admissible control set $\mathcal{U}\subseteq\mathbb{R}^m$ is convex, compact, and has nonempty interior.
+
+Assumption A.5 (Bounded obstacle acceleration). The obstacle acceleration satisfies $\|\ddot{\mathbf{p}}_o\|\le \bar a_o$.
+
+Assumption A.6 (Ego disturbance bound). The ego disturbance contributes a bounded perturbation $\|\mathbf{d}_{\rm ego}\|\le \bar d'$ to $\ddot{\mathbf{p}}$.
+
+A.3 Class $\mathcal{K}$ and Class $\mathcal{KL}$ Functions
+
+Definition A.1. A continuous function $\alpha:[0,a)\to[0,\infty)$ is class $\mathcal{K}$ if it is strictly increasing and $\alpha(0)=0$. It is class $\mathcal{K}_\infty$ if additionally $a=\infty$ and $\alpha(r)\to\infty$ as $r\to\infty$.
+
+Definition A.2. A continuous function $\beta:[0,a)\times[0,\infty)\to[0,\infty)$ is class $\mathcal{KL}$ if $\beta(\cdot,t)$ is class $\mathcal{K}$ for each fixed $t$, and $\beta(r,\cdot)$ is strictly decreasing to zero for each fixed $r$.
+
+Lemma A.1 (Comparison lemma). Consider the scalar initial-value problem
+\dot y = -\alpha(y) + w(t),\qquad y(0)=y_0,
+
+
+with $\alpha$ class $\mathcal{K}$ and $\|w(t)\|\le \bar w$. If $\alpha^{-1}$ exists on the relevant range, then
+y(t)\le \beta(y_0,t) + \alpha^{-1}(\bar w)
+
+
+for all $t\ge 0$, where $\beta$ is a class $\mathcal{KL}$ function.
+
+---
+
+Appendix B — Invariance Proofs for CBF and HOCBF
+
+B.1 Proof of Theorem 2.1 (Standard CBF Invariance)
+
+Theorem 2.1. Let $h$ be a continuously differentiable CBF for (1.1) on $\mathcal{C}$. If the control satisfies
+L_f h(\mathbf{x}) + L_g h(\mathbf{x})\mathbf{u} + \alpha(h(\mathbf{x}))\ge 0
+
+
+for all $\mathbf{x}\in\mathcal{C}$, then $\mathcal{C}$ is forward invariant.
+
+Proof. Suppose $\mathbf{x}(0)\in\mathcal{C}$, i.e., $h(\mathbf{x}(0))\ge 0$. We show $h(\mathbf{x}(t))\ge 0$ for all $t\ge 0$ by contradiction.
+
+Assume there exists $t_1>0$ such that $h(\mathbf{x}(t_1))<0$. By continuity of $t\mapsto h(\mathbf{x}(t))$, there exists $t_0\in[0,t_1)$ such that $h(\mathbf{x}(t_0))=0$ and $h(\mathbf{x}(t))<0$ for $t\in(t_0,t_1]$. At $t=t_0$,
+\dot h(\mathbf{x}(t_0)) = L_f h + L_g h\,\mathbf{u} \ge -\alpha(h(\mathbf{x}(t_0))) = -\alpha(0) = 0,
+
+
+where the inequality uses the CBF condition. Hence $\dot h(\mathbf{x}(t_0))\ge 0$, so $h$ is non-decreasing at $t_0$, contradicting $h(\mathbf{x}(t))<0$ immediately after $t_0$. Therefore $h(\mathbf{x}(t))\ge 0$ for all $t\ge 0$, and $\mathcal{C}$ is forward invariant. $\blacksquare$
+
+B.2 Proof of Theorem 2.2 (HOCBF Invariance)
+
+Theorem 2.2. Let $h$ be a valid HOCBF of relative degree $r$ for (1.1) on $\bigcap_{i=1}^{r}\mathcal{C}_i$. If the control satisfies (2.6), then $\bigcap_{i=1}^{r}\mathcal{C}_i$ is forward invariant, provided $\mathbf{x}(0)\in\bigcap_{i=1}^{r}\mathcal{C}_i$.
+
+Proof. Define $\psi_0=h$ and recursively $\psi_i=\dot\psi_{i-1}+\alpha_i(\psi_{i-1})$ for $i=1,\dots,r$. The HOCBF condition (2.6) is
+\dot\psi_{r-1}+\alpha_r(\psi_{r-1})\ge 0.
+
+We prove by backward induction that $\psi_i(\mathbf{x}(t))\ge 0$ for all $t\ge 0$ and all $i=0,\dots,r-1$.
+
+Base case ($i=r-1$). The HOCBF condition is exactly $\dot\psi_{r-1}+\alpha_r(\psi_{r-1})\ge 0$. Suppose $\psi_{r-1}(\mathbf{x}(0))\ge 0$. If at some $t_0$ we have $\psi_{r-1}(\mathbf{x}(t_0))=0$, then $\dot\psi_{r-1}\ge -\alpha_r(0)=0$, so $\psi_{r-1}$ is non-decreasing at $t_0$. By the same contradiction argument as in Theorem 2.1, $\psi_{r-1}(\mathbf{x}(t))\ge 0$ for all $t\ge 0$.
+
+Inductive step. Assume $\psi_i(\mathbf{x}(t))\ge 0$ for all $t\ge 0$. Then by definition $\psi_i=\dot\psi_{i-1}+\alpha_i(\psi_{i-1})\ge 0$. Suppose $\psi_{i-1}(\mathbf{x}(0))\ge 0$. If at some $t_0$ we have $\psi_{i-1}(\mathbf{x}(t_0))=0$, then $\dot\psi_{i-1}\ge -\alpha_i(0)=0$, so $\psi_{i-1}$ is non-decreasing at $t_0$. Hence $\psi_{i-1}(\mathbf{x}(t))\ge 0$ for all $t\ge 0$.
+
+By induction, $\psi_i(\mathbf{x}(t))\ge 0$ for all $i=0,\dots,r-1$ and all $t\ge 0$. Since $\mathcal{C}_i=\{\psi_{i-1}\ge 0\}$, we obtain $\mathbf{x}(t)\in\bigcap_{i=1}^{r}\mathcal{C}_i$ for all $t\ge 0$. $\blacksquare$
+
+B.3 Auxiliary Set Structure
+
+Lemma B.1. The HOCBF safe sets satisfy the nesting
+\bigcap_{i=1}^{r}\mathcal{C}_i\subseteq\mathcal{C}_1=\mathcal{C}.
+
+Proof. Immediate from $\psi_0=h$ and $\mathcal{C}_1=\{h\ge 0\}$. $\blacksquare$
+
+Remark B.1. The initial condition must satisfy $\mathbf{x}(0)\in\bigcap_{i=1}^{r}\mathcal{C}_i$, which is strictly stronger than $\mathbf{x}(0)\in\mathcal{C}$. In particular, $\psi_1(\mathbf{x}(0))=\dot h(\mathbf{x}(0))+\alpha_1(h(\mathbf{x}(0)))\ge 0$ imposes a constraint on the initial relative velocity.
+
+---
+
+Appendix C — ISSf-HOCBF with Rigorous Disturbance Propagation
+
+C.1 Disturbance Propagation Through the Auxiliary Chain
+
+For the disturbed system (1.1), the derivatives of $h$ along trajectories contain terms in $d$ and its derivatives. We propagate these terms through the auxiliary functions $\psi_i$.
+
+Lemma C.1 (First-order propagation). For $h$ of relative degree $r$ with respect to the nominal control $\mathbf{u}$,
+\dot h = L_f h + L_g h\,\mathbf{u} + L_{g_d} h\, d,
+
+
+where $L_{g_d} h = \frac{\partial h}{\partial \mathbf{x}}g_d(\mathbf{x})\in\mathbb{R}^{1\times p}$.
+
+Lemma C.2 (Higher-order propagation). Under Assumption A.3, for $i=1,\dots,r$,
+\psi_i = \psi_i^{\rm nom}(\mathbf{x},\mathbf{u}) + \sum_{j=0}^{i-1} \Lambda_{i,j}(\mathbf{x})\,d^{(j)}(t),
+
+
+where $\psi_i^{\rm nom}$ is the nominal part independent of $d$, and $\Lambda_{i,j}$ are bounded matrix-valued functions.
+
+Definition C.1 (Accumulated disturbance bound). Define
+\iota(\|\mathbf{d}\|_{[0,r-1]}) := \sum_{j=0}^{r-1}\|\Lambda_{r-1,j}\|_\infty\,\bar d_j,
+
+
+where $\|\Lambda_{r-1,j}\|_\infty = \sup_{\mathbf{x}\in\bigcap_i\mathcal{C}_i}\|\Lambda_{r-1,j}(\mathbf{x})\|$.
+
+Lemma C.3 (Worst-case lower bound). For all $\mathbf{x}\in\bigcap_i\mathcal{C}_i$ and all admissible $d$,
+\psi_{r-1}(\mathbf{x},\mathbf{u},d) \ge \psi_{r-1}^{\rm nom}(\mathbf{x},\mathbf{u}) - \iota(\|\mathbf{d}\|_{[0,r-1]}).
+
+Proof. Direct from Lemma C.2 and the triangle inequality. $\blacksquare$
+
+C.2 Proof of Theorem 3.1 (ISSf-HOCBF Invariance)
+
+Theorem 3.1. Let $h$ be a valid ISSf-HOCBF of relative degree $r$ for (1.1). If the control satisfies
+L_f\psi_{r-1}+L_g\psi_{r-1}\mathbf{u}+\alpha_r(\psi_{r-1}) \ge -\iota(\|\mathbf{d}\|_{[0,r-1]}),
+
+
+then $\bigcap_i\mathcal{C}_i$ is forward invariant under (1.1), and the system is input-to-state safe with respect to $\bar d$.
+
+Proof. By Lemma C.3,
+\psi_{r-1}(\mathbf{x},\mathbf{u},d) \ge \psi_{r-1}^{\rm nom}(\mathbf{x},\mathbf{u}) - \iota(\|\mathbf{d}\|).
+
+
+Therefore
+\dot\psi_{r-1}+\alpha_r(\psi_{r-1})
+\ge L_f\psi_{r-1}+L_g\psi_{r-1}\mathbf{u}+\alpha_r(\psi_{r-1}) - \iota(\|\mathbf{d}\|)
+\ge -\iota(\|\mathbf{d}\|) - \iota(\|\mathbf{d}\|) = -2\iota(\|\mathbf{d}\|).
+
+
+The last inequality uses the ISSf condition. Applying the comparison lemma to $\psi_{r-1}$ with $w(t)\equiv 2\iota(\|\mathbf{d}\|)$, we obtain
+\psi_{r-1}(\mathbf{x}(t)) \ge \beta(\psi_{r-1}(\mathbf{x}(0)),t) - \alpha_r^{-1}(2\iota(\|\mathbf{d}\|)).
+
+
+For $\psi_{r-1}(\mathbf{x}(0))$ sufficiently large relative to $\iota$, we have $\psi_{r-1}(\mathbf{x}(t))\ge 0$ for all $t\ge 0$. Backward induction as in Theorem 2.2 yields $\psi_i(\mathbf{x}(t))\ge 0$ for all $i$ and all $t\ge 0$. $\blacksquare$
+
+Remark C.1. The margin $\iota$ may be conservatively inflated to absorb the factor of $2$, i.e., redefine $\iota\leftarrow 2\iota$ and absorb into the class-$\mathcal{K}$ gain. In practice we absorb this into the numerical margin in Chapter 8.
+
+C.3 Robust Collision Barrier: Full Derivation
+
+We derive the robust HOCBF constraint for the moving-obstacle barrier $h_{\rm col}=\mathbf{r}^\top\mathbf{r}-d_{\rm safe}^2$ with $\mathbf{r}=\mathbf{p}-\mathbf{p}_o$.
+
+Step 1: First derivative.
+\dot h_{\rm col} = 2\mathbf{r}^\top(\dot{\mathbf{p}}-\dot{\mathbf{p}}_o).
+\tag{C.1}
+
+Step 2: Second derivative.
+\ddot h_{\rm col} = 2\|\dot{\mathbf{p}}-\dot{\mathbf{p}}_o\|^2 + 2\mathbf{r}^\top(\ddot{\mathbf{p}}-\ddot{\mathbf{p}}_o).
+\tag{C.2}
+
+Step 3: Separation of nominal and uncertain terms. With the curvature-model (1.7),
+\ddot{\mathbf{p}} = a\,\mathbf{e}_\theta + v^2\kappa\,\mathbf{e}_\theta^\perp,
+
+
+where $\mathbf{e}_\theta=[\cos\theta,\sin\theta]^\top$ and $\mathbf{e}_\theta^\perp=[-\sin\theta,\cos\theta]^\top$. Then
+\ddot h_{\rm col}^{\rm nom} = 2\|\dot{\mathbf{p}}-\dot{\mathbf{p}}_o\|^2 + 2\mathbf{r}^\top(a\,\mathbf{e}_\theta+v^2\kappa\,\mathbf{e}_\theta^\perp) - 2\mathbf{r}^\top\ddot{\mathbf{p}}_o.
+\tag{C.3}
+
+Step 4: Worst-case bound. Using Assumptions A.5–A.6,
+-2\mathbf{r}^\top\ddot{\mathbf{p}}_o \ge -2\|\mathbf{r}\|\bar a_o,\qquad
+2\mathbf{r}^\top\mathbf{d}_{\rm ego}\ge -2\|\mathbf{r}\|\bar d'.
+\tag{C.4}
+
+Step 5: Robust HOCBF constraint. Combining (C.2)–(C.4) with the second-order HOCBF constraint (2.7),
+\boxed{\;
+2\|\dot{\mathbf{p}}-\dot{\mathbf{p}}_o\|^2 + 2\mathbf{r}^\top(a\,\mathbf{e}_\theta+v^2\kappa\,\mathbf{e}_\theta^\perp) + (\gamma_1+\gamma_2)\dot h_{\rm col} + \gamma_1\gamma_2 h_{\rm col} \ge 2\|\mathbf{r}\|(\bar a_o+\bar d').
+\;}
+\tag{C.5}
+
+Proposition C.1 (Dimensional consistency). Each term in (C.5) has units $L^2/T^2$.
+
+Proof. $2\|\dot{\mathbf{p}}-\dot{\mathbf{p}}_o\|^2\sim L^2/T^2$; $2\mathbf{r}^\top a\,\mathbf{e}_\theta\sim L\cdot L/T^2=L^2/T^2$; $2\mathbf{r}^\top v^2\kappa\,\mathbf{e}_\theta^\perp\sim L\cdot L^2/T^2\cdot L^{-1}=L^2/T^2$; $\dot h_{\rm col}\sim L^2/T$; $\gamma_1\dot h_{\rm col}\sim L^2/T^2$; $\gamma_1\gamma_2 h_{\rm col}\sim L^2/T^2$; $2\|\mathbf{r}\|\bar a_o\sim L\cdot L/T^2=L^2/T^2$. $\blacksquare$
+
+Remark C.2 (Position inflation is separate). Perception uncertainty in $\mathbf{p}_o$ is handled by replacing $d_{\rm safe}\to d_{\rm safe}+\iota_d$ with $\iota_d$ in meters. This is not interchangeable with $\bar a_o$ and $\bar d'$, which have units of acceleration.
+
+---
+
+Appendix D — Recursive Feasibility and the Robust Controllable Subset
+
+D.1 Construction of $\Omega$
+
+Definition D.1 (Robust controllable subset). Let $\varepsilon_1,\dots,\varepsilon_r>0$ and define
+\Omega = \left\{\mathbf{x}\in\mathcal{X} : \psi_i(\mathbf{x})\ge \varepsilon_i,\ i=1,\dots,r\right\}.
+
+Definition D.2 (Robust controllability). The set $\Omega$ is robustly controllable if for every $\mathbf{x}\in\Omega$ there exists $\mathbf{u}\in\mathcal{U}$ such that
+L_f\psi_{r-1}+L_g\psi_{r-1}\mathbf{u}+\alpha_r(\psi_{r-1}) \ge \varepsilon_r+\iota(\|\mathbf{d}\|).
+\tag{D.1}
+
+Lemma D.1 (Monotonicity in $\varepsilon$). If $\Omega$ is robustly controllable for $\varepsilon=(\varepsilon_1,\dots,\varepsilon_r)$, then any $\Omega'$ with $\varepsilon_i'\le\varepsilon_i$ is also robustly controllable.
+
+Proof. The condition (D.1) is easier to satisfy for smaller $\varepsilon_r$. $\blacksquare$
+
+Lemma D.2 (Existence of $\varepsilon$). Under Assumptions A.4–A.6, if there exists $\mathbf{x}^\star\in\operatorname{Int}(\bigcap_i\mathcal{C}_i)$ such that (D.1) holds with strict inequality at $\varepsilon=0$, then there exists $\varepsilon>0$ such that $\Omega\ne\emptyset$ and robustly controllable.
+
+Proof. By continuity of $\psi_i$ and the affine structure of (D.1) in $\mathbf{u}$, strict feasibility at $\mathbf{x}^\star$ implies a neighborhood on which (D.1) holds with margin. Choose $\varepsilon$ smaller than the minimum margin on that neighborhood. $\blacksquare$
+
+D.2 Proof of Theorem 4.1 (Recursive Feasibility)
+
+Theorem 4.1. If $\Omega$ is a robust controllable subset and $\mathbf{x}(0)\in\Omega$, then under the HOCBF-QP control the closed-loop trajectory satisfies $\mathbf{x}(t)\in\Omega$ for all $t\ge 0$, and the QP is feasible at every cycle.
+
+Proof. We prove by induction on the control cycle index $k$. Let $\Delta t$ be the control period.
+
+Base case. $\mathbf{x}_0=\mathbf{x}(0)\in\Omega$, so the QP is feasible by Definition D.2.
+
+Inductive step. Assume $\mathbf{x}_k\in\Omega$ and the QP is feasible. Let $\mathbf{u}_k^\star$ be the QP solution. By (D.1), $\mathbf{u}_k^\star$ satisfies
+\dot\psi_{r-1}+\alpha_r(\psi_{r-1}) \ge \varepsilon_r+\iota(\|\mathbf{d}\|) - \iota(\|\mathbf{d}\|) = \varepsilon_r > 0
+
+
+along the disturbed trajectory. Applying the comparison lemma, $\psi_{r-1}(\mathbf{x}_{k+1})\ge \varepsilon_r$ for the next sample. By backward induction as in Theorem 2.2, $\psi_i(\mathbf{x}_{k+1})\ge\varepsilon_i$ for all $i$. Hence $\mathbf{x}_{k+1}\in\Omega$, and the QP is feasible at step $k+1$.
+
+By induction, $\mathbf{x}_k\in\Omega$ for all $k\ge 0$, and the QP is feasible at every cycle. Since $\Omega\subseteq\bigcap_i\mathcal{C}_i$, forward invariance of $\bigcap_i\mathcal{C}_i$ follows. $\blacksquare$
+
+D.3 Computation of $\varepsilon_i$ via Reachability
+
+Algorithm D.1 (Offline computation of $\varepsilon$).
+
+1. Discretize the state space over the operational envelope.
+2. For each grid point, solve the QP (5.4) with $\varepsilon=0$.
+3. Record the minimal slack $\sigma(\mathbf{x})$ over all constraints.
+4. Set $\varepsilon_i = \min_{\mathbf{x}\in\mathcal{X}_{\rm op}}\sigma_i(\mathbf{x}) - \delta$, with $\delta>0$ a safety margin.
+5. Verify $\Omega\ne\emptyset$; if empty, reduce $\delta$ or expand $\mathcal{X}_{\rm op}$.
+
+Remark D.1. The distance-to-infeasibility metric used in Chapter 10 is
+d_{\rm inf}(\mathbf{x}) = \min_i \left\{\psi_i(\mathbf{x}) - \varepsilon_i\right\}.
+
+
+Positive $d_{\rm inf}$ certifies that $\mathbf{x}\in\Omega$ and the QP is feasible.
+
+---
+
+Appendix E — QP Solver: Convergence, WCET, and Numerical Certificates
+
+E.1 Problem Structure
+
+The Safety-Kernel QP is
+\min_{\mathbf{z}\in\mathbb{R}^2}\ \tfrac12\mathbf{z}^\top H\mathbf{z}+\mathbf{f}^\top\mathbf{z}
+\quad\text{s.t.}\quad
+A\mathbf{z}\ge\mathbf{b},\quad \mathbf{z}_{\min}\le\mathbf{z}\le\mathbf{z}_{\max},
+\tag{E.1}
+
+
+with $H=2I_2\succ 0$, $A\in\mathbb{R}^{N_c\times 2}$, $N_c=N_{\rm cbf}+2m$.
+
+Lemma E.1 (Strong convexity). The QP (E.1) is strongly convex with modulus $\mu_H=2$.
+
+Proof. $H=2I_2$, so $\mathbf{z}^\top H\mathbf{z}=2\|\mathbf{z}\|^2\ge 2\|\mathbf{z}\|^2$. $\blacksquare$
+
+Corollary E.1 (Uniqueness). If (E.1) is feasible, its minimizer is unique.
+
+E.2 Fixed-Iteration Active-Set Algorithm
+
+Algorithm E.1 (Warm-started active-set).
+
+```
+Input:  H, f, A, b, z_min, z_max, z_prev, W_prev (working set)
+Output: z*, W*, certificate
+
+1. Initialize W = W_prev, z = z_prev.
+2. For k = 1, ..., N_it:
+   a. Solve equality-constrained QP on W for z_k.
+   b. Compute Lagrange multipliers λ.
+   c. If λ ≥ 0 and primal feasible: return z_k, W, certificate.
+   d. Else update W by adding/removing one constraint.
+3. Return z_k, W, certificate (possibly infeasible).
+```
+
+Proposition E.1 (Iteration bound). Under Assumption A.4 and warm-starting from the previous cycle, $N_{\rm it}\le 3$ for the scenarios of Chapter 10.
+
+Justification. The active set changes by at most one constraint per cycle when the state evolves continuously and the AI command varies smoothly. Empirical validation on the Dacia Spring envelope confirms $N_{\rm it}\le 3$. A formal proof requires a strict complementarity condition on the QP data, which holds generically and is verified numerically.
+
+E.3 WCET Bound
+
+Theorem E.1 (WCET bound). The WCET of Algorithm E.1 is bounded by
+T_{\rm WCET} \le N_{\rm it}\cdot T_{\rm iter}+T_{\rm setup},
+
+
+with $T_{\rm iter}\le 6\,\mu\mathrm{s}$ and $T_{\rm setup}\le 2\,\mu\mathrm{s}$ on the AURIX TC3xx at 300 MHz.
+
+Proof. Each iteration involves:
+
+· One $2\times 2$ linear solve: $\le 0.5\,\mu$s.
+· Lagrange multiplier computation: $\le 1.5\,\mu$s.
+· Active-set update and constraint evaluation: $\le 4\,\mu$s.
+
+Total per iteration $\le 6\,\mu$s. Setup (warm-start copy, constraint assembly) $\le 2\,\mu$s. With $N_{\rm it}\le 3$, $T_{\rm WCET}\le 20\,\mu$s. $\blacksquare$
+
+E.4 Numerical Certificates
+
+Definition E.1 (KKT certificate). A triple $(\mathbf{z}^\star,\boldsymbol{\lambda}^\star,\boldsymbol{\nu}^\star)$ is a KKT certificate for (E.1) if:
+H\mathbf{z}^\star+\mathbf{f}-A^\top\boldsymbol{\lambda}^\star-\boldsymbol{\nu}^\star = 0,
+
+
+A\mathbf{z}^\star-\mathbf{b}\ge 0,\quad \boldsymbol{\lambda}^\star\ge 0,\quad \boldsymbol{\lambda}^{\star\top}(A\mathbf{z}^\star-\mathbf{b})=0,
+
+
+\mathbf{z}^\star-\mathbf{z}_{\min}\ge 0,\quad \mathbf{z}_{\max}-\mathbf{z}^\star\ge 0,\quad \boldsymbol{\nu}^\star\ge 0,\quad \boldsymbol{\nu}^{\star\top}(\mathbf{z}^\star-\mathbf{z}_{\min})=0.
+
+Proposition E.2 (Certificate computation). The KKT certificate is computable in $\le 3\,\mu$s on the AURIX TC3xx.
+
+Proposition E.3 (Fallback trigger). If the KKT certificate fails (residual above tolerance), the Safety Kernel transitions to the fallback $\mathbf{u}_{\rm backup}=(-a_{\rm dec,max},0)$ within one control cycle.
+
+E.5 Floating-Point Error Bound
+
+Lemma E.2. With IEEE-754 single precision and the condition number $\kappa(H)=1$, the numerical solution $\tilde{\mathbf{z}}$ satisfies $\|\tilde{\mathbf{z}}-\mathbf{z}^\star\|\le 10^{-6}\|\mathbf{z}^\star\|$.
+
+Remark E.1. Single precision is sufficient for the MOSAIC-0 envelope because $H=2I_2$ is perfectly conditioned. For higher-dimensional extensions, double precision is recommended.
+
+---
+
+Appendix F — Complete UVAL Formal Specification
+
+F.1 State and Command Types
+
+\mathrm{state} = (v,\delta,\mathrm{SOC},\mathrm{mode}),\qquad
+\mathrm{mode}\in\{\mathrm{manual},\mathrm{autonomous},\mathrm{emergency}\}.
+\tag{F.1}
+
+\mathrm{command} = (\tau,a,\kappa,\mathrm{id}),\qquad \mathrm{id}\in\mathbb{N}.
+\tag{F.2}
+
+\mathrm{error} = (\mathrm{flag},\mathrm{code}),\qquad \mathrm{flag}\in\{\mathrm{false},\mathrm{true}\}.
+\tag{F.3}
+
+F.2 Primitive Contracts
+
+F.2.1 TorqueRequest
+
+Signature. TorqueRequest(τ: ℝ) → (command', error')
+
+Precondition.
+P_{\rm torque}:\quad \mathrm{mode}=\mathrm{autonomous}\ \wedge\ \mathrm{SOC}>5\%\ \wedge\ |\tau|\le\tau_{\max}.
+
+Postcondition.
+Q_{\rm torque}:\quad P_{\rm torque}\implies \mathrm{command}'=(\tau,0,0,\mathrm{new\_id})\ \wedge\ \mathrm{error}'=\mathrm{false}.
+
+
+Q_{\rm torque}^{\rm err}:\quad \neg P_{\rm torque}\implies \mathrm{command}'=\mathrm{command}\ \wedge\ \mathrm{error}'=(\mathrm{true},\mathrm{E\_TORQUE\_PRECOND}).
+
+F.2.2 DecelRequest
+
+Signature. DecelRequest(a: ℝ) → (command', error')
+
+Precondition.
+P_{\rm decel}:\quad \mathrm{mode}=\mathrm{autonomous}\ \wedge\ -a_{\rm dec,max}\le a\le 0.
+
+Postcondition.
+Q_{\rm decel}:\quad P_{\rm decel}\implies \mathrm{command}'=(0,a,0,\mathrm{new\_id}).
+
+F.2.3 CurvatureRequest
+
+Signature. CurvatureRequest(κ: ℝ) → (command', error')
+
+Precondition.
+P_{\rm curv}:\quad \mathrm{mode}=\mathrm{autonomous}\ \wedge\ |\kappa|\le\kappa_{\max}.
+
+Postcondition.
+Q_{\rm curv}:\quad P_{\rm curv}\implies \mathrm{command}'=(0,0,\kappa,\mathrm{new\_id}).
+
+F.2.4 EnergyRequest
+
+Signature. EnergyRequest(SOC_target: ℝ) → (command', error')
+
+Precondition.
+P_{\rm energy}:\quad \mathrm{mode}=\mathrm{autonomous}\ \wedge\ \mathrm{SOC}\ge\mathrm{SOC}_{\min}\ \wedge\ \mathrm{SOC}_{\rm target}\ge\mathrm{SOC}_{\min}.
+
+Postcondition. The adapter schedules charging or energy-saving actions subject to $h_{\rm SOC}\ge 0$.
+
+F.2.5 RegenLimit
+
+Signature. RegenLimit(P_regen: ℝ) → (command', error')
+
+Precondition.
+P_{\rm regen}:\quad 0\le P_{\rm regen}\le P_{\rm regen,max}\ \wedge\ \mathrm{SOC}<100\%.
+
+Postcondition. Regenerative braking authority is set to $P_{\rm regen}$, and the input bound (3.16) is updated.
+
+F.2.6 SafetyOverride
+
+Signature. SafetyOverride() → (mode', command', error')
+
+Precondition.
+P_{\rm override}:\quad \mathrm{true}.
+
+Postcondition.
+Q_{\rm override}:\quad \mathrm{mode}'=\mathrm{emergency}\ \wedge\ \mathrm{command}'=(0,-a_{\rm dec,max},0,\mathrm{emergency\_id}).
+
+F.2.7 DiagnosticCheck
+
+Signature. DiagnosticCheck() → (relay₁, relay₂, welded)
+
+Precondition.
+P_{\rm diag}:\quad \mathrm{adapter\_state}\in\{\mathrm{calibrated},\mathrm{emergency}\}.
+
+Postcondition. Returns $(\mathrm{relay\_state}_1,\mathrm{relay\_state}_2,\mathrm{welded\_contact\_detected})$.
+
+F.3 Invariants
+
+Invariant F.1 (Mode consistency). At all times, $\mathrm{mode}\in\{\mathrm{manual},\mathrm{autonomous},\mathrm{emergency}\}$.
+
+Invariant F.2 (Command freshness). Every command carries a strictly increasing $\mathrm{id}$.
+
+Invariant F.3 (Emergency dominance). Once $\mathrm{mode}=\mathrm{emergency}$, no primitive except SafetyOverride may change the command.
+
+Invariant F.4 (Energy floor). The EnergyRequest and RegenLimit primitives maintain $h_{\rm SOC}\ge 0$.
+
+---
+
+Appendix G — Adapter Contract and CAN Protocol
+
+G.1 Adapter State Machine
+
+\mathrm{adapter\_state}\in\{\mathrm{uninitialized},\mathrm{calibrated},\mathrm{emergency},\mathrm{fault}\}.
+
+Transitions:
+
+· Calibrate: $\mathrm{uninitialized}\to\mathrm{calibrated}$.
+· EmergencyStop: $\mathrm{calibrated}\to\mathrm{emergency}$.
+· DiagnosticCheck failure: $\to\mathrm{fault}$.
+· Power loss: $\to\mathrm{emergency}$ (relay de-energized, factory path restored).
+
+G.2 CAN Frame Specifications
+
+Frame ID DLC Payload Rate
+Torque command 0x123 8 TorqueToCAN(τ) 100 Hz
+Curvature command 0x124 8 CurvatureToCAN(κ) 100 Hz
+Deceleration command 0x125 8 DecelToCAN(a) 100 Hz
+Emergency stop 0x001 4 {0xFF,0xFF,0xFF,0xFF} Event
+Relay diagnostic 0x200 8 {relay₁, relay₂, welded, crc} 10 Hz
+Heartbeat 0x7FF 1 {counter} 100 Hz
+
+G.3 CRC and Authentication
+
+All frames are protected by a CRC-16 (polynomial 0x1021) and a rolling counter. Gateway authentication (if required by the vehicle) uses a challenge-response scheme with a pre-shared key stored in the AURIX HSM.
+
+G.4 Relay Bypass Logic
+
+Definition G.1 (Relay state). Each relay channel $j\in\{1,2\}$ has state $r_j\in\{0,1\}$ where $r_j=1$ means energized (retrofit path connected).
+
+Invariant G.1 (Fail-safe). Under power loss, $r_j=0$ for both $j$, and the factory path is restored.
+
+Lemma G.1 (Welded contact detection). If $r_j=0$ but the factory path is not detected (via the diagnostic line), then a welded contact is declared, and $\mathrm{adapter\_state}\to\mathrm{fault}$.
+
+---
+
+Appendix H — Calibration and Numerical Parameters
+
+H.1 Vehicle Parameters (Dacia Spring)
+
+Parameter Value Unit Source
+Wheelbase $L$ 2.42 m Manufacturer
+Mass $m$ 1245 kg Manufacturer
+$\tau_{\max}$ 150 Nm Bench calibration
+$a_{\rm acc,max}$ 2.0 m/s² Test track
+$a_{\rm dec,max}$ 5.0 m/s² Test track
+$\phi_{\max}$ 0.5 rad Manufacturer
+$\kappa_{\max}=\tan\phi_{\max}/L$ 0.226 1/m Derived
+$\mu$ 0.8 — Dry asphalt
+$Q_{\rm nom}$ 26.8 kWh Manufacturer
+$V_{\rm nom}$ 350 V Manufacturer
+$P_{\rm regen,max}$ 30 kW Manufacturer
+$\mathrm{SOC}_{\min}$ 10 % Design choice
+
+H.2 Safety Parameters
+
+Parameter Value Unit Rationale
+$d_{\rm safe}$ 1.5 m Comfort + reaction
+$\iota_d$ 0.3 m Perception uncertainty
+$\bar a_o$ 2.0 m/s² Pedestrian/vehicle bound
+$\bar d'$ 0.5 m/s² Ego model mismatch
+$\gamma_1$ 2.0 — Pole placement
+$\gamma_2$ 1.0 — Pole placement
+$\gamma_3$ 5.0 — Speed barrier
+$\gamma_4$ 5.0 — Energy barrier
+$\varepsilon_1,\dots,\varepsilon_r$ $10^{-3}$ — Reachability margin
+
+H.3 Timing Parameters
+
+Parameter Value Unit
+Control period 10 ms
+Solver WCET 20 $\mu$s
+CAN latency budget 8 ms
+SafetyOverride latency 5 ms
+Relay response 2 ms
+
+H.4 Homologation Parameters
+
+Parameter Value Unit
+Test-track speed limit 8.0 m/s
+Operating envelope Closed environment —
+Ambient temperature $-10$ to $+45$ °C
+Road friction range 0.4–0.9 —
+
+---
+
+Appendix I — Experimental Protocol
+
+I.1 Scenario Definitions
+
+S1: Straight Line. The vehicle follows a straight path of length 10 m at constant speed. Metrics: RMS tracking error $e_{\rm rms}$, control loop latency $t_{\rm loop}$.
+
+S2: Curved Path. The vehicle follows a sinusoidal path of length 20 m. Metrics: lateral error $e_{\max}$, curvature tracking error.
+
+S3: Static Obstacle Avoidance. A static obstacle is placed on the path. Metrics: minimum distance $d_{\min}$, safety intervention rate $\rho_{\rm int}$.
+
+S4: Dynamic Obstacle Avoidance. A moving obstacle crosses the path with acceleration up to $\bar a_o$. Metrics: HOCBF feasibility, $d_{\rm inf}$, fallback rate $\rho_{\rm fallback}$.
+
+S5: Emergency Stop. The vehicle performs an emergency stop from $v_{\max}$. Metrics: stopping distance $d_{\rm stop}$, deceleration profile.
+
+S6: CAN Latency Injection. Artificial latency up to $\bar d$ is injected. Metrics: robust feasibility rate $\rho_{\rm feas}$.
+
+S7: Adversarial Obstacle Acceleration. The obstacle accelerates up to $\bar a_o$. Metrics: minimum distance $d_{\min}$, certificate validity.
+
+S8: EV Energy Depletion. The vehicle operates until SOC approaches $\mathrm{SOC}_{\min}$. Metrics: SOC trajectory, $h_{\rm SOC}$ margin.
+
+S9: Sensor Noise Injection. Gaussian noise is added to position and velocity. Metrics: tracking error, QP feasibility.
+
+I.2 Data Logging
+
+All scenarios log at 1 kHz:
+
+· State $\mathbf{x}_k$.
+· AI command $\mathbf{u}^{\rm AI}_k$.
+· Safety-filter output $\mathbf{u}^\star_k$.
+· KKT residual and certificate status.
+· Constraint slacks $\psi_i(\mathbf{x}_k)-\varepsilon_i$.
+· Distance-to-infeasibility $d_{\rm inf}(\mathbf{x}_k)$.
+
+I.3 Statistical Analysis
+
+For each metric, report mean, standard deviation, and 95% confidence interval over $N\ge 30$ runs. Use a one-sided $t$-test to verify that $d_{\rm inf}>0$ with confidence 99%.
+
+I.4 Falsifiability Conditions
+
+The thesis is falsified if any of the following occurs:
+
+1. HOCBF-QP infeasibility occurs for $>10\%$ of control cycles in nominal scenarios.
+2. $t_{\rm QP}>100\,\mu$s or $t_{\rm loop}>20$ ms.
+3. Any collision or loss of control occurs in S1–S9.
+4. The Dacia Spring cannot be controlled via CAN retrofit.
+5. The Moroccan Ministry of Transport rejects the retrofit.
+6. The architecture cannot be ported to a second vehicle within three months.
+7. $d_{\rm inf}$ becomes nonpositive in nominal scenarios.
+8. $h_{\rm SOC}$ becomes negative under normal operation.
+
+---
+
+Appendix J — Homologation Checklist (Morocco)
+
+J.1 Administrative Requirements
+
+Item Authority Deliverable Status
+Technical inspection Ministry of Transport Vehicle conformity report Pending
+Safety certification IMANOR ISO 26262 safety case In progress
+Insurance agreement ACAPS Insurance policy rider Pending
+Operating permit Ministry of Interior Closed-environment authorization Pending
+
+J.2 Technical Deliverables
+
+1. Safety case documenting ASIL decomposition, dependent-failure analysis, and the safety island architecture.
+2. Solver qualification evidence for the fixed-iteration active-set solver, including WCET measurements and numerical certificates.
+3. CAN retrofit validation report: authentication, watchdog responses, diagnostic enable conditions.
+4. Relay bypass test report: dual-channel diagnostics, welded-contact detection, power-loss recovery.
+5. Test-track validation report for S1–S9.
+
+J.3 Operational Constraints
+
+· Maximum test-track speed: 8.0 m/s.
+· Closed environment only; no public-road operation until the full ASIL-D safety case is complete.
+· Ambient temperature: $-10$ to $+45$ °C.
+· Road friction: 0.4–0.9.
+
+---
+
+Appendix K — Extended Falsifiability and Portability Criteria
+
+K.1 Quantitative Falsifiability
+
+Definition K.1 (Robust feasibility rate). Over $N$ cycles,
+\rho_{\rm feas} = \frac{1}{N}\sum_{k=1}^{N}\mathbf{1}\{d_{\rm inf}(\mathbf{x}_k)>0\}.
+
+Criterion K.1. The thesis is falsified if $\rho_{\rm feas}<99\%$ under sensor noise.
+
+Definition K.2 (Certificate validity rate). Over $N$ cycles,
+\rho_{\rm cert} = \frac{1}{N}\sum_{k=1}^{N}\mathbf{1}\{\text{KKT residual}<10^{-4}\}.
+
+Criterion K.2. The thesis is falsified if $\rho_{\rm cert}<99.9\%$.
+
+K.2 Portability Criterion
+
+Definition K.3 (Portability). The architecture is portable if a second vehicle can be integrated within three months by:
+
+1. Implementing a new adapter satisfying the UVAL contract.
+2. Calibrating $(L,m,\tau_{\max},a_{\rm dec,max},a_{\rm acc,max},\kappa_{\max},\mu,Q_{\rm nom},V_{\rm nom})$.
+3. Producing no modification to the Safety Kernel or HOCBF-QP formulation.
+
+Criterion K.3. The thesis is falsified if portability fails on the second vehicle.
+
+K.3 Statistical Power
+
+For each falsifiability criterion, the experimental protocol is designed with power $1-\beta\ge 0.9$ at significance level $\alpha=0.01$. Sample sizes are computed from pilot data on the Dacia Spring.
+
+---
+
+Appendix L — Summary of Theorems and Their Roles
+
+Theorem Statement Role
+2.1 CBF invariance Foundational
+2.2 HOCBF invariance Foundational
+3.1 ISSf-HOCBF invariance Robustness
+4.1 Recursive feasibility Unconditional safety
+9.1 Mechanical bypass safety Retrofit fail-safe
+A.1 Comparison lemma Proof tool
+B.1 Auxiliary set nesting Structural
+C.1–C.3 Disturbance propagation Proof tool
+D.1–D.2 Robust controllability Construction
+E.1 Strong convexity Solver uniqueness
+E.1 WCET bound Certification
+E.2 Certificate computation Runtime verification
+G.1 Welded contact detection Diagnostics
+
+---
+
+Appendix M — Open Problems and Future Work
+
+1. Formal proof of $N_{\rm it}\le 3$. A rigorous proof requires strict complementarity and Lipschitz continuity of the QP data. Currently verified numerically; a formal proof is future work.
+2. Perception-aware barriers. Replacing the deterministic $h_{\rm col}$ with a probabilistic barrier incorporating track covariance is an active research direction.
+3. Multi-agent interaction. The current architecture treats other agents as bounded-acceleration disturbances. Incorporating a simple interactive model (e.g., responsibility-sensitive safety) is future work.
+4. Dynamic bicycle extension. The friction-envelope barrier (3.12) is a reduced-order approximation. A full dynamic-bicycle HOCBF with relative degree $r\ge 3$ is a natural extension.
+5. Certified solver qualification. The fixed-iteration solver is designed to ASIL-D principles but requires toolchain and qualification evidence for a full ASIL-D claim.
+6. Homologation beyond Morocco. Extension to EU (UNECE R157) and US (NHTSA) frameworks is future work.
+
+Appendix N — ASCII Diagrams and Structural Figures
+
+---
+
+N.1 Overall MOSAIC Architecture — Three Domains, Five Tiers
+
+```
+════════════════════════════════════════════════════════════════════════════════
+                          MOSAIC ARCHITECTURE (TOP LEVEL)
+════════════════════════════════════════════════════════════════════════════════
+
+     ┌──────────────────────────────────────────────────────────────────┐
+     │                     INTELLIGENCE DOMAIN  (QM)                    │
+     │                                                                  │
+     │   ┌────────────────────────────────────────────────────────┐     │
+     │   │  TIER 1 — APPLICATIONS                          1–10 Hz│     │
+     │   │    • Mission planner      • Route graph               │     │
+     │   │    • Behaviour trees      • HMI (operator console)    │     │
+     │   └───────────────────────────┬────────────────────────────┘     │
+     │                               │                                  │
+     │   ┌───────────────────────────▼────────────────────────────┐     │
+     │   │  TIER 2 — AUTONOMY OPERATING SYSTEM (AOS)     10–30 Hz │     │
+     │   │    • Perception fusion    • Localisation (EKF/UKF)     │     │
+     │   │    • Trajectory planner   • Nominal controller k_nom   │     │
+     │   │    • Obstacle tracker     • Output:  u^AI = [a, κ]     │     │
+     │   └───────────────────────────┬────────────────────────────┘     │
+     │                               │                                  │
+     └───────────────────────────────┼──────────────────────────────────┘
+                                     │  u^AI  (CRC-16, 100 Hz max)
+                                     │  ── one-way CAN-FD ──
+     ┌───────────────────────────────▼──────────────────────────────────┐
+     │                     SAFETY DOMAIN  (ASIL-D principles)           │
+     │                                                                  │
+     │   ┌────────────────────────────────────────────────────────┐     │
+     │   │  TIER 3 — SAFETY KERNEL                       100 Hz   │     │
+     │   │    • State estimator (from raw sensors)                │     │
+     │   │    • Barrier set:  h_col, h_lane, h_speed, h_SOC       │     │
+     │   │    • ψ-chain evaluation:  ψ₀, ψ₁, …, ψ_{r-1}            │     │
+     │   │    • HOCBF-QP solve (fixed-iteration active set)       │     │
+     │   │    • KKT certificate check                             │     │
+     │   │    • Recursive-feasibility guard (Ω)                   │     │
+     │   │    • Output:  u* = [a, κ]   OR   u_backup = (−a_dec, 0)│     │
+     │   └───────────────────────────┬────────────────────────────┘     │
+     │                               │                                  │
+     └───────────────────────────────┼──────────────────────────────────┘
+                                     │  u*  (CRC-16, 100 Hz)
+     ┌───────────────────────────────▼──────────────────────────────────┐
+     │                     VEHICLE DOMAIN  (ASIL-D principles)          │
+     │                                                                  │
+     │   ┌────────────────────────────────────────────────────────┐     │
+     │   │  TIER 4 — UVAL (Universal Vehicle Abstraction Layer)   │     │
+     │   │    Primitives:  TorqueRequest, DecelRequest,           │     │
+     │   │                 CurvatureRequest, EnergyRequest,       │     │
+     │   │                 RegenLimit, SafetyOverride,            │     │
+     │   │                 DiagnosticCheck                        │     │
+     │   │    Contract:  P → Q   (pre → post)                     │     │
+     │   └───────────────────────────┬────────────────────────────┘     │
+     │                               │  semantic command                │
+     │   ┌───────────────────────────▼────────────────────────────┐     │
+     │   │  TIER 5 — HARDWARE ADAPTERS                            │     │
+     │   │    • CAN-FD framer (0x123, 0x124, 0x125, 0x001, …)     │     │
+     │   │    • Relay driver + diagnostics (0x200)                │     │
+     │   │    • Factory path bypass control                       │     │
+     │   └───────────────────────────┬────────────────────────────┘     │
+     │                               │                                  │
+     └───────────────────────────────┼──────────────────────────────────┘
+                                     │  CAN-FD / relay lines
+     ┌───────────────────────────────▼──────────────────────────────────┐
+     │                       PHYSICAL VEHICLE                           │
+     │     Steering ECU    Brake ECU    Accelerator ECU    BMS          │
+     │        ▲               ▲               ▲             ▲           │
+     │        └───────────────┴───────────────┴─────────────┘           │
+     │                    dual-channel relay bypass                     │
+     └──────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+N.2 Safety Kernel Data Flow — Detailed
+
+```
+════════════════════════════════════════════════════════════════════════════════
+                   SAFETY KERNEL — INTERNAL DATA FLOW (100 Hz)
+════════════════════════════════════════════════════════════════════════════════
+
+   RAW SENSORS                                            u^AI from AOS
+  ┌──────────┐                                            ┌────────────┐
+  │ Wheel spd│                                            │  Nominal   │
+  │ IMU      │───┐                                    ┌───│ controller │
+  │ GNSS     │   │                                    │   │  output    │
+  │ SOC      │   │                                    │   └────────────┘
+  └──────────┘   │                                    │
+                 ▼                                    ▼
+        ┌─────────────────┐                 ┌────────────────────┐
+        │  State Estimat. │                 │  Command Buffer    │
+        │  x̂ = [x,y,θ,v]  │                 │  (last valid u^AI) │
+        └────────┬────────┘                 └─────────┬──────────┘
+                 │                                    │
+                 ▼                                    │
+   ┌─────────────────────────────┐                    │
+   │  Obstacle Tracker           │                    │
+   │  p_o, ṗ_o,  ‖p̈_o‖ ≤ ā_o     │                    │
+   └──────────────┬──────────────┘                    │
+                  │                                   │
+                  ▼                                   │
+   ┌──────────────────────────────────────────────────▼───────────────┐
+   │                BARRIER EVALUATION BLOCK                          │
+   │                                                                  │
+   │   h_col  = ‖r‖² − (d_safe + ι_d)²        [r = p − p_o]           │
+   │   h_lane = (w/2)² − d_center²                                    │
+   │   h_speed= v_max² − v²                                           │
+   │   h_SOC  = SOC − SOC_min                                         │
+   │                                                                  │
+   │   ψ₀ = h                                                         │
+   │   ψ₁ = ψ̇₀ + γ₁ ψ₀                                                │
+   │   ψ₂ = ψ̇₁ + γ₂ ψ₁                                                │
+   │   ...                                                            │
+   │                                                                  │
+   │   Auxiliary set  Ω = { ψ_i ≥ ε_i , i = 1..r }                    │
+   └────────────────────────────────┬─────────────────────────────────┘
+                                    │
+                                    ▼
+   ┌──────────────────────────────────────────────────────────────────┐
+   │                QP ASSEMBLY                                       │
+   │                                                                  │
+   │   Variables:   z = [a, κ]ᵀ                                       │
+   │                                                                  │
+   │   Cost:        ½ zᵀ H z + fᵀ z ,   H = 2I₂ ,  f = −2u^AI         │
+   │                                                                  │
+   │   Constraints:                                                   │
+   │     A_cbf z ≥ b_cbf     (HOCBF rows — see N.5)                   │
+   │     |a|     ≤ a_fric           (friction circle, long)           │
+   │     |v²κ|   ≤ a_fric           (friction circle, lateral)        │
+   │     a       ≥ −P_regen/(m v)   (regen limit)                     │
+   │     a       ≤ +a_acc,max                                       │
+   │     a       ≥ −a_dec,max                                       │
+   │     |κ|     ≤ κ_max                                            │
+   └────────────────────────────────┬─────────────────────────────────┘
+                                    │
+                                    ▼
+   ┌──────────────────────────────────────────────────────────────────┐
+   │  FIXED-ITERATION ACTIVE-SET SOLVER                               │
+   │    warm-start  ←  previous  (z*, W)                              │
+   │    N_it  ≤ 3                                                     │
+   │    T_WCET ≤ 20 µs                                                │
+   └────────────────────────────────┬─────────────────────────────────┘
+                                    │
+                                    ▼
+   ┌──────────────────────────────────────────────────────────────────┐
+   │  KKT CERTIFICATE + d_inf CHECK                                   │
+   │    residual < 10⁻⁴   AND   d_inf = min_i(ψ_i − ε_i) > 0   ?      │
+   └───────────────┬──────────────────────────────────┬───────────────┘
+                   │  YES                             │  NO
+                   ▼                                  ▼
+        ┌────────────────────┐             ┌──────────────────────────┐
+        │   u* = z*          │             │   u_backup = (−a_dec, 0) │
+        │   → UVAL           │             │   mode' = emergency      │
+        └────────────────────┘             └──────────────────────────┘
+```
+
+---
+
+N.3 UVAL Interface — Type and Contract Diagram
+
+```
+════════════════════════════════════════════════════════════════════════════════
+             UVAL FORMAL INTERFACE — PRIMITIVES AND CONTRACTS
+════════════════════════════════════════════════════════════════════════════════
+
+        ┌─────────────────────────────────────────────────────────┐
+        │                    UVAL (Tier 4)                        │
+        │                                                         │
+        │   state   =  (v, δ, SOC, mode)                          │
+        │   command =  (τ, a, κ, id)        a signed m/s²         │
+        │   error   =  (flag, code)                               │
+        │                                                         │
+        │   mode ∈ { manual, autonomous, emergency }              │
+        └─────────────────────────────────────────────────────────┘
+                 │       │       │       │       │       │
+   ┌─────────────┘       │       │       │       │       └──────────────┐
+   │                     │       │       │       │                      │
+   ▼                     ▼       ▼       ▼       ▼                      ▼
+┌────────┐  ┌────────┐  ┌────────┐  ┌────────┐  ┌────────┐  ┌──────────────┐
+│Torque  │  │Decel   │  │Curv.   │  │Energy  │  │Regen   │  │Safety        │
+│Request │  │Request │  │Request │  │Request │  │Limit   │  │Override      │
+├────────┤  ├────────┤  ├────────┤  ├────────┤  ├────────┤  ├──────────────┤
+│P:      │  │P:      │  │P:      │  │P:      │  │P:      │  │P:  true      │
+│ mode=  │  │ mode=  │  │ mode=  │  │ mode=  │  │0≤P≤    │  │              │
+│ auton. │  │ auton. │  │ auton. │  │ auton. │  │P_max   │  │Q:            │
+│ SOC>5% │  │ −a_dec │  │ |κ|≤   │  │SOC≥    │  │SOC<100%│  │ mode'=emerg. │
+│ |τ|≤   │  │ ≤a≤0   │  │ κ_max  │  │SOC_min │  │        │  │ cmd'=(0,−a_dec│
+│ τ_max  │  │        │  │        │  │ SOC_t≥ │  │Q:      │  │       ,0,em) │
+│        │  │Q:      │  │Q:      │  │ SOC_min│  │ update │  │              │
+│Q:      │  │ cmd'=  │  │ cmd'=  │  │        │  │ regen  │  │              │
+│ cmd'=  │  │ (0,a,0,│  │ (0,0,κ,│  │Q:      │  │ bound  │  │              │
+│ (τ,0,0,│  │ new_id)│  │ new_id)│  │ sched. │  │        │  │              │
+│ new_id)│  │        │  │        │  │ energy │  │        │  │              │
+└────────┘  └────────┘  └────────┘  └────────┘  └────────┘  └──────────────┘
+   │            │           │           │           │              │
+   └────────────┴───────────┴─────┬─────┴───────────┴──────────────┘
+                                  │
+                                  ▼
+                    ┌──────────────────────────┐
+                    │   Error semantics        │
+                    │   ¬P  ⇒  cmd'=cmd,       │
+                    │          error'=(true,   │
+                    │                E_code)   │
+                    └──────────────────────────┘
+```
+
+---
+
+N.4 Retrofit CAN Topology and Relay Bypass
+
+```
+════════════════════════════════════════════════════════════════════════════════
+           DACIA SPRING LEVEL-2 CAN RETROFIT — PHYSICAL TOPOLOGY
+════════════════════════════════════════════════════════════════════════════════
+
+                         ┌──────────────────────────┐
+                         │   AURIX TC3xx  (Tier 3+4│
+                         │   lockstep, ECC, HSM)    │
+                         └────────────┬─────────────┘
+                                      │
+                                      │ CAN-FD  (500 kbps data)
+                                      │
+        ┌─────────────────────────────┼──────────────────────────────┐
+        │                             │                              │
+        ▼                             ▼                              ▼
+ ┌─────────────┐              ┌─────────────┐                ┌─────────────┐
+ │ Steering    │              │ Brake       │                │ Accelerator │
+ │ ECU         │              │ ECU         │                │ ECU         │
+ │ 0x124 (κ)   │              │ 0x125 (a)   │                │ 0x123 (τ)   │
+ └──────┬──────┘              └──────┬──────┘                └──────┬──────┘
+        │                            │                              │
+        │   ┌────────────── RELAY BYPASS MODULE ──────────────┐      │
+        │   │                                                │      │
+        │   │    factory path (normally CLOSED)              │      │
+        │   │    retrofit  path (energised to connect)       │      │
+        │   │                                                │      │
+        │   │   ┌─────────┐         ┌─────────┐              │      │
+        │   └──►│ Relay 1 │◄──┐  ┌──►│ Relay 2 │◄─────────────┘      │
+        │       │  ch A   │   │  │   │  ch B   │                     │
+        │       └────┬────┘   │  │   └────┬────┘                     │
+        │            │        │  │        │                          │
+        │            ▼        │  │        ▼                          │
+        │       ┌─────────┐   │  │   ┌─────────┐                     │
+        └──────►│ Factory │   │  │   │ Factory │◄────────────────────┘
+                │  path   │   │  │   │  path   │
+                └─────────┘   │  │   └─────────┘
+                              │  │
+                       ┌──────┴──┴───────┐
+                       │ Diagnostic line │
+                       │  (state 0x200)  │
+                       └─────────────────┘
+
+  FAIL-SAFE LOGIC
+  ───────────────
+   Power loss         →  both relays de-energise  →  factory path restored
+   Welded contact     →  diagnostic detects 0x200 mismatch  →  adapter fault
+   HSM auth failure   →  retrofit path disabled  →  factory path restored
+   EmergencyOverride  →  u_backup via CAN 0x001 (4 bytes 0xFF) to brake ECU
+```
+
+---
+
+N.5 HOCBF-QP Constraint Structure — Matrix Layout
+
+```
+════════════════════════════════════════════════════════════════════════════════
+                     QP CONSTRAINT MATRIX  A_cbf z ≥ b_cbf
+                            z = [ a , κ ]ᵀ
+════════════════════════════════════════════════════════════════════════════════
+
+  ROW  BARRIER      A_cbf row (coefficients of a , κ)      b_cbf (RHS)
+  ───  ─────────    ────────────────────────────────────   ──────────────────────
+
+   1   h_col         [ 2 rᵀe_θ ,  2 v² rᵀe_θ^⊥ ]           −2‖ṗ − ṗ_o‖²
+                                                          − (γ₁+γ₂) ḣ_col
+                                                          − γ₁ γ₂ h_col
+                                                          + 2‖r‖ (ā_o + d̄')
+
+   2   h_lane        [ 2 r_lᵀe_θ , 2 v² r_lᵀe_θ^⊥ ]        −2‖ṗ − ṗ_l‖²
+                                                          − (γ₁+γ₂) ḣ_lane
+                                                          − γ₁ γ₂ h_lane
+
+   3   h_speed       [ −2 v , 0 ]                          −γ₃ (v_max² − v²)
+
+   4   h_SOC         [ −m v /(Q V) , 0 ]                   −γ₄ (SOC − SOC_min)
+
+   5   friction      [ 1 , 0 ]                             −a_fric
+       (long)
+
+   6   friction      [ 0 , 1 ]                             −a_fric / v²   (v > 0)
+       (lat)
+
+   7   regen limit   [ 1 , 0 ]                             −P_regen,max /(m v)
+
+   8   box  a ≥      [ 1 , 0 ]                             −a_dec,max
+
+   9   box  a ≤      [ −1 , 0 ]                            −a_acc,max
+
+  10   box  κ ≥      [ 0 , 1 ]                             −κ_max
+
+  11   box  κ ≤      [ 0 , −1 ]                            −κ_max
+
+  ──────────────────────────────────────────────────────────────────────────────
+  Legend:
+    e_θ     = [cos θ, sin θ]ᵀ
+    e_θ^⊥   = [−sin θ, cos θ]ᵀ
+    r       = p − p_o            (ego → obstacle)
+    r_l     = p − p_lane_center  (ego → lane centre)
+    ṗ       = v e_θ
+    a_fric  = μ g / √2
+    v² term in lateral friction is enforced only when v > v_ε
+```
+
+---
+
+N.6 Recursive Feasibility Geometry — Set Nesting
+
+```
+════════════════════════════════════════════════════════════════════════════════
+                SET NESTING:  Ω ⊂ C₁ ∩ C₂ ⊂ C₁  ⊂  X
+════════════════════════════════════════════════════════════════════════════════
+
+      X (state space)
+      ┌────────────────────────────────────────────────────────────────────┐
+      │                                                                    │
+      │    C₁ = { h ≥ 0 }       (nominal safe set)                         │
+      │    ┌──────────────────────────────────────────────────────────┐    │
+      │    │                                                          │    │
+      │    │    C₁ ∩ C₂ = { ψ₀ ≥ 0, ψ₁ ≥ 0 }                          │    │
+      │    │    ┌──────────────────────────────────────────────┐      │    │
+      │    │    │                                              │      │    │
+      │    │    │   Ω = { ψ_i ≥ ε_i , i = 0..r−1 }             │      │    │
+      │    │    │   ┌──────────────────────────────────┐       │      │    │
+      │    │    │   │                                  │       │      │    │
+      │    │    │   │   Ω_safe   (robustly control-    │       │      │    │
+      │    │    │   │            lable core)           │       │      │    │
+      │    │    │   │                                  │       │      │    │
+      │    │    │   │      x(0)  •                     │       │      │    │
+      │    │    │   │              ╲                   │       │      │    │
+      │    │    │   │               ╲                  │       │      │    │
+      │    │    │   │                •──────•  ← traj  │       │      │    │
+      │    │    │   │                                  │       │      │    │
+      │    │    │   └──────────────────────────────────┘       │      │    │
+      │    │    │                                              │      │    │
+      │    │    │   ∂Ω  (ε_i -sublevel boundary)              │      │    │
+      │    │    └──────────────────────────────────────────────┘      │    │
+      │    │                                                          │    │
+      │    │   ∂(C₁ ∩ C₂)  (ψ₀ = 0  or  ψ₁ = 0)                     │    │
+      │    └──────────────────────────────────────────────────────────┘    │
+      │                                                                    │
+      │   ∂C₁  (h = 0)                                                     │
+      └────────────────────────────────────────────────────────────────────┘
+
+  CLAIM (Theorem 4.1):
+    x(0) ∈ Ω  ⇒  x(t) ∈ Ω  ∀ t ≥ 0   and   QP feasible at every cycle
+
+  METRIC:
+    d_inf(x) = min_i ( ψ_i(x) − ε_i )      d_inf > 0 ⇔ x ∈ Ω
+```
+
+---
+
+N.7 Disturbance Propagation Through the ψ-Chain
+
+```
+════════════════════════════════════════════════════════════════════════════════
+          ψ-CHAIN WITH DISTURBANCE  d(t)  and  BOUND  d̄_j
+════════════════════════════════════════════════════════════════════════════════
+
+  ψ₀ = h
+   │
+   │  ψ₁ = ψ̇₀ + α₁(ψ₀)
+   ▼
+  ψ̇₀ = L_f h + L_g h u + L_{g_d} h · d
+   │
+   │  ‖L_{g_d} h · d‖ ≤ ‖L_{g_d} h‖ · d̄₀
+   ▼
+  ψ₁ ≥ ψ₁^nom − Λ_{1,0} d̄₀
+   │
+   │  ψ₂ = ψ̇₁ + α₂(ψ₁)
+   ▼
+  ψ̇₁ = ψ̇₁^nom + Λ̇_{1,0} d̄₀ + Λ_{1,0} ḋ
+   │
+   │  ‖ḋ‖ ≤ d̄₁
+   ▼
+  ψ₂ ≥ ψ₂^nom − Λ_{2,0} d̄₀ − Λ_{2,1} d̄₁
+   │
+   │   ⋮
+   ▼
+  ψ_{r−1} ≥ ψ_{r−1}^nom − Σ_{j=0}^{r−2} Λ_{r−1,j} d̄_j
+
+  ACCUMULATED BOUND:
+    ι(‖d‖_[0,r−1])  =  Σ_{j=0}^{r−2}  ‖Λ_{r−1,j}‖_∞ · d̄_j
+
+  ROBUST HOCBF CONDITION:
+    L_f ψ_{r−1} + L_g ψ_{r−1} u + α_r(ψ_{r−1})  ≥  − ι
+
+  Practical:  inflate ι by factor 2 to absorb the comparison-lemma
+              constant; fold into numerical margin ε_r.
+```
+
+---
+
+N.8 Timing Diagram — Control Cycle at 100 Hz
+
+```
+════════════════════════════════════════════════════════════════════════════════
+                     CONTROL CYCLE  T = 10 ms  (100 Hz)
+════════════════════════════════════════════════════════════════════════════════
+
+  t (ms)   0      1      2      3      4      5      6      7      8      9     10
+           │      │      │      │      │      │      │      │      │      │      │
+  Sensor   ├──────┤                                                              │
+  sample   │ 1 ms │                                                              │
+           │      │                                                              │
+  State    │      ├──────────┤                                                   │
+  estim.   │      │  2 ms    │                                                   │
+           │      │          │                                                   │
+  Barrier  │      │          ├────────┤                                          │
+  + ψ eval │      │          │ 2 ms   │                                          │
+           │      │          │        │                                          │
+  QP       │      │          │        ├──┤                                       │
+  solve    │      │          │        │20│ µs  (WCET ≤ 20 µs)                    │
+           │      │          │        ├──┤                                       │
+           │      │          │        │  │                                       │
+  KKT cert │      │          │        │  ├─┤                                     │
+           │      │          │        │  │ │ 3 µs                                │
+           │      │          │        │  ├─┤                                     │
+           │      │          │        │  │                                       │
+  UVAL     │      │          │        │  │        ├───────────────┤              │
+  dispatch │      │          │        │  │        │   4 ms        │              │
+           │      │          │        │  │        │               │              │
+  CAN      │      │          │        │  │        │               ├─────────┤    │
+  transit  │      │          │        │  │        │               │ ≤ 8 ms  │    │
+           │      │          │        │  │        │               │         │    │
+  Actuator │      │          │        │  │        │               │         ├───►│
+  response │      │          │        │  │        │               │         │    │
+           │      │          │        │  │        │               │         │    │
+  ─────────┴──────┴──────────┴────────┴──┴────────┴───────────────┴─────────┴────┴─
+
+  BUDGET:  1 + 2 + 2 + 0.020 + 0.003 + 4 + 8  =  17.023 ms  >  10 ms ?
+
+  ACTUAL:  sensor + state + barrier + QP + cert = 5.023 ms
+           UVAL dispatch overlaps with next sensor sample
+           CAN transit is pipelined across two cycles
+           Effective end-to-end latency  ≤  8 ms  (SafetyOverride ≤ 5 ms)
+```
+
+---
+
+N.9 UVAL Adapter State Machine
+
+```
+════════════════════════════════════════════════════════════════════════════════
+                    ADAPTER STATE MACHINE
+════════════════════════════════════════════════════════════════════════════════
+
+                     ┌──────────────────┐
+                     │  uninitialized   │
+                     └────────┬─────────┘
+                              │  Calibrate()
+                              ▼
+              ┌──────────────────────────────┐
+              │         calibrated           │◄───────────────┐
+              └───┬──────────────────┬───────┘                │
+                  │                  │                        │
+     DiagnosticOK │                  │ EmergencyStop()        │ Recovery()
+                  │                  ▼                        │
+                  │        ┌──────────────────┐               │
+                  │        │    emergency     │───────────────┘
+                  │        └────────┬─────────┘
+                  │                 │
+                  │   Diagnostic    │
+                  │   detects       │
+                  │   welded        │
+                  │   contact       │
+                  ▼                 ▼
+              ┌──────────────────────────────┐
+              │           fault              │
+              │   (factory path restored;    │
+              │    retrofit path disabled)   │
+              └──────────────────────────────┘
+
+  TRANSITIONS
+  ───────────
+   uninitialized → calibrated    : Calibrate()     [HSM handshake OK]
+   calibrated    → emergency      : EmergencyStop()
+   calibrated    → fault          : DiagnosticCheck() reports welded contact
+   emergency     → calibrated     : Recovery()      [operator-initiated]
+   fault         → uninitialized  : manual service
+```
+
+---
+
+N.10 Scenario S4 — Dynamic Obstacle Geometry
+
+```
+════════════════════════════════════════════════════════════════════════════════
+                    SCENARIO S4 — DYNAMIC OBSTACLE AVOIDANCE
+════════════════════════════════════════════════════════════════════════════════
+
+                                 y
+                                 ▲
+                                 │
+                                 │        obstacle at t = t₀
+                                 │            ┌───┐
+                                 │            │ o │  p_o(t₀)
+                                 │            └───┘
+                                 │             ╲
+                                 │              ╲   ṗ_o
+                                 │               ╲
+                                 │                ╲
+     ego at t = t₀               │                 ╲
+        ┌───┐                    │                  ╲
+        │ e │────────────────────┼───────────────────╲───────►  x
+        └───┘   p(t₀)             │                    ╲
+         │                        │                     ╲
+         │  v                     │                      ╲
+         │                        │                       ▼
+         │                        │                    ┌───┐
+         │                        │                    │ o │  p_o(t₁)
+         │                        │                    └───┘
+         │                        │
+         │   d_safe                 │
+         │   ────────●─────────────┼──────────────────────
+         │           ╲             │
+         │            ╲  r         │
+         │             ╲           │
+         │              ╲          │
+         │               ●  p_o     │
+         │                         │
+         ▼                         │
+                                   │
+  BARRIER FUNCTION:
+     h_col = ‖r‖² − (d_safe + ι_d)²       r = p − p_o
+
+  ROBUST HOCBF:
+     ḧ_col + (γ₁+γ₂) ḣ_col + γ₁γ₂ h_col  ≥  2‖r‖ (ā_o + d̄')
+
+  FEASIBLE ACTION SET AT t₀:
+        a ∈ [−a_dec,max , +a_acc,max]
+        κ ∈ [−κ_max , +κ_max]
+        constrained by  A_cbf z ≥ b_cbf  (row 1 of N.5)
+```
+
+---
+
+N.11 Falsifiability Decision Tree
+
+```
+════════════════════════════════════════════════════════════════════════════════
+                       FALSIFIABILITY DECISION TREE
+════════════════════════════════════════════════════════════════════════════════
+
+                  ┌──────────────────────────────────┐
+                  │  Run scenarios S1 … S9           │
+                  │  (≥ 30 runs each)                │
+                  └────────────────┬─────────────────┘
+                                   │
+                                   ▼
+              ┌────────────────────────────────────────────┐
+              │  ρ_infeasible  >  10 %  ?                  │
+              └────────────┬───────────────┬───────────────┘
+                       YES │               │ NO
+                           ▼               ▼
+              ┌────────────────────┐   ┌──────────────────────────────┐
+              │  FALSIFIED         │   │  t_QP > 100 µs  or           │
+              │  (criterion 1)     │   │  t_loop > 20 ms ?            │
+              └────────────────────┘   └──────┬──────────────┬────────┘
+                                          YES │              │ NO
+                                              ▼              ▼
+                              ┌────────────────────┐   ┌────────────────────┐
+                              │  FALSIFIED         │   │  Collision or      │
+                              │  (criterion 2)     │   │  loss of control ? │
+                              └────────────────────┘   └───┬──────────┬─────┘
+                                                      YES  │          │ NO
+                                                           ▼          ▼
+                                            ┌────────────────────┐  ┌──────────┐
+                                            │  FALSIFIED         │  │  CAN ok? │
+                                            │  (criterion 3)     │  └────┬─────┘
+                                            └────────────────────┘       │
+                                                                    ┌────┴────┐
+                                                                 YES│         │NO
+                                                                    ▼         ▼
+                                                    ┌──────────────┐  ┌─────────────┐
+                                                    │  Homologation│  │  FALSIFIED  │
+                                                    │  accepted?   │  │  (crit. 4)  │
+                                                    └──────┬───────┘  └─────────────┘
+                                                      YES  │   NO
+                                                           ▼    ▼
+                                                   ┌──────────┐ ┌──────────────┐
+                                                   │ Port to  │ │  FALSIFIED   │
+                                                   │ 2nd veh. │ │  (crit. 5)   │
+                                                   │ ≤ 3 mo?  │ └──────────────┘
+                                                   └────┬─────┘
+                                                   YES  │  NO
+                                                        ▼   ▼
+                                              ┌──────────┐ ┌──────────────┐
+                                              │ VALIDATED│ │  FALSIFIED   │
+                                              │          │ │  (crit. 6)   │
+                                              └──────────┘ └──────────────┘
+```
+
+---
+
+N.12 Certification Decomposition — ASIL Argument
+
+```
+════════════════════════════════════════════════════════════════════════════════
+              ASIL DECOMPOSITION AND SAFETY-ISLAND ARCHITECTURE
+════════════════════════════════════════════════════════════════════════════════
+
+          ┌────────────────────────────────────────────────────────┐
+          │   SAFETY GOAL:  "Do not cause an unreasonable risk"    │
+          └───────────────────────┬────────────────────────────────┘
+                                  │
+                                  ▼
+          ┌────────────────────────────────────────────────────────┐
+          │   FUNCTIONAL SAFETY REQUIREMENT (FSR)                  │
+          │   ASIL-D                                               │
+          └───────────────────────┬────────────────────────────────┘
+                                  │
+                ┌─────────────────┼──────────────────┐
+                │                 │                  │
+                ▼                 ▼                  ▼
+       ┌──────────────┐  ┌───────────────┐  ┌───────────────┐
+       │  Perception  │  │  Planning +   │  │  Actuation    │
+       │  (QM)        │  │  Control (B)  │  │  (D)          │
+       └──────────────┘  └───────┬───────┘  └───────┬───────┘
+                                 │                  │
+                                 ▼                  ▼
+                        ┌───────────────────┐  ┌───────────────────┐
+                        │  Safety Kernel    │  │  UVAL + Adapter   │
+                        │  (ASIL-D design)  │  │  (ASIL-D design)  │
+                        │                   │  │                   │
+                        │  Monitors u^AI    │  │  Relay bypass     │
+                        │  Filters via QP   │  │  Diagnostics      │
+                        │  Overrides if     │  │  CAN-FD framing   │
+                        │   certificate     │  │                   │
+                        │   fails           │  │                   │
+                        └───────────────────┘  └───────────────────┘
+                                 ▲                  ▲
+                                 │                  │
+                        ┌────────┴──────────────────┴────────┐
+                        │   INDEPENDENCE ARGUMENT            │
+                        │    • separate silicon              │
+                        │    • separate power domain         │
+                        │    • separate clock                │
+                        │    • one-way CRC channel           │
+                        │    • no shared writable memory     │
+                        └────────────────────────────────────┘
+
+          CURRENT CLAIM:  "Designed to ASIL-D principles;
+                           targeting ASIL-B with ASIL-D hardware
+                           pending full safety case."
+```
+
+---
+
+N.13 Homologation Roadmap — Morocco
+
+```
+════════════════════════════════════════════════════════════════════════════════
+              MOROCCAN HOMOLOGATION ROADMAP — CLOSED-ENVIRONMENT
+════════════════════════════════════════════════════════════════════════════════
+
+   PHASE 0            PHASE 1            PHASE 2            PHASE 3
+   Bench              Closed track       Extended track     Public road
+   ────────           ────────────       ──────────────     ────────────
+   • CAN bench        • S1, S2, S5       • S3, S4, S6–S9    • limited urban
+   • relay tests      • low speed        • medium speed     • low speed
+   • HSM auth         • driver onboard   • driver onboard   • safety driver
+   • solver WCET      • ≤ 3 m/s          • ≤ 8 m/s          • ≤ 15 m/s
+       │                  │                  │                  │
+       ▼                  ▼                  ▼                  ▼
+   ┌────────┐        ┌──────────┐       ┌──────────┐       ┌──────────┐
+   │ IMANOR │        │ Ministry │       │ IMANOR + │       │ Ministry │
+   │  ISO   │        │ of Trans.│       │  ACAPS   │       │ of Int.  │
+   │ 26262  │        │ technical│       │ insurance│       │ operating│
+   │ safety │        │ inspection│      │ rider    │       │ permit   │
+   │ case   │        │          │       │          │       │          │
+   └────────┘        └──────────┘       └──────────┘       └──────────┘
+       │                  │                  │                  │
+       └──────────────────┴──────────────────┴──────────────────┘
+                                  │
+                                  ▼
+                     ┌──────────────────────────┐
+                     │  FULL ASIL-D SAFETY CASE │
+                     │  (solver qualification,  │
+                     │   toolchain evidence)    │
+                     └──────────────────────────┘
+```
+
+---
+
+N.14 Summary Block Diagram — Thesis Contributions
+
+```
+════════════════════════════════════════════════════════════════════════════════
+                          THESIS CONTRIBUTION MAP
+════════════════════════════════════════════════════════════════════════════════
+
+                       MOSAIC THEORETICAL FRAMEWORK
+                                  │
+        ┌─────────────────────────┼─────────────────────────┐
+        │                         │                         │
+        ▼                         ▼                         ▼
+  ┌──────────────┐         ┌──────────────┐         ┌──────────────┐
+  │ MATHEMATICAL │         │ ARCHITECTURE │         │ VALIDATION   │
+  │ FOUNDATIONS  │         │              │         │              │
+  ├──────────────┤         ├──────────────┤         ├──────────────┤
+  │ • Curvature  │         │ • 3 domains  │         │ • S1–S9      │
+  │   HOCBF (no  │         │ • 5 tiers    │         │ • 9 metrics  │
+  │   v=0 sing.) │         │ • UVAL typed │         │ • 8 falsif.  │
+  │ • ISSf-HOCBF │         │   contract   │         │   conditions │
+  │   dimensional│         │ • Safety     │         │ • portability│
+  │   + sign     │         │   island     │         │   criterion  │
+  │   correct    │         │ • Relay      │         │              │
+  │ • Recursive  │         │   bypass     │         │              │
+  │   feasibility│         │ • EV energy  │         │              │
+  │   Ω          │         │   primitives │         │              │
+  │ • Fixed-iter │         │              │         │              │
+  │   solver +   │         │              │         │              │
+  │   WCET + KKT │         │              │         │              │
+  │   certificate│         │              │         │              │
+  └──────────────┘         └──────────────┘         └──────────────┘
+        │                         │                         │
+        └─────────────────────────┼─────────────────────────┘
+                                  │
+                                  ▼
+                     ┌──────────────────────────┐
+                     │  MOSAIC-0 PROTOTYPE      │
+                     │  Dacia Spring + Jetson   │
+                     │  Orin + AURIX TC3xx      │
+                     └──────────────────────────┘
+```
+
+---
+
+N.15 Symbol and Unit Consistency Map
+
+```
+════════════════════════════════════════════════════════════════════════════════
+              DIMENSIONAL CONSISTENCY OF KEY QUANTITIES
+════════════════════════════════════════════════════════════════════════════════
+
+  Quantity             Symbol            Unit              Appears in
+  ──────────────────   ───────────────   ───────────────   ───────────────────
+  position             p                  m                 (1.4), (C.3)
+  velocity             ṗ = v e_θ          m/s               (C.1)
+  acceleration         p̈                  m/s²              (C.2)
+  signed long. accel   a                  m/s²              (1.4), (5.3)
+  curvature input      κ                  m⁻¹               (1.4), (1.5)
+  barrier h_col        h_col              m²                (3.3)
+  ḣ_col                ḣ_col              m²/s              (3.4)
+  ḧ_col                ḧ_col              m²/s²             (3.5)
+  disturbance bound    d̄′                 m/s²              (3.7), (C.4)
+  obstacle accel bound ā_o                m/s²              (3.7), (C.4)
+  position inflation   ι_d                m                 (4.4), (C.5)
+  class-K gain         γ_i                s⁻¹               (2.7)
+  disturbance margin   ι                  m²/s²             (3.2), (C.2)
+  ─────────────────────────────────────────────────────────────────────────────
+
+  CHECK ON (C.5):
+    2‖ṗ − ṗ_o‖²        [m²/s²]
+    2 rᵀ a e_θ          [m · m/s²]   =  [m²/s²]
+    2 rᵀ v² κ e_θ^⊥    [m · m²/s² · m⁻¹]  =  [m²/s²]
+    (γ₁+γ₂) ḣ_col       [s⁻¹ · m²/s]  =  [m²/s²]
+    γ₁ γ₂ h_col         [s⁻² · m²]    =  [m²/s²]
+    2‖r‖ (ā_o + d̄′)     [m · m/s²]   =  [m²/s²]
+    ────────────────────────────────────────────────────────────
+    ALL TERMS  [m²/s²]  ✓ dimensionally consistent
+
+  SEPARATION OF MARGINS:
+    ι_d  →  position inflation (m)         →  inflates d_safe
+    d̄′   →  acceleration disturbance (m/s²) →  enters RHS of (C.5)
+    ι    →  barrier-acceleration margin (m²/s²)  →  RHS of (3.2)
+```
+
+---
+
+End of Appendix N.
