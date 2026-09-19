@@ -18,24 +18,6 @@
   </p>
 </div>
 
----
-
-## 📖 Table of Contents
-
-- [Vision](#-vision)
-- [Core Focus Areas](#-core-focus-areas)
-- [Project Structure](#-project-structure)
-- [Highlighted Projects](#-highlighted-projects)
-- [Key Papers](#-key-papers)
-- [Mars Living Systems Simulator (MLSS 4.1)](#-mars-living-systems-simulator-mlss-41)
-- [How to Use](#-how-to-use)
-- [Contributing](#-contributing)
-- [License](#-license)
-- [Connect](#-connect)
-- [Acknowledgments](#-acknowledgments)
-
----
-
 ## 🌍 Vision
 
 **"4"** stands for **For Humanity** — a massive open research vault containing
