@@ -194,25 +194,4 @@ professional‑grade digital twin of a Martian colony, rigorously grounded in
 | Component Reliability | ISS ECLSS Weibull parameters |
 | Economic Entropy | 1 kg from Earth = 50,000 M$; 1 kg from ISRU = 0.1 M$ + local energy |
 
-### Key Features
 
-- **Entropy‑Aware Life Support Engine** — Sabatier‑electrolysis loop, Four‑Bed
-  CO₂ scrubber, water recovery.
-- **Multi‑Agent Autonomous Layer (MAAL)** — Governor, Specialists, Workers,
-  and Human Crew Agents.
-- **Environmental Stressor Engine** — Dust storms, radiation (GCR + SPE), comm
-  blackouts, supply‑chain shocks.
-- **Failure Cascade Graph** — Typed dependency edges (Physical, Information,
-  Software, Social, Economic, Legal).
-- **Multi‑Fidelity Zoom** — Level 0 (1‑node) at 60 fps down to Level 100 (2D
-  CFD) at ~0.1 fps.
-- **Counterfactual & Regret Infrastructure** — Merkle‑hashed event sourcing,
-  deterministic replay, audit‑grade logging.
-
-
----
-
-<p align="center">
-  <strong>Made with ❤️ for Humanity</strong><br/>
-  <sub>Principal Architect & Lead Engineer: Ouadi Maakoul</sub>
-</p>
