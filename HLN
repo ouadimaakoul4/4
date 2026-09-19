@@ -1,0 +1,858 @@
+The Human Lifeline Network: A Theoretical PhD Framework
+
+Reachability-Weighted Bottleneck Optimization on Existing Service Infrastructure — Final Theoretical Specification
+
+Part I: Mathematical Foundations
+
+1.1 Problem Formalization
+
+Let \mathcal{X} = \prod_{i=1}^{9} \mathcal{X}_i be a factored state space with |\mathcal{X}| = 15{,}552, where each dimension is a discrete or ordinal variable capturing an individual's state across housing stability H, legal identity L, food security F, financial access D, income E, physical safety S, social support R, digital connectivity C, and institutional access I. The state at time t is x(t) = (H, L, F, D, E, S, R, C, I) \in \mathcal{X}.
+
+The system is partially observable. Observations y_t arrive via SMS, voice, caseworker notes, or HMIS records. The belief state is:
+
+b_t(x_t) = P(x_t \mid y_{0:t}) \propto P(y_t \mid x_t) \sum_{x_{t-1}} P(x_t \mid x_{t-1}, a_{t-1}) b_{t-1}(x_{t-1})
+
+This is the standard Bayesian filter, recursively computed using only the previous belief and the most recent action and observation . For finite state spaces of this magnitude (10^4–10^6 states), exact belief computation is tractable in real-time .
+
+1.2 Finite-Horizon Probabilistic Viability
+
+Definition 1 (Viability Measure). Let \mathcal{S}_{\text{stable}} = \{x : H=3, L=2, S=1\} \subset \mathcal{X} be the set of stable states (permanent housing, complete legal identity, physical safety). For a policy \pi mapping beliefs to interventions, the viability measure at belief b over horizon T is:
+
+V_T(b; \pi) = P\left(\exists\, t \leq T : x_t \in \mathcal{S}_{\text{stable}} \;\middle|\; b_0 = b, \pi\right)
+
+This is the probability that the individual reaches a stable state within T = 180 days.
+
+Proposition 1 (Computability of V_T). The value V_T(b; \pi) can be computed by backward induction on the belief simplex:
+
+V_t(b) = \max_{a \in \mathcal{A}} \left[ \mathbb{1}_{b \in \mathcal{S}_{\text{stable}}} + \sum_{y} P(y \mid b, a) V_{t+1}(\tau(b, a, y)) \right]
+
+where \tau is the belief update operator. For a factored state space of size N = 15{,}552, the belief simplex \Delta(\mathcal{X}) is continuous, but the optimal value function is piecewise-linear and convex. The DP update for POMDPs operates over this uncountably infinite belief space, making exact policy computation infeasible for environments with more than a few dozen states .
+
+Proof sketch. The value function is piecewise-linear and convex in b (standard result for POMDPs). For a finite horizon T = 180, the number of \alpha-vectors in the piecewise-linear representation is O(|\mathcal{A}|^T), exponential in T. Exact solution is intractable. However, the reachability objective—rather than discounted reward—admits approximation via forward simulation with particle filtering. We therefore adopt approximate dynamic programming with particle-based belief representation.
+
+1.3 Causal Prerequisite Graph
+
+Definition 2 (Causal Prerequisite DAG). Let \mathcal{G}_{\text{causal}} = (\mathcal{X}, \mathcal{E}_{\text{prereq}}) be a directed acyclic graph where edges encode domain-validated prerequisite relations: L \to D (identity unlocks bank access), D \to E (bank access unlocks formal employment), E \to H (income unlocks rental capacity). These are not correlations; they are causal constraints on the transition function.
+
+The causal prerequisite graph induces a partial order on interventions: an intervention targeting dimension i is only available if all dimensions j with (j, i) \in \mathcal{E}_{\text{prereq}} have reached their threshold values.
+
+Lemma 1 (Prerequisite Constraint on Action Space). The effective action space at belief b is:
+
+\mathcal{A}(b) = \left\{ a \in \mathcal{A} : \text{target}(a) = i \implies \forall j \to i \in \mathcal{E}_{\text{prereq}}, \; \mathbb{E}_{b}[x_j] \geq \theta_j \right\}
+
+where \theta_j is the threshold for dimension j. This restricts the search: if L=0, the system does not recommend employment; it computes that restoring L unlocks D, which unlocks E, which unlocks H.
+
+Proof. Immediate from the definition of prerequisite edges and the domain constraint that interventions cannot effect transitions across unfulfilled prerequisites. ∎
+
+1.4 Bottleneck Identification
+
+Definition 3 (Bottleneck). Given belief state b, intervention a^* is a bottleneck if:
+
+a^* = \arg\max_{a \in \mathcal{A}(b)} \left[ V_T(b \mid \text{do}(a)) - V_T(b) \right]
+
+where \text{do}(a) denotes the intervention applied under the causal model, and \mathcal{A}(b) is the prerequisite-restricted action space from Lemma 1.
+
+Theorem 1 (Tractability of Bottleneck Search). Under the factored state space and causal prerequisite DAG, the bottleneck search over \mathcal{A}(b) has complexity O(|\mathcal{A}| \cdot |\mathcal{X}| \cdot T), where |\mathcal{A}| is the number of interventions and |\mathcal{X}| = 15{,}552.
+
+Proof sketch. For each candidate intervention a, compute V_T(b \mid \text{do}(a)) by forward simulation with K particles. Each simulation step requires O(|\mathcal{X}|) operations for the belief update. With T = 180 steps and |\mathcal{A}| candidates, total complexity is O(|\mathcal{A}| \cdot K \cdot T \cdot |\mathcal{X}|). With K = 10^3 particles, |\mathcal{A}| \leq 20, and T = 180, this is approximately 5 \times 10^8 operations—feasible on commodity hardware within seconds. ∎
+
+1.5 Optimal Stopping for Continuous Support
+
+The Continuous Support Layer is formalized as an optimal stopping problem over the belief state.
+
+Definition 4 (Stall Event). A stall event occurs at time t if the probability of reaching \mathcal{S}_{\text{stable}} within the remaining horizon falls below threshold \epsilon:
+
+V_{T-t}(b_t) < \epsilon
+
+Definition 5 (Stopping Problem). At each time t, the system chooses between continuing (no intervention) or intervening (re-assessment, re-recommendation). Let c_{\text{intervene}} be the cost of intervention, c_{\text{stall}} the cost of failing to intervene when a stall is occurring, and \lambda the prior probability of stall. The optimal policy is:
+
+\pi^*(b_t) = \begin{cases} \text{intervene} & \text{if } P(\text{stall} \mid b_t) \geq \frac{c_{\text{intervene}}}{c_{\text{stall}} + c_{\text{intervene}}} \\ \text{continue} & \text{otherwise} \end{cases}
+
+This is a Bayesian quickest change detection problem under partial observations . The problem can be stated as an optimal stopping problem for a partially observed discrete-time Markov decision process, with the state space discretized via quantization to approximate the value function and build a tractable stopping policy .
+
+Theorem 2 (Threshold Structure). The optimal stopping policy for the Continuous Support Layer has a threshold structure: intervene if and only if the posterior probability of stall exceeds a threshold that depends on the relative costs.
+
+Proof sketch. The value function of the stopping problem is monotone in the posterior probability of stall, and the continuation region is convex. Standard results for optimal stopping under partial observations yield threshold policies. ∎
+
+Part II: Architecture and Design
+
+2.1 Five-Layer Architecture
+
+Layer 1: Access Layer. Provider-agnostic. SMS, voice, 4G/5G, WiFi. Satellite Direct-to-Cell is a supplemental continuity layer for disaster and rural fallback, not a primary access path. Operational utility today is emergency SOS, basic SMS, and basic data. The architecture cannot assume broadband-to-phone from satellite today.
+
+Layer 2: Assessment Layer. Conversational AI that converts natural language into belief distributions over x(t). It does not diagnose. It elicits information sufficient to update b_t. It operates in the user's language and with explicit, granular consent.
+
+Layer 3: Reachability Layer. Computes V_T(b; \pi), identifies bottlenecks via the causal prerequisite graph, and generates ranked intervention sequences. This layer implements the mathematical framework of Part I.
+
+Layer 4: Resource Matching Layer. Consumes existing infrastructure: HMIS for client records, Coordinated Entry for prioritization, HSDS for resource directory interoperability, and closed-loop referral networks for actual connections. The system does not build a parallel resource graph; it queries and reasons over existing ones.
+
+Layer 5: Continuous Support Layer. Monitors trajectory progression, detects stall and relapse risk, and triggers re-assessment before failure. Implements the optimal stopping policy of Section 1.5.
+
+2.2 HSDS Profile Extension
+
+The Human Services Data Specification (HSDS) is a data interchange format that enables resource directory data to be published in bulk, providing a common vocabulary for services, organizations, and locations . HSDS v3.1 (released December 2024) already added capacity modeling, enabling services to convey maximum capacity and currently available units .
+
+The Profile mechanism is a way to formally extend HSDS with new properties, validation rules, and structures suitable for a local context . We propose the following minimal, standards-compliant extension:
+
+```
+HSDS_PROFILE_HLN:
+  extends: HSDS
+  adds:
+    ELIGIBILITY_PREDICATE (string, structured, optional)
+    REFERRAL_STATUS (enum: none, pending, accepted, rejected, closed)
+  constraints:
+    - ELIGIBILITY_PREDICATE must be a well-formed logical expression over HMIS data elements
+    - REFERRAL_STATUS must be updated within 24 hours of status change
+```
+
+Where HSDS lacks fields required for reachability computation—specifically, structured eligibility predicates—we propose an HSDS profile that extends the standard rather than replacing it . Publishers may develop a HSDS Profile for a specific conceptual area of service delivery . A HSDS publication is still conformant even if it includes properties and structures not defined in HSDS or one of its Profiles—as long as there isn't already a suitable property in HSDS .
+
+The canonical HSDS API specification in OpenAPI 3.1 format is available, and endpoints that return lists of entities must be paginated . The HLN optimization endpoint is a read-only extension:
+
+```
+POST /hln/optimize
+  Request:
+    belief: { b: [float, ...] }  # belief distribution over 15,552 states
+    horizon: integer              # T = 180 days
+    consent_token: string         # cryptographic consent receipt
+  Response:
+    bottlenecks: [
+      { intervention: string, delta_v: float, confidence_interval: [float, float], explanation: string }
+    ]
+    abstain: boolean              # true if no intervention meets threshold
+```
+
+2.3 Privacy Architecture
+
+The system is designed under Privacy by Design principles. Federated learning is used for predictive model training, but federated learning does not automatically preserve privacy: model updates can leak membership and location in small populations. We therefore require:
+
+Differential Privacy. \epsilon \leq 1.0 for model updates. Research shows that for small populations, there appears to be a minimum viable privacy budget (approximately \epsilon = 1.0) below which predictions become too unreliable for practical use . At \epsilon = 2.0, it is possible to nearly match the performance of a non-DP model while retaining a formal client-level DP guarantee . For homeless services—where populations are small and sensitive—we target \epsilon = 1.0 as the operational constraint, accepting the utility cost.
+
+Secure Aggregation. Model updates are aggregated using cryptographic secure aggregation, preventing the server from observing any individual agency's update.
+
+Identity/Case-File Separation. Location-time metadata can break identity separation. The system minimizes collection of such metadata or applies temporal and spatial generalization with k-anonymity \geq 5.
+
+Cryptographic Enforcement of C4. Risk scores never leave the reachability layer. The API has no endpoint for risk score. Even a system administrator cannot exfiltrate individual-level scores without a threshold of authorized signatures.
+
+A Federated Learning approach enables all agencies to train a predictive model collaboratively without sharing their sensitive data, preserving the privacy of the people within the data by not sharing identifying information between agencies without their consent . This is the architecture we adopt, augmented with DP and secure aggregation.
+
+2.4 Ethical Constraints as Hard Architectural Bounds
+
+C1 (Human Authorization). No sensitive decision—housing allocation, child protection, medical intervention, legal status—is executed by the AI. The AI outputs a recommendation a^*; a human professional authorizes or rejects it.
+
+C2 (User Veto). At any point, the individual may withdraw consent for any or all data uses. Withdrawal is as easy as consent: one SMS keyword (STOP) deletes the belief state and opts out of federated training for that individual.
+
+C3 (Explainability). Every recommendation is accompanied by a plain-language explanation: "We recommend restoring identity documents first because our model estimates that this increases your probability of stable housing within 180 days from 12% to 31%." The user must be able to see the top three competing recommendations and the reasons the system ranked them lower. This supports meaningful contestability.
+
+C4 (No Risk Score Sharing). No individual risk score is shared with police, immigration enforcement, or child protective services absent a specific legal trigger and independent human review. This is enforced cryptographically, not by policy.
+
+C5 (Structural Accountability). The system publishes aggregate statistics on who receives recommendations, who follows them, and who stabilizes, disaggregated by race, gender, and disability status, at a frequency sufficient to detect disparate impact.
+
+Part III: Technical Specification
+
+3.1 Transition Model Estimation
+
+The transition model P(x_t \mid x_{t-1}, a_{t-1}) is constrained by the causal prerequisite DAG and estimated via hierarchical Bayesian models with weakly informative priors elicited from caseworkers, updated with pilot data via federated learning across Continuums of Care.
+
+For each transition x \to x' under action a, the model is:
+
+P(x' \mid x, a) = \begin{cases} p_{x,a,x'} & \text{if } (x, x') \in \mathcal{T}(a) \\ 0 & \text{otherwise} \end{cases}
+
+where \mathcal{T}(a) is the set of transitions enabled by action a under the causal prerequisite graph. Priors on p_{x,a,x'} are elicited from caseworkers via structured elicitation, then updated via federated posterior inference.
+
+3.2 Abstention Criterion
+
+The system abstains from recommending when no intervention meets a minimum effect threshold:
+
+\text{abstain} \iff \max_{a \in \mathcal{A}(b)} \left[ V_T(b \mid \text{do}(a)) - V_T(b) \right] < \delta_{\min}
+
+where \delta_{\min} is calibrated to the minimum clinically significant difference. A bad recommendation is worse than no recommendation.
+
+3.3 Federated Estimation Protocol
+
+The transition model is estimated collaboratively across CoCs using federated learning. Each CoC computes local posterior updates over its HMIS data, perturbs them with DP noise (\epsilon \leq 1.0), and sends them to a secure aggregation server. The server aggregates and returns the global posterior. The protocol runs weekly.
+
+3.4 Evaluation Specification
+
+Test 1: Bottleneck Identification Accuracy. 50 cases, blinded panel of 3 expert caseworkers, majority vote. Require top-1 agreement ≥70% and Spearman rank correlation ≥0.6. Pre-register that false bottleneck rate (bottlenecks judged irrelevant or harmful) must be <5%.
+
+Test 2: Time-to-Stabilization. Stepped-wedge cluster randomized trial across 4–6 sites. Primary outcome: 30 consecutive days in permanent housing. Require 15% reduction with p < 0.05, survival models intention-to-treat. The POP study protocol demonstrates this design's feasibility with 20 buildings randomized to four 6-month intervention waves .
+
+Test 3: Trajectory Durability. 12-month return to homelessness, logistic regression with site fixed effects, 10 percentage point reduction threshold.
+
+Test 4: Dignity, Consent, and Autonomy. Qualitative interviews combined with validated scales for autonomy, trust, and perceived surveillance. No more than 10% of users report feeling surveilled, judged, or coerced. Median autonomy subscale at or above midpoint. Pre-register instrument.
+
+3.5 Empirical Thresholds from Literature
+
+The Critical Time Intervention meta-analysis finds small effect sizes on homelessness (SMD = −0.20, 95% CI: −0.35, −0.04) . The prospectus's choice of 15% reduction in time-to-stabilization is ambitious but defensible: coordination alone will not produce large effects, but sequencing optimization targets a mechanism that CTI does not directly optimize.
+
+For prevention, the Toros, Flaming, and Burns screening tools identify the 8% of low-wage workers who become persistently homeless after job loss and 8% of youth receiving public assistance who become persistently homeless within three years, based on analyzing records of over one million people who experienced homelessness .
+
+Part IV: Summary of Contributions
+
+Mathematical Contributions:
+
+1. Formalization of human recovery as a finite-horizon reachability problem under partial observability with a factored state space of 15,552 states.
+2. Definition and tractability proof for reachability-weighted bottleneck optimization under causal prerequisite constraints (Theorem 1).
+3. Optimal stopping formulation for continuous support with threshold policy characterization (Theorem 2).
+
+Architectural Contributions:
+
+1. Five-layer design separating access, assessment, reachability computation, resource matching, and continuous support.
+2. HSDS profile extension for eligibility predicates and referral status—a minimal, standards-compliant contribution to the Open Referral community.
+
+Ethical Contributions:
+
+1. Five operational constraints (C1–C5) encoded as hard architectural bounds, with cryptographic enforcement of C4 and structural accountability via C5.
+
+The system succeeds when the individual no longer needs it.
+
+
+Appendices
+
+The Human Lifeline Network: A Theoretical PhD Framework
+
+Reachability-Weighted Bottleneck Optimization on Existing Service Infrastructure
+
+Appendix A: Complete Mathematical Proofs
+
+A.1 Proof of Lemma 1 (Prerequisite Constraint on Action Space)
+
+Statement. The effective action space at belief b is:
+
+\mathcal{A}(b) = \left\{ a \in \mathcal{A} : \text{target}(a) = i \implies \forall j \to i \in \mathcal{E}_{\text{prereq}}, \; \mathbb{E}_{b}[x_j] \geq \theta_j \right\}
+
+where \theta_j is the threshold for dimension j.
+
+Proof. The causal prerequisite DAG \mathcal{G}_{\text{causal}} = (\mathcal{X}, \mathcal{E}_{\text{prereq}}) encodes domain-validated prerequisite relations. By definition, an edge (j, i) \in \mathcal{E}_{\text{prereq}} means that dimension j must reach its threshold \theta_j before any intervention targeting dimension i can effect a transition. Suppose for contradiction that a \in \mathcal{A} with \text{target}(a) = i, and there exists j with (j, i) \in \mathcal{E}_{\text{prereq}} such that \mathbb{E}_b[x_j] < \theta_j. By the definition of prerequisite, the transition function P(x' \mid x, a) is identically zero for all x' that differ from x only in dimension i when x_j < \theta_j. Therefore, a has no effect, and V_T(b \mid \text{do}(a)) = V_T(b). Including a in the action space adds no value and may introduce spurious recommendations. Removing all such actions yields \mathcal{A}(b). ∎
+
+Corollary A.1.1. The size of the effective action space satisfies |\mathcal{A}(b)| \leq |\mathcal{A}|, with equality if and only if all prerequisites are satisfied.
+
+Corollary A.1.2. The action space \mathcal{A}(b) is monotone in the belief: if b' dominates b in the sense that \mathbb{E}_{b'}[x_j] \geq \mathbb{E}_b[x_j] for all j, then \mathcal{A}(b) \subseteq \mathcal{A}(b').
+
+Proof. Immediate from the definition: a larger expectation for each dimension can only satisfy more prerequisite constraints. ∎
+
+A.2 Proof of Proposition 1 (PWLC Property of V_T)
+
+Statement. The finite-horizon value function V_t(b) for the reachability objective is piecewise-linear and convex (PWLC) in the belief b.
+
+Proof. We proceed by backward induction on t.
+
+Base case. At t = T, the value function is the indicator of reaching a stable state:
+
+V_T(b) = \mathbb{1}\{b \in \mathcal{S}_{\text{stable}}\} = \sum_{x \in \mathcal{S}_{\text{stable}}} b(x)
+
+This is linear in b, hence PWLC (with a single \alpha-vector \alpha(x) = \mathbb{1}\{x \in \mathcal{S}_{\text{stable}}\}).
+
+Inductive step. Assume V_{t+1}(b) is PWLC, representable as:
+
+V_{t+1}(b) = \max_{\alpha \in \Gamma_{t+1}} \sum_{x \in \mathcal{X}} \alpha(x) b(x)
+
+The Bellman backup for the reachability objective is:
+
+V_t(b) = \max_{a \in \mathcal{A}(b)} \sum_{x' \in \mathcal{X}} b(x') \left[ \mathbb{1}\{x' \in \mathcal{S}_{\text{stable}}\} + \sum_{y} P(y \mid b, a) V_{t+1}(\tau(b, a, y)) \right]
+
+The belief update \tau(b, a, y) is linear in b (it is a Bayesian update):
+
+\tau(b, a, y)(x') = \frac{P(y \mid x', a) \sum_{x} P(x' \mid x, a) b(x)}{\sum_{x''} P(y \mid x'', a) \sum_{x} P(x'' \mid x, a) b(x)}
+
+The normalization factor is also linear in b. Therefore, V_{t+1}(\tau(b, a, y)) is PWLC in b. The sum over observations y preserves PWLC. The maximization over actions a \in \mathcal{A}(b) of a PWLC function preserves PWLC (the max of convex functions is convex). The addition of the linear term \mathbb{1}\{x' \in \mathcal{S}_{\text{stable}}\} preserves PWLC.
+
+Therefore, V_t(b) is PWLC, representable as a finite set of \alpha-vectors \Gamma_t. ∎
+
+Corollary A.2.1. The number of \alpha-vectors in the exact representation grows as |\Gamma_t| \in O(|\mathcal{A}| \cdot |\Gamma_{t-1}|^{|Z|}), where |Z| is the number of observations. This exponential growth is why exact solution is intractable for T = 180, and why approximate methods are required.
+
+Corollary A.2.2. For the reachability objective (rather than discounted reward), the value function remains PWLC but the \alpha-vectors have a specific interpretation: each \alpha-vector corresponds to a policy that maximizes reachability probability for a particular region of the belief simplex.
+
+A.3 Proof of Theorem 1 (Tractability of Bottleneck Search)
+
+Statement. Under the factored state space and causal prerequisite DAG, the bottleneck search over \mathcal{A}(b) has complexity O(|\mathcal{A}| \cdot K \cdot T \cdot |\mathcal{X}|), where |\mathcal{A}| is the number of interventions, K is the number of particles, T is the horizon, and |\mathcal{X}| = 15{,}552.
+
+Proof. For each candidate intervention a \in \mathcal{A}(b), we compute V_T(b \mid \text{do}(a)) by forward simulation with K particles.
+
+Step 1: Particle filter belief update. Given a particle set \{x^{(k)}\}_{k=1}^K representing the belief b_t, the belief update for each particle requires:
+
+· Sampling the transition: O(1) per particle (given the factored transition model).
+· Computing the observation likelihood: O(1) per particle (given the factored observation model).
+· Weight normalization: O(K).
+
+Total per step: O(K).
+
+Step 2: Forward simulation over T steps. The simulation runs for T = 180 time steps. At each step, the particle filter updates the belief. Total: O(K \cdot T).
+
+Step 3: Reachability check. At each step, we check whether any particle has reached \mathcal{S}_{\text{stable}}. This is O(K) per step, or O(K \cdot T) total.
+
+Step 4: Repeat for each action. There are |\mathcal{A}(b)| \leq |\mathcal{A}| candidate actions. Total: O(|\mathcal{A}| \cdot K \cdot T).
+
+Step 5: Bottleneck ranking. Computing the difference V_T(b \mid \text{do}(a)) - V_T(b) for each action and ranking requires O(|\mathcal{A}| \log |\mathcal{A}|).
+
+With K = 10^3 particles, |\mathcal{A}| \leq 20, and T = 180:
+
+|\mathcal{A}| \cdot K \cdot T \approx 20 \times 1000 \times 180 = 3.6 \times 10^6
+
+operations. This is feasible on commodity hardware within seconds.
+
+Factored state space consideration. The belief b is over |\mathcal{X}| = 15{,}552 states. However, the particle filter operates on K particles, not on the full belief vector. The full belief vector is only needed for initialization and final ranking, which is O(|\mathcal{X}|) = O(15{,}552) operations. ∎
+
+Remark A.3.1. The complexity is linear in each of |\mathcal{A}|, K, T, and |\mathcal{X}|, and is therefore polynomial in the problem size. This contrasts with exact POMDP solution, which is PSPACE-complete for finite horizons and undecidable for infinite horizons. The reachability objective (rather than discounted reward) admits a more tractable solution via forward simulation.
+
+A.4 Proof of Theorem 2 (Threshold Policy for Continuous Support)
+
+Statement. The optimal stopping policy for the Continuous Support Layer has a threshold structure: intervene if and only if the posterior probability of stall exceeds a threshold that depends on the relative costs.
+
+Proof. We formulate the stopping problem as a partially observable Markov decision process (POMDP) with two actions: continue (no intervention) and intervene (re-assessment, re-recommendation). Let p_t = P(\text{stall} \mid b_t) be the posterior probability of stall at time t.
+
+The value function of the stopping problem satisfies:
+
+J_t(p_t) = \max \left\{ -c_{\text{intervene}} + \mathbb{E}[J_{t+1}(p_{t+1}) \mid p_t, \text{intervene}], \; \mathbb{E}[J_{t+1}(p_{t+1}) \mid p_t, \text{continue}] \right\}
+
+where the expectation is over the belief update.
+
+Monotonicity. The continuation value J_{t+1}(p_{t+1}) is increasing in p_{t+1}. This follows from the fact that a higher probability of stall makes intervention more valuable. The posterior update p_{t+1} is monotone in p_t (likelihood ratio ordering), so the continuation value is monotone in p_t.
+
+Convexity. The value function is convex in p_t. This is a standard result for optimal stopping problems: the value function of a stopping problem is convex in the underlying probability.
+
+Threshold structure. For a convex, monotone value function, the optimal policy is characterized by a threshold p^*:
+
+\pi^*(p_t) = \begin{cases} \text{intervene} & \text{if } p_t \geq p^* \\ \text{continue} & \text{otherwise} \end{cases}
+
+where p^* satisfies:
+
+p^* = \frac{c_{\text{intervene}}}{c_{\text{stall}} + c_{\text{intervene}}}
+
+This follows from equating the expected cost of intervention with the expected cost of continuing. ∎
+
+Corollary A.4.1. The threshold p^* is decreasing in c_{\text{stall}} and increasing in c_{\text{intervene}}. If the cost of failing to intervene when a stall is occurring is high, the threshold for intervention is lower.
+
+Corollary A.4.2. The optimal policy is a state-dependent threshold policy: the threshold may depend on the current belief state b_t, not just the scalar probability p_t. In general, the optimal stopping set is \{b_t : V_{T-t}(b_t) < \epsilon\}, where \epsilon is a threshold on the viability measure.
+
+A.5 Proof of Federated Learning Convergence (Adapted from Existing Bounds)
+
+Statement. Under non-IID data distributions with heterogeneity parameter \zeta = \max_{i} \|F_i'(w^*) - F'(w^*)\|, the federated estimation of the transition model achieves:
+
+\mathbb{E}[F(w_G^{(T)}) - F(w^*)] \leq \epsilon + \frac{C\zeta^2 S_{\max}^2}{T}
+
+where C is a constant depending on problem parameters, and \epsilon can be made arbitrarily small by choosing appropriate algorithm parameters.
+
+Proof sketch. The proof follows standard federated learning analysis under non-IID data, adapted for the hierarchical Bayesian transition model estimation.
+
+Assumptions:
+
+1. L-smoothness: \|\nabla F_i(w) - \nabla F_i(w')\| \leq L \|w - w'\|
+2. Bounded gradient variance: \mathbb{E}[\|\nabla F_i(w) - \nabla F(w)\|^2] \leq \sigma^2
+3. Bounded heterogeneity: \zeta = \max_i \|F_i'(w^*) - F'(w^*)\|
+4. Anomaly scores bounded: S_{\min} \leq S_i^{(t)} \leq S_{\max}
+
+Analysis. The convergence rate depends on the degree of non-IID characteristics and the maximum anomaly score influence. The heterogeneity parameter \zeta captures the dissimilarity between local objectives across CoCs. Larger \zeta slows convergence but does not prevent it.
+
+Implication for HLN. The transition model is estimated collaboratively across CoCs with heterogeneous populations. The convergence bound guarantees that the federated estimate approaches the centralized estimate at a rate that depends on the heterogeneity between CoCs. With T communication rounds (weeks), the error decreases as O(1/T). ∎
+
+Remark A.5.1. The bound is conservative. In practice, the hierarchical Bayesian model with informative priors elicited from caseworkers will converge faster because the priors regularize the local updates, effectively reducing \zeta.
+
+Appendix B: Computational Complexity Analysis
+
+B.1 POMDP Complexity
+
+Finding an optimal policy for a finite-horizon POMDP is PSPACE-complete . For an infinite horizon, it is undecidable . This is the fundamental computational barrier that motivates the shift from the infinite-horizon viability kernel to the finite-horizon reachability measure.
+
+The complexity is a function of:
+
+· |\mathcal{S}|: number of states (15,552)
+· |\mathcal{A}|: number of actions (≤20)
+· |\mathcal{Z}|: number of observations (finite, small)
+· T: horizon (180)
+
+Exact solution requires manipulation of the piecewise-linear convex value function, represented by a set of \alpha-vectors . The number of \alpha-vectors needed grows exponentially in the number of observations at each iteration: |\Gamma_t| \in O(|\mathcal{A}| \cdot |\Gamma_{t-1}|^{|Z|}) . Since each new \alpha-vector requires computation time in O(|Z| \cdot |\mathcal{S}|^2), the complexity of iteration t for exact approaches is in O(|\mathcal{A}| \cdot |Z| \cdot |\mathcal{S}|^2 \cdot |\Gamma_{t-1}|^{|Z|}) .
+
+For T = 180, exact solution is infeasible. We therefore adopt approximate dynamic programming with particle-based belief representation.
+
+B.2 Factored State Space Tractability
+
+The factored state space \mathcal{X} = \prod_{i=1}^9 \mathcal{X}_i with |\mathcal{X}| = 15{,}552 is tractable for exact belief updates in a dynamic Bayesian network. The belief update:
+
+b_t(x_t) \propto P(y_t \mid x_t) \sum_{x_{t-1}} P(x_t \mid x_{t-1}) b_{t-1}(x_{t-1})
+
+can be computed efficiently using the factored structure. The transition model P(x_t \mid x_{t-1}) factors across dimensions given the causal prerequisite DAG. The observation model P(y_t \mid x_t) is typically conditionally independent across observations given the state.
+
+B.3 Particle Filter Approximation Error
+
+The particle filter with K particles approximates the belief b_t with error O(1/\sqrt{K}). For K = 10^3, the approximation error is approximately 0.03 in total variation distance. This is sufficient for the bottleneck ranking, which requires distinguishing interventions with effect sizes of at least 0.05 (5 percentage points in viability).
+
+The particle filter is consistent: as K \to \infty, the approximation converges to the true belief. The convergence rate is O(1/\sqrt{K}) for the mean squared error.
+
+B.4 Bottleneck Search Complexity
+
+The bottleneck search over \mathcal{A}(b) has complexity O(|\mathcal{A}| \cdot K \cdot T \cdot |\mathcal{X}|). With |\mathcal{A}| = 20, K = 10^3, T = 180, and |\mathcal{X}| = 15{,}552:
+
+20 \times 1000 \times 180 \times 15552 \approx 5.6 \times 10^{10}
+
+This is feasible on commodity hardware with parallelization across actions and particles. The computation can be further optimized by:
+
+· Pruning the action space via the causal prerequisite graph
+· Using adaptive particle counts (fewer particles for low-probability actions)
+· Caching transition probabilities
+
+B.5 Optimal Stopping Computation
+
+The optimal stopping policy requires computing the viability measure V_{T-t}(b_t) at each time step. This is the same computation as the bottleneck search but with a single action (continue vs. intervene). The complexity is O(K \cdot T \cdot |\mathcal{X}|) per time step, or O(K \cdot T^2 \cdot |\mathcal{X}|) over the full horizon. With T = 180, this is 10^3 \times 180^2 \times 15552 \approx 5 \times 10^{11} operations. This is feasible with offline computation and online lookup.
+
+Appendix C: Privacy Proofs and Composition Theorems
+
+C.1 Differential Privacy Composition
+
+Each round of federated learning satisfies (\epsilon, \delta)-DP. Applying the standard composition theorems for differential privacy to the sequence of T rounds yields the stated bounds .
+
+Basic composition theorem. The basic composition theorem yields (T\epsilon, T\delta)-DP. For T = 100 rounds and \epsilon = 0.1, the total privacy loss is \epsilon_{\text{total}} \approx 24.09 .
+
+Advanced composition theorem. The advanced composition theorem gives a significantly tighter bound for (T\epsilon, T\delta) when \epsilon_{\text{total}} is large . For the same parameters, the advanced composition bound gives \epsilon_{\text{total}} = 100 . The advanced composition theorem is preferable for long-running federated learning systems .
+
+Practical implication. For HLN, we target \epsilon_{\text{total}} \leq 1.0 over the entire training period. With advanced composition and T = 52 weekly rounds, this requires \epsilon_{\text{per-round}} \approx 0.02. The noise added to each round's model update is calibrated accordingly.
+
+C.2 Privacy Budget Allocation Strategies
+
+Two allocation strategies are considered for the privacy budget :
+
+Uniform allocation. Divide a total budget equally across T rounds: \epsilon_{\text{per-round}} = \epsilon_{\text{total}} / T .
+
+Adaptive allocation. Allocate more budget to early rounds, when gradients tend to have larger magnitude, using exponential decay: \epsilon_t = \epsilon_{\text{total}} \cdot \alpha^{t-1} / \sum_{i=1}^T \alpha^{i-1}, \alpha \in (0,1) .
+
+For HLN, we adopt adaptive allocation with \alpha = 0.95. This allocates more privacy budget to early rounds (when the model is learning the most) and less to later rounds (when the model is fine-tuning).
+
+C.3 Secure Aggregation
+
+Secure aggregation ensures that the server cannot observe any individual agency's model update. The protocol operates as follows:
+
+1. Each agency i encrypts its model update \Delta_i using a shared secret key.
+2. The encrypted updates are summed: \sum_i \text{Enc}(\Delta_i).
+3. The server decrypts the sum but cannot decrypt individual updates.
+4. The decrypted sum is used to update the global model.
+
+The security guarantee is cryptographic: even a malicious server cannot recover individual updates without compromising a threshold of agencies.
+
+C.4 Identity/Case-File Separation
+
+Location-time metadata can break identity separation. The system minimizes collection of such metadata or applies temporal and spatial generalization with k-anonymity ≥ 5.
+
+Temporal generalization. Timestamps are bucketed to the nearest day. This prevents re-identification based on precise timing of service encounters.
+
+Spatial generalization. Locations are generalized to the nearest census tract (population ≥ 1,000). This prevents re-identification based on precise location.
+
+k-anonymity. Any combination of quasi-identifiers (age, gender, race, location, time) must be shared by at least 5 individuals in the dataset. If a combination is unique, the system suppresses the quasi-identifiers or aggregates them.
+
+C.5 Cryptographic Enforcement of C4 (No Risk Score Sharing)
+
+The API has no endpoint for risk score. The reachability layer computes risk scores internally but never exposes them. The only outputs are:
+
+· Ranked interventions
+· Confidence intervals
+· Explanation strings
+
+Even a system administrator cannot exfiltrate individual-level scores without a threshold of authorized signatures. This is enforced by:
+
+· Access control: The risk score database is encrypted with a key that requires k-of-n signatures to decrypt.
+· Audit logging: Every access attempt is logged and monitored for anomalous patterns.
+· Data minimization: Risk scores are computed on-the-fly and never persisted.
+
+Appendix D: Transition Model Estimation Details
+
+D.1 Hierarchical Bayesian Model Specification
+
+For each transition x \to x' under action a, the transition probability is:
+
+P(x' \mid x, a) = \begin{cases} p_{x,a,x'} & \text{if } (x, x') \in \mathcal{T}(a) \\ 0 & \text{otherwise} \end{cases}
+
+where \mathcal{T}(a) is the set of transitions enabled by action a under the causal prerequisite graph.
+
+The prior on p_{x,a,x'} is a Beta distribution:
+
+p_{x,a,x'} \sim \text{Beta}(\alpha_{x,a,x'}, \beta_{x,a,x'})
+
+The hyperparameters \alpha and \beta are elicited from caseworkers via structured elicitation. For each transition, caseworkers provide:
+
+· Best estimate of the transition probability
+· Confidence interval (e.g., 90% credible interval)
+· Qualitative justification
+
+The hyperparameters are then fit to match the elicited best estimate and confidence interval.
+
+D.2 Posterior Update via Federated Learning
+
+Each CoC computes local posterior updates over its HMIS data. The local posterior is:
+
+P(p_{x,a,x'} \mid \mathcal{D}_i) \propto P(\mathcal{D}_i \mid p_{x,a,x'}) P(p_{x,a,x'})
+
+where \mathcal{D}_i is the local data. The local update is perturbed with DP noise and sent to the secure aggregation server. The server aggregates the local updates and returns the global posterior:
+
+P(p_{x,a,x'} \mid \mathcal{D}) \propto P(p_{x,a,x'}) \prod_{i=1}^N P(\mathcal{D}_i \mid p_{x,a,x'})
+
+D.3 Cold-Start Strategy
+
+HMIS data are sparse and uneven. The cold-start strategy is:
+
+1. Prior elicitation: Use caseworker priors for all transitions.
+2. Synthetic data augmentation: Generate synthetic trajectories from the prior to initialize the particle filter.
+3. Transfer learning: Use transition models from similar CoCs (with similar demographics and service landscapes) as informative priors.
+4. Incremental learning: Update the model as data accumulate, starting with a high learning rate and decaying over time.
+
+D.4 Model Validation
+
+The transition model is validated via:
+
+· Posterior predictive checks: Compare simulated trajectories to held-out HMIS trajectories.
+· Calibration: Check that predicted probabilities match observed frequencies.
+· Expert review: Present the learned transition probabilities to caseworkers for qualitative validation.
+
+D.5 HMIS Data Quality Constraints
+
+The transition model estimation is constrained by HMIS data quality. Data completeness thresholds vary by project type :
+
+Project Type Universal Data Elements Program Specific Data Elements – Entry Program Specific Data Elements – Exit
+Coordinated Entry 95% N/A N/A
+Emergency Shelter 98% 96% 65%
+Homeless Prevention 98% 96% 95%
+Permanent Supportive Housing 98% 96% 95%
+Rapid Re-Housing 98% 96% 95%
+Street Outreach 95% 90% 50%
+
+The exit data completeness for Emergency Shelter (65%) and Street Outreach (50%) are particularly problematic for estimating transitions out of homelessness. The federated learning approach mitigates this by pooling data across CoCs, but the underlying incompleteness introduces bias that must be modeled explicitly .
+
+Mitigation strategies:
+
+· Missing data imputation: Use multiple imputation with chained equations (MICE) to estimate missing exit destinations.
+· Sensitivity analysis: Test the robustness of the transition model to different imputation strategies.
+· Bias correction: Use inverse probability weighting (IPW) to correct for non-random missingness.
+
+Appendix E: Implementation Technical Specification
+
+E.1 API Specification
+
+The HLN optimization endpoint is a read-only extension to the HSDS API:
+
+```
+POST /hln/optimize
+  Content-Type: application/json
+
+  Request Body:
+  {
+    "belief": {
+      "b": [float, ...],  // 15,552-element belief distribution
+      "timestamp": "ISO 8601",
+      "source": "SMS" | "voice" | "caseworker" | "HMIS"
+    },
+    "horizon": 180,  // days
+    "consent_token": "string",  // cryptographic consent receipt
+    "context": {
+      "coC": "string",  // Continuum of Care identifier
+      "agency": "string",  // agency identifier
+      "caseworker_id": "string"  // caseworker identifier (optional)
+    }
+  }
+
+  Response Body:
+  {
+    "bottlenecks": [
+      {
+        "rank": 1,
+        "intervention": "restore_identity_documents",
+        "delta_v": 0.19,  // increase in viability probability
+        "confidence_interval": [0.12, 0.26],  // 95% CI
+        "explanation": "We recommend restoring identity documents first because our model estimates that this increases your probability of stable housing within 180 days from 12% to 31%.",
+        "prerequisite_status": {
+          "L": "threshold_met",
+          "D": "threshold_not_met",
+          "E": "threshold_not_met"
+        }
+      },
+      ...
+    ],
+    "abstain": false,
+    "abstain_reason": null,
+    "viability_current": 0.12,
+    "viability_optimal": 0.31,
+    "computation_time_ms": 2340
+  }
+```
+
+E.2 Abstention Criterion
+
+The system abstains from recommending when:
+
+\text{abstain} \iff \max_{a \in \mathcal{A}(b)} \left[ V_T(b \mid \text{do}(a)) - V_T(b) \right] < \delta_{\min}
+
+where \delta_{\min} = 0.05 (5 percentage points in viability probability). This threshold is calibrated to the minimum clinically significant difference. A bad recommendation is worse than no recommendation.
+
+When abstaining, the system returns:
+
+```json
+{
+  "bottlenecks": [],
+  "abstain": true,
+  "abstain_reason": "No intervention meets the minimum effect threshold. Current viability: 0.12. Best intervention effect: 0.03 (below threshold 0.05).",
+  "recommendation": "Consult with a human caseworker for personalized assessment."
+}
+```
+
+E.3 HSDS Profile Extension Specification
+
+```
+HSDS_PROFILE_HLN:
+  extends: HSDS
+  adds:
+    ELIGIBILITY_PREDICATE (string, structured, optional)
+      - Must be a well-formed logical expression over HMIS data elements
+      - Grammar: <predicate> ::= <atom> | (not <predicate>) | (<predicate> and <predicate>) | (<predicate> or <predicate>)
+      - <atom> ::= <variable> <operator> <value>
+      - <variable> ::= H | L | F | D | E | S | R | C | I
+      - <operator> ::= = | != | < | > | <= | >=
+      - <value> ::= integer | boolean | string
+    REFERRAL_STATUS (enum: none, pending, accepted, rejected, closed, optional)
+  constraints:
+    - ELIGIBILITY_PREDICATE must be decidable in O(1) time
+    - REFERRAL_STATUS must be updated within 24 hours of status change
+    - All timestamps must be in ISO 8601 format
+```
+
+E.4 Database Schema
+
+The HLN database schema is designed for privacy by design:
+
+```sql
+-- Belief states (encrypted at rest)
+CREATE TABLE belief_states (
+    belief_id UUID PRIMARY KEY,
+    consent_token_hash VARCHAR(64) NOT NULL,
+    belief_vector BYTEA NOT NULL,  -- encrypted
+    timestamp TIMESTAMPTZ NOT NULL,
+    source VARCHAR(20) NOT NULL,
+    coC_id VARCHAR(10) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Intervention recommendations (no risk scores)
+CREATE TABLE recommendations (
+    recommendation_id UUID PRIMARY KEY,
+    belief_id UUID REFERENCES belief_states(belief_id),
+    intervention VARCHAR(50) NOT NULL,
+    delta_v DECIMAL(5,4) NOT NULL,
+    ci_lower DECIMAL(5,4) NOT NULL,
+    ci_upper DECIMAL(5,4) NOT NULL,
+    explanation TEXT NOT NULL,
+    authorized BOOLEAN DEFAULT FALSE,
+    authorized_by VARCHAR(50),
+    authorized_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Referral tracking
+CREATE TABLE referrals (
+    referral_id UUID PRIMARY KEY,
+    recommendation_id UUID REFERENCES recommendations(recommendation_id),
+    status VARCHAR(20) NOT NULL,  -- pending, accepted, rejected, closed
+    status_updated_at TIMESTAMPTZ,
+    outcome VARCHAR(50),
+    outcome_recorded_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Audit log (immutable)
+CREATE TABLE audit_log (
+    log_id BIGSERIAL PRIMARY KEY,
+    event_type VARCHAR(50) NOT NULL,
+    event_data JSONB NOT NULL,
+    user_id VARCHAR(50),
+    ip_address INET,
+    timestamp TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+E.5 SMS Interface Specification
+
+The SMS interface supports the following keywords:
+
+Keyword Action Response
+START Initiate consent Consent flow
+STOP Withdraw consent Confirmation, data deletion
+HELP Request assistance Contact information for human caseworker
+STATUS Check referral status Current referral status
+NEXT Request next recommendation Next bottleneck recommendation
+EXPLAIN Request explanation Plain-language explanation of current recommendation
+VETO Reject current recommendation Acknowledgment, request for alternative
+
+E.6 Voice Interface Specification
+
+The voice interface supports:
+
+· Natural language input via speech-to-text
+· Text-to-speech output
+· Language detection and translation
+· Consent capture via voice signature
+
+E.7 Deployment Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Access Layer                             │
+│  SMS Gateway │ Voice Gateway │ Mobile App │ Web Portal       │
+└─────────────────────────────────────────────────────────────┘
+                              │
+┌─────────────────────────────────────────────────────────────┐
+│                   Assessment Layer                           │
+│  Conversational AI │ Belief Update │ Consent Management      │
+└─────────────────────────────────────────────────────────────┘
+                              │
+┌─────────────────────────────────────────────────────────────┐
+│                  Reachability Layer                          │
+│  V_T Computation │ Bottleneck Search │ Abstention Criterion  │
+└─────────────────────────────────────────────────────────────┘
+                              │
+┌─────────────────────────────────────────────────────────────┐
+│               Resource Matching Layer                        │
+│  HMIS Adapter │ HSDS Adapter │ Unite Us Adapter │ CE Adapter  │
+└─────────────────────────────────────────────────────────────┘
+                              │
+┌─────────────────────────────────────────────────────────────┐
+│               Continuous Support Layer                       │
+│  Stall Detection │ Optimal Stopping │ Re-assessment Trigger   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Appendix F: Evaluation Specifications
+
+F.1 Test 1: Bottleneck Identification Accuracy
+
+Protocol.
+
+· Sample size: 50 cases
+· Expert panel: 3 blinded expert caseworkers with ≥5 years experience
+· Procedure: Each panelist independently ranks the top 3 bottlenecks for each case
+· Primary outcome: Top-1 agreement between AI and panel majority
+· Secondary outcome: Spearman rank correlation across top 3
+
+Thresholds.
+
+· Top-1 agreement ≥ 70%
+· Spearman rank correlation ≥ 0.6
+· False bottleneck rate (bottlenecks judged irrelevant or harmful) < 5%
+
+Justification. Caseworkers disagree with each other; 80% agreement with a single caseworker is not a meaningful bar. A blinded panel with 70% majority agreement is achievable and clinically meaningful. The 5% false bottleneck threshold protects against harmful recommendations.
+
+Power analysis. With 50 cases and a true agreement rate of 70%, the 95% confidence interval is approximately [56%, 84%]. This is sufficient to detect a meaningful difference from the null hypothesis of 50% agreement (random chance).
+
+F.2 Test 2: Time-to-Stabilization
+
+Protocol.
+
+· Design: Stepped-wedge cluster randomized trial
+· Sites: 4–6 Continuums of Care
+· Primary outcome: Time from first contact to stable housing (30 consecutive days in permanent housing)
+· Analysis: Survival models with intention-to-treat
+· Baseline: 150 days to stabilization (documented in prior studies)
+
+Threshold. 15% reduction in time-to-stabilization (approximately 22.5 days on a 150-day baseline), with p < 0.05.
+
+Power analysis. With 6 sites, 20 individuals per site per period, and 4 periods, the total sample size is 480. Assuming an intra-cluster correlation of 0.05 and a 15% effect size, the study has 80% power to detect the effect at \alpha = 0.05. This calculation uses the standard formula for stepped-wedge designs.
+
+Stepped-wedge design. The design is a stepped-wedge cluster randomized trial across multiple sites, where the intervention is rolled out sequentially to different sites over time. This design is preferred when the intervention cannot be delivered simultaneously to all sites due to resource constraints.
+
+F.3 Test 3: Trajectory Durability
+
+Protocol.
+
+· Sample: All individuals who stabilized in Test 2
+· Primary outcome: Return to homelessness within 12 months
+· Analysis: Logistic regression with site fixed effects
+· Baseline: Documented return rate in the target population
+
+Threshold. 10 percentage point reduction in 12-month return rate, with p < 0.05.
+
+Justification. CTI effects on homelessness at follow-up are small; durability at 12 months is a higher bar. A 10 percentage point reduction is the minimum clinically significant difference that would justify continuation.
+
+F.4 Test 4: Dignity, Consent, and Autonomy
+
+Protocol.
+
+· Design: Mixed methods
+· Quantitative: Validated scales for autonomy, trust, and perceived surveillance
+· Qualitative: Semi-structured interviews with 20 participants (including opt-outs)
+· Pre-registration: Instrument pre-registered before data collection
+
+Thresholds.
+
+· No more than 10% of users report feeling surveilled, judged, or coerced
+· Median score on autonomy subscale at or above midpoint
+
+Justification. The dignity constraint is architectural, not aspirational. If more than one in ten users experiences the system as coercive, the ethical architecture has failed regardless of quantitative outcomes.
+
+F.5 Process Metrics
+
+Metric Definition Target
+Time from first message to first referral Elapsed time < 48 hours
+Referral completion rate % referrals closed with tracked outcome 60%
+Data staleness Median age of capacity data at query time < 4 hours
+False bottleneck rate Bottlenecks judged irrelevant or harmful < 5%
+User retention through first stabilization step % users who complete first intervention 50%
+Cost per successful trajectory initiation Total cost / number of stabilizations < $5,000
+
+F.6 Power Analysis Details
+
+For Test 2 (stepped-wedge cluster randomized trial):
+
+· Number of sites: 6
+· Number of periods: 4
+· Individuals per site per period: 20
+· Total sample size: 6 × 4 × 20 = 480
+· Intra-cluster correlation (ICC): 0.05
+· Design effect: 1 + (20 - 1) × 0.05 = 1.95
+· Effective sample size: 480 / 1.95 = 246
+· Minimum detectable effect: 15% reduction in time-to-stabilization
+· Power: 80%
+· Significance level: 0.05
+
+This calculation uses the standard formula for stepped-wedge designs. The ICC of 0.05 is conservative for homeless services research, where clustering is typically weak because individuals within a site have heterogeneous trajectories.
+
+F.7 Pre-Registration Requirements
+
+The following must be pre-registered before data collection:
+
+· Primary and secondary outcomes
+· Analysis plan (including subgroup analyses)
+· Sample size and power calculations
+· Stopping rules
+· Handling of missing data
+· Ethical approvals
+
+Registration will be on ClinicalTrials.gov or an equivalent registry. Pre-registration prevents post-hoc revision of hypotheses and strengthens the credibility of the evaluation.
+
+Appendix G: Notation Summary
+
+Symbol Definition
+\mathcal{X} Factored state space, \(
+x(t) State at time t, x(t) \in \mathcal{X}
+b_t Belief state at time t, b_t \in \Delta(\mathcal{X})
+\mathcal{S}_{\text{stable}} Set of stable states: H=3, L=2, S=1
+V_T(b; \pi) Viability measure: probability of reaching \mathcal{S}_{\text{stable}} within T days
+T Horizon, T = 180 days
+\mathcal{G}_{\text{causal}} Causal prerequisite DAG
+\mathcal{E}_{\text{prereq}} Set of prerequisite edges
+\mathcal{A}(b) Prerequisite-restricted action space at belief b
+\theta_j Threshold for dimension j
+\mathcal{A} Full action space
+a^* Bottleneck intervention
+\delta_{\min} Abstention threshold, \delta_{\min} = 0.05
+\epsilon Differential privacy budget, \epsilon \leq 1.0
+K Number of particles in particle filter, K = 10^3
+\Gamma_t Set of \alpha-vectors at horizon t
+\alpha \alpha-vector in POMDP value function representation
+\zeta Heterogeneity parameter in federated learning
+p^* Optimal stopping threshold
+
+Appendix H: References
+
+1. Smallwood, R. D., & Sondik, E. J. (1973). The optimal control of partially observable Markov processes over a finite horizon. Operations Research, 21(5), 1071–1088. 
+2. Papadimitriou, C. H., & Tsitsiklis, J. N. (1987). The complexity of Markov decision processes. Mathematics of Operations Research, 12(3), 441–450. 
+3. Aubin, J.-P. (1991). Viability Theory. Birkhäuser. 
+4. Dwork, C., & Roth, A. (2014). The algorithmic foundations of differential privacy. Foundations and Trends in Theoretical Computer Science, 9(3–4), 211–407. 
+5. McMahan, B., Moore, E., Ramage, D., Hampson, S., & y Arcas, B. A. (2017). Communication-efficient learning of deep networks from decentralized data. AISTATS. 
+6. Azar, M. G., Osband, I., & Munos, R. (2017). Minimax regret bounds for reinforcement learning. ICML. 
+7. Weightman, A. L., et al. (2023). Exploring the effect of case management in homelessness: A systematic review and meta-analysis. Campbell Systematic Reviews. 
+8. Toros, H., Flaming, D., & Burns, P. (2019). Early intervention to prevent persistent homelessness. Economic Roundtable. 
