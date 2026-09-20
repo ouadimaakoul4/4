@@ -1,0 +1,2712 @@
+Equitable Genomic Medicine
+
+ouadi maakoul
+
+This revision integrates the prior theoretical core with decision-theoretic, causal, and economic corrections. 
+The emphasis is on formal statements that are either provable under stated assumptions or explicitly flagged as 
+approximations. Notation is kept consistent across sections.
+
+---
+
+## 1. Spectral Linear Mixed Models: Formal Complexity Theory
+
+### 1.1 The Standard LMM and Its Bottleneck
+
+The standard linear mixed model for GWAS is
+
+\[
+\mathbf{y} = \mathbf{X}\boldsymbol{\beta} + \mathbf{g} + \boldsymbol{\epsilon},
+\qquad
+\mathbf{g} \sim \mathcal{N}(0, \sigma_g^2 \mathbf{K}),
+\qquad
+\boldsymbol{\epsilon} \sim \mathcal{N}(0, \sigma_e^2 \mathbf{I}),
+\]
+
+where \(\mathbf{K}\) is the \(n \times n\) genetic similarity matrix. The marginal covariance is
+
+\[
+\mathbf{V} = \sigma_g^2 \mathbf{K} + \sigma_e^2 \mathbf{I}.
+\]
+
+**Theorem 1.1 (Standard LMM Complexity).** For \(m\) SNPs and \(n\) individuals, the standard LMM requires \(O(n^3 m)\) time because \(\mathbf{V}^{-1}\) must be recomputed or updated per SNP.
+
+### 1.2 Spectral Decomposition: The FaST-LMM Insight
+
+The spectral decomposition of \(\mathbf{K}\) is
+
+\[
+\mathbf{K} = \mathbf{U} \mathbf{S} \mathbf{U}^{\mathsf{T}},
+\]
+
+where \(\mathbf{U}\) is orthogonal and \(\mathbf{S} = \operatorname{diag}(s_1,\dots,s_n)\). Rotating the data,
+
+\[
+\tilde{\mathbf{y}} = \mathbf{U}^{\mathsf{T}} \mathbf{y},
+\qquad
+\tilde{\mathbf{X}} = \mathbf{U}^{\mathsf{T}} \mathbf{X},
+\]
+
+the MLE for fixed effects becomes
+
+\[
+\hat{\boldsymbol{\beta}}
+=
+\left[
+\sum_{i=1}^{n} \frac{1}{s_i + \delta}
+\tilde{\mathbf{X}}_{i,\cdot}^{\mathsf{T}} \tilde{\mathbf{X}}_{i,\cdot}
+\right]^{-1}
+\left[
+\sum_{i=1}^{n} \frac{1}{s_i + \delta}
+\tilde{\mathbf{X}}_{i,\cdot}^{\mathsf{T}} \tilde{y}_i
+\right],
+\]
+
+where \(\delta = \sigma_e^2 / \sigma_g^2\). This is a sum over \(n\) independent terms and can be evaluated in \(O(n)\).
+
+The genetic variance MLE is
+
+\[
+\hat{\sigma}_g^2
+=
+\frac{1}{n}
+\sum_{i=1}^{n}
+\frac{(\tilde{y}_i - \tilde{\mathbf{X}}_{i,\cdot}\hat{\boldsymbol{\beta}})^2}{s_i + \delta},
+\]
+
+also \(O(n)\). The log-likelihood becomes a function only of \(\delta\):
+
+\[
+LL(\delta)
+=
+-\frac{1}{2}
+\left(
+n\log(2\pi)
++
+\sum_{i=1}^{n}\log(s_i + \delta)
++
+n
++
+n\log\frac{1}{n}
+\sum_{i=1}^{n}
+\frac{(\tilde{y}_i - \tilde{\mathbf{X}}_{i,\cdot}\hat{\boldsymbol{\beta}}(\delta))^2}{s_i + \delta}
+\right).
+\]
+
+### 1.3 Formal Complexity Theorem
+
+**Theorem 1.2 (Spectral LMM Complexity).** Let \(n\) be sample size and \(m\) the number of SNPs. The spectral LMM algorithm has total time complexity
+
+\[
+T(n,m)
+=
+\underbrace{O(n^3)}_{\text{one-time eigendecomposition}}
++
+\underbrace{O(nm)}_{\text{per-SNP score tests}},
+\]
+
+with space complexity \(O(n^2 + nm)\).
+
+**Proof sketch.** The eigendecomposition \(\mathbf{K} = \mathbf{U}\mathbf{S}\mathbf{U}^{\mathsf{T}}\) costs \(O(n^3)\) once. Each SNP requires rotating the genotype vector \(O(n)\), computing the score statistic in the diagonalized space \(O(n)\), and updating variance components \(O(n)\). Summing over \(m\) SNPs gives \(O(nm)\). ∎
+
+**Corollary 1.3.** For \(n = 10{,}000\), \(m = 500{,}000\), the spectral approach yields a speedup factor
+
+\[
+\frac{T_{\text{standard}}}{T_{\text{spectral}}}
+=
+\frac{O(n^3 m)}{O(n^3 + nm)}
+\approx n = 10{,}000,
+\]
+
+which matches empirical observations that FaST-LMM achieves speedups of several orders of magnitude over standard LMM implementations.
+
+### 1.4 Low-Rank Refinement and Biobank-Scale Caveat
+
+If \(\mathbf{K}\) admits a low-rank approximation with effective rank
+
+\[
+r_{\text{eff}}
+=
+\frac{\left(\sum_{i=1}^{n} s_i\right)^2}{\sum_{i=1}^{n} s_i^2},
+\]
+
+then the per-SNP cost reduces to \(O(n r_{\text{eff}})\), giving total complexity
+
+\[
+T(n,m)
+=
+O(n^3) + O(n m r_{\text{eff}}).
+\]
+
+The one-time \(O(n^3)\) eigendecomposition is itself a bottleneck for biobank-scale \(n\), e.g. UK Biobank \(n \approx 500{,}000\). In practice, randomized SVD methods or Bayesian approximations such as BOLT-LMM are used to avoid explicit full eigendecomposition. These approximations should be treated as numerical accelerations, not as exact replacements, and their error should be quantified when used for equity-sensitive inference.
+
+---
+
+## 2. Ancestry-Specific Quality Control: A Rigorous Decision-Theoretic Formulation
+
+### 2.1 Decision-Theoretic Setup
+
+Let \(\theta \in \{0,1\}\) denote the true QC status of a variant, with \(\theta = 1\) indicating a valid variant and \(\theta = 0\) indicating an invalid variant. Let \(X\) be a QC statistic such as MAF, missingness rate, or HWE \(p\)-value. A QC rule with threshold \(\tau\) fails the variant if \(X \leq \tau\).
+
+For population \(i\), define the conditional CDFs
+
+\[
+F_i^1(x) = P(X \leq x \mid \theta = 1, \text{pop } i),
+\qquad
+F_i^0(x) = P(X \leq x \mid \theta = 0, \text{pop } i).
+\]
+
+The type I error is the probability of failing a valid variant:
+
+\[
+\alpha_i(\tau) = P(X \leq \tau \mid \theta = 1, \text{pop } i) = F_i^1(\tau).
+\]
+
+The type II error is the probability of passing an invalid variant:
+
+\[
+\beta_i(\tau) = P(X > \tau \mid \theta = 0, \text{pop } i) = 1 - F_i^0(\tau).
+\]
+
+Let \(c_\alpha\) and \(c_\beta\) be the relative costs of type I and type II errors. The population-specific loss is
+
+\[
+L_i(\tau) = c_\alpha \alpha_i(\tau) + c_\beta \beta_i(\tau).
+\]
+
+For population weights \(w_i > 0\), the total loss is
+
+\[
+L(\tau_1,\dots,\tau_k)
+=
+\sum_{i=1}^{k} w_i L_i(\tau_i).
+\]
+
+**Theorem 2.1 (Population-Specific QC Optimality).** Let \(\mathcal{D} = \{D_1,\dots,D_k\}\) be genetic data from \(k\) ancestral populations. Population-specific thresholds \(\{\tau_i^*\}\) minimize total weighted loss,
+
+\[
+\{\tau_1^*,\dots,\tau_k^*\}
+=
+\arg\min_{\tau_1,\dots,\tau_k}
+\sum_{i=1}^{k} w_i L_i(\tau_i),
+\]
+
+if and only if the conditional QC statistic distributions differ across populations.
+
+**Proof.** The first-order condition for each \(\tau_i\) is
+
+\[
+\frac{\partial L}{\partial \tau_i}
+=
+w_i
+\left[
+c_\alpha f_i^1(\tau_i)
+-
+c_\beta f_i^0(\tau_i)
+\right]
+=
+0,
+\]
+
+where \(f_i^1\) and \(f_i^0\) are the conditional densities. If \(F_i^1 \neq F_j^1\) or \(F_i^0 \neq F_j^0\) for \(i \neq j\), then the solutions generally satisfy \(\tau_i^* \neq \tau_j^*\). If the conditional distributions are identical across populations, the loss separates into a single common threshold problem. ∎
+
+### 2.2 Multiple Testing Across Strata
+
+Selecting \(k\) separate thresholds introduces \(k\) tuning parameters. To avoid overfitting to stratum-specific noise, thresholds should be chosen by cross-validation within each ancestry stratum or by using held-out variants. Global FDR control should then be enforced across strata using stratified Benjamini–Hochberg, independent hypothesis weighting, or a hierarchical FDR procedure. Ancestry-specific QC is therefore not merely a set of independent threshold choices; it is a constrained multiple-testing problem.
+
+### 2.3 Corrected MAF Calculation
+
+A dimension-loss error arises when MAF is computed after ancestry-specific masking. The mathematically correct formulation preserves the column dimension:
+
+\[
+\text{MAF}_j
+=
+\min\left(
+\frac{\sum_{i \in \mathcal{V}_j} g_{ij}}{2|\mathcal{V}_j|},
+\;
+1 - \frac{\sum_{i \in \mathcal{V}_j} g_{ij}}{2|\mathcal{V}_j|}
+\right),
+\]
+
+where \(\mathcal{V}_j = \{i : g_{ij} \geq 0\}\) is the set of valid genotypes at SNP \(j\). The implementation must preserve the variant dimension:
+
+```python
+valid_mask = geno_ancestry >= 0
+n_valid = np.sum(valid_mask, axis=0)          # shape: (n_variants,)
+allele_sum = np.sum(np.where(valid_mask, geno_ancestry, 0), axis=0)
+maf = allele_sum / (2 * n_valid)
+maf = np.minimum(maf, 1 - maf)
+```
+
+---
+
+## 3. Equity Metrics: DeLong Variance and Non-Inferiority Testing
+
+### 3.1 DeLong’s Non-Parametric AUC Variance
+
+Let \(\hat{\theta}\) be the AUC estimate from a diagnostic test. Define the placement values
+
+\[
+V_{Ai}
+=
+\frac{1}{n}
+\sum_{j=1}^{n}
+\psi(a_i, b_j),
+\qquad
+V_{Bj}
+=
+\frac{1}{m}
+\sum_{i=1}^{m}
+\psi(a_i, b_j),
+\]
+
+where
+
+\[
+\psi(a,b)
+=
+\mathbf{1}\{a > b\}
++
+\frac{1}{2}\mathbf{1}\{a = b\}
+\]
+
+is the Mann–Whitney kernel. Then
+
+\[
+\operatorname{Var}[\hat{\theta}]
+=
+\frac{\operatorname{Var}[V_A]}{m}
++
+\frac{\operatorname{Var}[V_B]}{n}.
+\]
+
+For two correlated AUCs from the same data,
+
+\[
+\operatorname{Var}[\hat{\theta}^{\alpha} - \hat{\theta}^{\beta}]
+=
+\operatorname{Var}[\hat{\theta}^{\alpha}]
++
+\operatorname{Var}[\hat{\theta}^{\beta}]
+-
+2\operatorname{Cov}[\hat{\theta}^{\alpha}, \hat{\theta}^{\beta}],
+\]
+
+with
+
+\[
+\operatorname{Cov}[\hat{\theta}^{\alpha}, \hat{\theta}^{\beta}]
+=
+\frac{\operatorname{Cov}[V_A^{\alpha}, V_A^{\beta}]}{m}
++
+\frac{\operatorname{Cov}[V_B^{\alpha}, V_B^{\beta}]}{n}.
+\]
+
+Under the null,
+
+\[
+Z
+=
+\frac{\hat{\theta}^{\alpha} - \hat{\theta}^{\beta}}
+{\sqrt{\operatorname{Var}[\hat{\theta}^{\alpha} - \hat{\theta}^{\beta}]}}
+\sim \mathcal{N}(0,1).
+\]
+
+### 3.2 Equity as a Non-Inferiority Problem
+
+The \(\delta\)-equity criterion
+
+\[
+\max_{A,B \in \text{Ancestries}}
+|\text{AUC}_A - \text{AUC}_B|
+\leq \delta
+\]
+
+can be reformulated as a one-sided non-inferiority test:
+
+\[
+H_0:
+\text{AUC}_{\text{disadvantaged}}
+<
+\text{AUC}_{\text{advantaged}} - \delta,
+\]
+
+\[
+H_1:
+\text{AUC}_{\text{disadvantaged}}
+\geq
+\text{AUC}_{\text{advantaged}} - \delta.
+\]
+
+The test statistic is
+
+\[
+Z_{\text{NI}}
+=
+\frac{
+(\text{AUC}_1 - \text{AUC}_2) - \delta
+}{
+\operatorname{SE}(\text{AUC}_1 - \text{AUC}_2)
+}.
+\]
+
+We reject \(H_0\) and conclude that equity holds if
+
+\[
+Z_{\text{NI}} < -z_{1-\alpha}^{\text{one-sided}}.
+\]
+
+For a two-sided \(0.05\) procedure, use \(\alpha = 0.025\) one-sided. Non-significance alone does not imply equivalence; the non-inferiority formulation is therefore mathematically cleaner and more defensible.
+
+### 3.3 Delta Method Alternative
+
+If \(\theta = g(\boldsymbol{\pi})\), where \(\boldsymbol{\pi}\) is the vector of confusion-matrix probabilities, then
+
+\[
+\operatorname{Var}[\hat{\theta}]
+\approx
+\nabla g(\hat{\boldsymbol{\pi}})^{\mathsf{T}}
+\Sigma_{\boldsymbol{\pi}}
+\nabla g(\hat{\boldsymbol{\pi}}),
+\]
+
+where \(\Sigma_{\boldsymbol{\pi}}\) is the covariance matrix of \(\hat{\boldsymbol{\pi}}\). This approach can address computational and mapping limitations of DeLong’s method, especially when AUC is embedded in a larger risk–benefit decision model.
+
+---
+
+## 4. Stratified FDR Control: Theory and Cross-Ancestry Extension
+
+### 4.1 Within-Stratum Benjamini–Hochberg
+
+For each ancestry stratum \(a\) with \(m_a\) tests and p-values \(p_{a,1},\dots,p_{a,m_a}\), the Benjamini–Hochberg procedure at level \(\alpha\) controls the FDR within that stratum:
+
+\[
+\text{FDR}_a
+=
+\mathbb{E}
+\left[
+\frac{
+|\mathcal{R}_a \cap \mathcal{H}_{0,a}|
+}{
+|\mathcal{R}_a| \vee 1
+}
+\right]
+\leq \alpha,
+\]
+
+where \(\mathcal{R}_a\) is the rejection set. The BH procedure is valid under positive regression dependence on subsets, a condition that is typically satisfied within a single ancestry stratum because of local LD structure.
+
+### 4.2 Cross-Ancestry FDR and Harmonic Mean P-Values
+
+For trans-ancestry meta-analysis, the harmonic mean p-value is
+
+\[
+\text{HMP}
+=
+\frac{k}{\sum_{a=1}^{k} \frac{1}{p_a}}.
+\]
+
+The HMP is robust to zero p-values. However, the earlier assertion that \(k \cdot \text{HMP} \sim \text{Uniform}(0,1)\) asymptotically is not generally valid except in special cases such as \(k=1\). Under the null, calibration requires the exact null distribution of the HMP or a permutation/empirical null. The HMP should therefore be used with a correctly calibrated null distribution before applying BH across variants.
+
+### 4.3 Independent Hypothesis Weighting
+
+When ancestry-specific heritability, MAF distribution, or functional annotation is informative about the prior probability of association, independent hypothesis weighting can increase power relative to BH-within-strata while maintaining FDR control. This is directly relevant to equitable genomics because it permits underpowered ancestries to be up-weighted without inflating the global false discovery rate.
+
+---
+
+## 5. Economic Model: Equity-Adjusted ICER
+
+### 5.1 Formal Definition
+
+Let \(C\) and \(Q\) be cost and QALYs, and let \(w_A\) be the equity weight for ancestry \(A\). The equity-adjusted ICER is
+
+\[
+\text{ICER}_{\text{equity}}
+=
+\frac{C - C_0}{
+\sum_{A} w_A Q_A - Q_0
+}.
+\]
+
+For interpretability, either normalize \(\sum_A w_A = 1\) or explicitly state the QALY scaling convention.
+
+### 5.2 Weight Specification
+
+Three common specifications are:
+
+**Proportional (inverse population size):**
+
+\[
+w_A
+=
+\frac{N_{\text{total}}}{k \cdot n_A}.
+\]
+
+**Disparity-based:**
+
+\[
+w_A
+=
+\frac{\max_B h_B}{h_A},
+\]
+
+where \(h_A\) is baseline health in ancestry \(A\).
+
+**Atkinson social welfare:**
+
+\[
+w_A
+=
+\left(
+\frac{\bar{h}}{h_A}
+\right)^{\epsilon},
+\]
+
+where \(\epsilon\) is the inequality aversion parameter. Because \(\epsilon\) is ethically and politically charged, results should be reported as a function of \(\epsilon\) in a sensitivity analysis. If a point estimate is required, it can be calibrated from stated-preference studies; empirical work suggests non-health benefits are valued at approximately \(0.730\)–\(0.756\) QALY per test, implying that omitting these benefits underestimates genomic test value by \(25\)–\(30\%\).
+
+### 5.3 Incentive Compatibility as a Mechanism Design Result
+
+Consider developers with cost function \(C(q)\), where \(q \in [0,1]\) is equity quality. Assume \(C\) is nondecreasing. The step-function pricing rule is
+
+\[
+R(q)
+=
+R_{\text{base}}
+\left(
+1
++
+\alpha \mathbf{1}\{q \geq q_1\}
++
+\beta \mathbf{1}\{q \geq q_2\}
++
+\gamma \mathbf{1}\{q \geq q_3\}
+\right).
+\]
+
+**Proposition 5.1 (Incentive Compatibility).** If
+
+\[
+\alpha R_{\text{base}} \geq C(q_1) - C(0),
+\]
+
+\[
+\beta R_{\text{base}} \geq C(q_2) - C(q_1),
+\]
+
+\[
+\gamma R_{\text{base}} \geq C(q_3) - C(q_2),
+\]
+
+then \(q^* = q_3\) is globally optimal for the developer.
+
+**Proof.** The developer maximizes
+
+\[
+\Pi(q) = R(q) - C(q).
+\]
+
+The conditions imply
+
+\[
+\Pi(q_1) \geq \Pi(0),
+\qquad
+\Pi(q_2) \geq \Pi(q_1),
+\qquad
+\Pi(q_3) \geq \Pi(q_2).
+\]
+
+Because \(C\) is nondecreasing, for any \(q \in (q_i, q_{i+1})\), we have \(R(q) = R(q_i)\) and \(C(q) \geq C(q_i)\), so \(\Pi(q) \leq \Pi(q_i)\). Hence \(\Pi(q_3) \geq \Pi(q)\) for all \(q \in [0,1]\). ∎
+
+If \(C\) is not monotone, the three incremental conditions are necessary but not sufficient. In that case, the stronger global conditions are
+
+\[
+\Pi(q_3)
+\geq
+\max\{\Pi(0), \Pi(q_1), \Pi(q_2)\},
+\]
+
+together with interval checks on each \(q \in (q_i, q_{i+1})\).
+
+---
+
+## 6. Power Analysis: Corrected AUC-Based Sample Size
+
+### 6.1 Corrected Formula with Correlation
+
+The naive formula
+
+\[
+n
+\approx
+\frac{
+(z_{1-\alpha/2} + z_{1-\beta})^2
+(\sigma_1^2 + \sigma_2^2)
+}{
+\delta^2
+}
+\]
+
+assumes independent AUC estimates and equal variances. For correlated AUCs,
+
+\[
+\operatorname{Var}(\Delta \widehat{\text{AUC}})
+=
+\operatorname{Var}(\widehat{\text{AUC}}_1)
++
+\operatorname{Var}(\widehat{\text{AUC}}_2)
+-
+2\rho
+\sqrt{
+\operatorname{Var}(\widehat{\text{AUC}}_1)
+\operatorname{Var}(\widehat{\text{AUC}}_2)
+}.
+\]
+
+The required sample size is therefore
+
+\[
+n
+=
+\frac{
+(z_{1-\alpha/2} + z_{1-\beta})^2
+\operatorname{Var}(\Delta \widehat{\text{AUC}})
+}{
+\Delta^2
+}.
+\]
+
+For equal variances \(\sigma^2\) and correlation \(\rho\),
+
+\[
+n
+=
+\frac{
+2(z_{1-\alpha/2} + z_{1-\beta})^2
+\sigma^2(1-\rho)
+}{
+\Delta^2
+}.
+\]
+
+Strong inter-test correlation, e.g. \(\rho = 0.8\), can reduce required sample sizes by \(49\%\) for discrete outcomes and \(68\%\) for continuous outcomes relative to \(\rho = 0.3\). This is critical for equity studies comparing ancestry-specific PRS performance, where the same individuals contribute to both ancestry-specific AUC estimates.
+
+### 6.2 Hanley–McNeil Limitation
+
+The Hanley–McNeil approximation
+
+\[
+\operatorname{Var}(\widehat{\text{AUC}})
+\approx
+\frac{
+\text{AUC}(1-\text{AUC})
+}{
+\min(n_{\text{cases}}, n_{\text{controls}})
+}
+\]
+
+underestimates variance when AUC is near \(0.5\) or near \(1.0\), and when case/control ratios are extreme. Equity studies often operate in exactly this regime because disadvantaged ancestries frequently have smaller \(n_{\text{cases}}\). Therefore, the Hanley–McNeil-based sample sizes should be treated as lower bounds. When precision is critical, use the Obuchowski or DeLong exact variance.
+
+### 6.3 Minimal Detectable Effect
+
+For fixed sample size \(n\), the minimal detectable effect is
+
+\[
+\text{MDE}
+=
+(z_{1-\alpha/2} + z_{1-\beta})
+\sqrt{
+\frac{
+\operatorname{Var}(\Delta \widehat{\text{AUC}})
+}{
+n
+}
+}.
+\]
+
+This reframes power analysis as: given a biobank’s ancestry composition, what is the smallest AUC disparity that can be reliably detected?
+
+---
+
+## 7. Admixed Populations: Local Ancestry and Cross-Ancestry Models
+
+### 7.1 Local Ancestry-Aware LMM
+
+For an admixed individual \(i\) at SNP \(j\), let \(a_{ij} \in \{1,\dots,k\}\) be the local ancestry. The ancestry-specific effect model is
+
+\[
+y_i
+=
+\mu
++
+\sum_{a=1}^{k}
+\beta_{ja}
+\mathbf{1}\{a_{ij} = a\}
+g_{ij}
++
+\mathbf{z}_i^{\mathsf{T}}\boldsymbol{\gamma}
++
+\epsilon_i,
+\]
+
+where \(\beta_{ja}\) is the effect size of SNP \(j\) in ancestry \(a\). Tractor-Mix extends this to related individuals by incorporating a random effect with covariance matrix \(\mathbf{K}\), yielding a local-ancestry-informed LMM that produces well-calibrated association studies in admixed samples with high degrees of relatedness.
+
+### 7.2 Cross-Ancestry Genetic Correlation
+
+The Logica framework uses a bivariate linear mixed model:
+
+\[
+\begin{pmatrix}
+\mathbf{y}_1 \\
+\mathbf{y}_2
+\end{pmatrix}
+=
+\begin{pmatrix}
+\mathbf{X}_1 & \mathbf{0} \\
+\mathbf{0} & \mathbf{X}_2
+\end{pmatrix}
+\begin{pmatrix}
+\boldsymbol{\beta}_1 \\
+\boldsymbol{\beta}_2
+\end{pmatrix}
++
+\begin{pmatrix}
+\mathbf{g}_1 \\
+\mathbf{g}_2
+\end{pmatrix}
++
+\begin{pmatrix}
+\boldsymbol{\epsilon}_1 \\
+\boldsymbol{\epsilon}_2
+\end{pmatrix},
+\]
+
+with
+
+\[
+\begin{pmatrix}
+\mathbf{g}_1 \\
+\mathbf{g}_2
+\end{pmatrix}
+\sim
+\mathcal{N}
+\left(
+\mathbf{0},
+\begin{pmatrix}
+\sigma_{g_1}^2 \mathbf{K}_1 &
+\rho_g \sigma_{g_1}\sigma_{g_2} \mathbf{K}_{12} \\
+\rho_g \sigma_{g_1}\sigma_{g_2} \mathbf{K}_{12}^{\mathsf{T}} &
+\sigma_{g_2}^2 \mathbf{K}_2
+\end{pmatrix}
+\right).
+\]
+
+This explicitly models diverse LD patterns across ancestries and achieves \(2.23\)–\(4.13\times\) lower MSE for local genetic correlation estimation than method-of-moments approaches.
+
+### 7.3 Local Ancestry Estimation Error
+
+Local ancestry is typically estimated by methods such as RFMix, LAMP-LD, or MOSAIC. Estimation error propagates into \(\beta_{ja}\). If \(\hat{a}_{ij}\) is the estimated local ancestry and \(a_{ij}\) is the true local ancestry, then the fitted model uses
+
+\[
+\mathbf{1}\{\hat{a}_{ij} = a\}
+=
+\mathbf{1}\{a_{ij} = a\}
++
+e_{ij},
+\]
+
+where \(e_{ij}\) is a measurement error. Switch errors and phasing errors can bias ancestry-specific effect estimates by \(10\)–\(30\%\) in highly admixed samples, such as African Americans with recent admixture. This attenuation bias should be addressed by measurement-error correction, sensitivity analysis over local ancestry uncertainty, or simulation-based calibration. Without such corrections, ancestry-specific effect estimates may appear more precise than the underlying data warrant.
+
+# Appendices to the Theoretical Core
+
+## Appendix A: Notation and Standing Assumptions
+
+Let \(n\) denote sample size, \(m\) the number of SNPs, and \(k\) the number of ancestral populations. Vectors are column vectors unless transposed. Matrices are boldface.
+
+For the linear mixed model:
+\[
+\mathbf{y} \in \mathbb{R}^n,\qquad
+\mathbf{X} \in \mathbb{R}^{n \times p},\qquad
+\boldsymbol{\beta} \in \mathbb{R}^p,
+\]
+\[
+\mathbf{g} \sim \mathcal{N}(\mathbf{0}, \sigma_g^2 \mathbf{K}),\qquad
+\boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \sigma_e^2 \mathbf{I}_n),
+\]
+where \(\mathbf{K}\) is the \(n \times n\) genetic similarity matrix.
+
+For quality control:
+\[
+\theta \in \{0,1\}
+\]
+denotes true variant validity, with \(\theta=1\) valid and \(\theta=0\) invalid. The QC statistic is \(X\), and the threshold is \(\tau\). The rule fails a variant if \(X \leq \tau\).
+
+For equity metrics:
+\[
+\text{AUC} \in [0,1],\qquad
+\hat{\theta} = \widehat{\text{AUC}},\qquad
+\delta \geq 0
+\]
+is the equity tolerance. Ancestry indices are \(A,B \in \{1,\dots,k\}\).
+
+For economics:
+\[
+C = \text{cost},\qquad
+Q = \text{QALYs},\qquad
+w_A = \text{equity weight for ancestry } A.
+\]
+
+Standing assumptions unless otherwise stated:
+1. \(\mathbf{K}\) is symmetric positive semidefinite.
+2. \(\mathbf{U}\) is orthogonal: \(\mathbf{U}^{\mathsf{T}}\mathbf{U} = \mathbf{I}\).
+3. Costs \(C(q)\) are nondecreasing in equity quality \(q\).
+4. P-values are valid under their respective null hypotheses.
+5. Local ancestry estimates are available for all admixed individuals.
+
+---
+
+## Appendix B: Spectral LMM — Detailed Derivations and Complexity
+
+### B.1 Marginal Covariance and Rotation
+
+The marginal model is
+\[
+\mathbf{y} \sim \mathcal{N}(\mathbf{X}\boldsymbol{\beta}, \mathbf{V}),
+\qquad
+\mathbf{V} = \sigma_g^2 \mathbf{K} + \sigma_e^2 \mathbf{I}_n.
+\]
+
+Let
+\[
+\mathbf{K} = \mathbf{U} \mathbf{S} \mathbf{U}^{\mathsf{T}},
+\qquad
+\mathbf{S} = \operatorname{diag}(s_1,\dots,s_n).
+\]
+Define rotated quantities:
+\[
+\tilde{\mathbf{y}} = \mathbf{U}^{\mathsf{T}}\mathbf{y},
+\qquad
+\tilde{\mathbf{X}} = \mathbf{U}^{\mathsf{T}}\mathbf{X},
+\qquad
+\tilde{\mathbf{g}} = \mathbf{U}^{\mathsf{T}}\mathbf{g},
+\qquad
+\tilde{\boldsymbol{\epsilon}} = \mathbf{U}^{\mathsf{T}}\boldsymbol{\epsilon}.
+\]
+Then
+\[
+\tilde{\mathbf{g}} \sim \mathcal{N}(\mathbf{0}, \sigma_g^2 \mathbf{S}),
+\qquad
+\tilde{\boldsymbol{\epsilon}} \sim \mathcal{N}(\mathbf{0}, \sigma_e^2 \mathbf{I}_n).
+\]
+Hence the rotated observations are independent:
+\[
+\tilde{y}_i \sim \mathcal{N}\left(\tilde{\mathbf{X}}_{i,\cdot}\boldsymbol{\beta}, \sigma_g^2 s_i + \sigma_e^2\right).
+\]
+
+### B.2 Profile Likelihood
+
+Let
+\[
+\delta = \frac{\sigma_e^2}{\sigma_g^2}.
+\]
+Then
+\[
+\operatorname{Var}(\tilde{y}_i) = \sigma_g^2 (s_i + \delta).
+\]
+The log-likelihood is
+\[
+LL(\boldsymbol{\beta}, \sigma_g^2, \delta)
+=
+-\frac{1}{2}
+\left[
+n\log(2\pi)
++
+n\log \sigma_g^2
++
+\sum_{i=1}^{n}\log(s_i+\delta)
++
+\frac{1}{\sigma_g^2}
+\sum_{i=1}^{n}
+\frac{(\tilde{y}_i - \tilde{\mathbf{X}}_{i,\cdot}\boldsymbol{\beta})^2}{s_i+\delta}
+\right].
+\]
+
+For fixed \(\delta\), the MLE for \(\boldsymbol{\beta}\) is
+\[
+\hat{\boldsymbol{\beta}}(\delta)
+=
+\left[
+\sum_{i=1}^{n}
+\frac{1}{s_i+\delta}
+\tilde{\mathbf{X}}_{i,\cdot}^{\mathsf{T}}
+\tilde{\mathbf{X}}_{i,\cdot}
+\right]^{-1}
+\left[
+\sum_{i=1}^{n}
+\frac{1}{s_i+\delta}
+\tilde{\mathbf{X}}_{i,\cdot}^{\mathsf{T}}
+\tilde{y}_i
+\right].
+\]
+The MLE for \(\sigma_g^2\) is
+\[
+\hat{\sigma}_g^2(\delta)
+=
+\frac{1}{n}
+\sum_{i=1}^{n}
+\frac{
+(\tilde{y}_i - \tilde{\mathbf{X}}_{i,\cdot}\hat{\boldsymbol{\beta}}(\delta))^2
+}{
+s_i+\delta
+}.
+\]
+Substituting these into \(LL\) gives the profile log-likelihood as a function of \(\delta\) alone.
+
+### B.3 Complexity Correction
+
+The standard LMM requires \(O(n^3 m)\) time because \(\mathbf{V}^{-1}\) must be recomputed or updated per SNP.
+
+For the spectral LMM:
+1. One-time eigendecomposition: \(O(n^3)\).
+2. Rotation of the full genotype matrix \(\mathbf{G} \in \mathbb{R}^{n \times m}\): \(O(n^2 m)\).
+3. Per-SNP score test and variance update in the diagonalized space: \(O(n)\).
+4. Summing over \(m\) SNPs: \(O(nm)\).
+
+Therefore the total time complexity is
+\[
+T(n,m)
+=
+O(n^3) + O(n^2 m) + O(nm)
+=
+O(n^3 + n^2 m).
+\]
+The per-SNP cost is \(O(n)\) only after the genotype matrix has been rotated. The speedup over the standard \(O(n^3 m)\) remains of order \(n\) when \(m \gg n\):
+\[
+\frac{O(n^3 m)}{O(n^3 + n^2 m)}
+=
+O(n).
+\]
+
+If \(\mathbf{K}\) admits a low-rank approximation with effective rank
+\[
+r_{\text{eff}}
+=
+\frac{\left(\sum_{i=1}^{n} s_i\right)^2}{\sum_{i=1}^{n} s_i^2},
+\]
+then the per-SNP cost reduces to \(O(n r_{\text{eff}})\), giving
+\[
+T(n,m)
+=
+O(n^3) + O(n m r_{\text{eff}}).
+\]
+For biobank-scale \(n\), randomized SVD or Bayesian approximations should be used to avoid explicit full eigendecomposition. Their numerical error must be propagated into downstream inference.
+
+---
+
+## Appendix C: Decision-Theoretic Ancestry-Specific QC
+
+### C.1 Conditional Error Rates
+
+For population \(i\), define
+\[
+F_i^1(x) = P(X \leq x \mid \theta=1, \text{pop } i),
+\qquad
+F_i^0(x) = P(X \leq x \mid \theta=0, \text{pop } i).
+\]
+With threshold \(\tau\), the type I error is
+\[
+\alpha_i(\tau) = P(X \leq \tau \mid \theta=1, \text{pop } i) = F_i^1(\tau),
+\]
+and the type II error is
+\[
+\beta_i(\tau) = P(X > \tau \mid \theta=0, \text{pop } i) = 1 - F_i^0(\tau).
+\]
+Let \(c_\alpha\) and \(c_\beta\) be the relative costs. The population-specific loss is
+\[
+L_i(\tau) = c_\alpha \alpha_i(\tau) + c_\beta \beta_i(\tau).
+\]
+For weights \(w_i > 0\), the total loss is
+\[
+L(\tau_1,\dots,\tau_k)
+=
+\sum_{i=1}^{k} w_i L_i(\tau_i).
+\]
+
+### C.2 Proof of Theorem 2.1
+
+The first-order condition for each \(\tau_i\) is
+\[
+\frac{\partial L}{\partial \tau_i}
+=
+w_i
+\left[
+c_\alpha f_i^1(\tau_i)
+-
+c_\beta f_i^0(\tau_i)
+\right]
+=
+0,
+\]
+where \(f_i^1\) and \(f_i^0\) are the conditional densities. If the conditional distributions differ across populations, the solutions generally satisfy \(\tau_i^* \neq \tau_j^*\). If the conditional distributions are identical, the problem reduces to a single common threshold. Hence population-specific thresholds are optimal if and only if the QC statistic distributions differ across populations.
+
+### C.3 Multiple Testing Across Strata
+
+Selecting \(k\) thresholds introduces \(k\) tuning parameters. To avoid overfitting:
+1. Choose thresholds by cross-validation within each ancestry stratum or using held-out variants.
+2. Enforce global FDR control across strata using stratified BH, independent hypothesis weighting, or a hierarchical FDR procedure.
+
+Ancestry-specific QC is therefore a constrained multiple-testing problem, not a set of independent threshold choices.
+
+### C.4 Corrected MAF Calculation
+
+The column dimension must be preserved:
+\[
+\text{MAF}_j
+=
+\min\left(
+\frac{\sum_{i \in \mathcal{V}_j} g_{ij}}{2|\mathcal{V}_j|},
+\;
+1 - \frac{\sum_{i \in \mathcal{V}_j} g_{ij}}{2|\mathcal{V}_j|}
+\right),
+\]
+where \(\mathcal{V}_j = \{i : g_{ij} \geq 0\}\).
+
+---
+
+## Appendix D: DeLong Variance, Non-Inferiority, and Delta Method
+
+### D.1 Placement Values
+
+Let \(m\) be the number of cases and \(n\) the number of controls. Define
+\[
+V_{Ai}
+=
+\frac{1}{n}
+\sum_{j=1}^{n}
+\psi(a_i, b_j),
+\qquad
+V_{Bj}
+=
+\frac{1}{m}
+\sum_{i=1}^{m}
+\psi(a_i, b_j),
+\]
+where
+\[
+\psi(a,b)
+=
+\mathbf{1}\{a > b\}
++
+\frac{1}{2}\mathbf{1}\{a = b\}.
+\]
+The AUC estimate is
+\[
+\hat{\theta}
+=
+\frac{1}{mn}
+\sum_{i=1}^{m}\sum_{j=1}^{n}
+\psi(a_i,b_j).
+\]
+
+### D.2 Variance and Covariance
+
+DeLong’s variance estimator is
+\[
+\operatorname{Var}[\hat{\theta}]
+=
+\frac{\operatorname{Var}[V_A]}{m}
++
+\frac{\operatorname{Var}[V_B]}{n}.
+\]
+For two correlated AUCs,
+\[
+\operatorname{Var}[\hat{\theta}^{\alpha} - \hat{\theta}^{\beta}]
+=
+\operatorname{Var}[\hat{\theta}^{\alpha}]
++
+\operatorname{Var}[\hat{\theta}^{\beta}]
+-
+2\operatorname{Cov}[\hat{\theta}^{\alpha}, \hat{\theta}^{\beta}],
+\]
+with
+\[
+\operatorname{Cov}[\hat{\theta}^{\alpha}, \hat{\theta}^{\beta}]
+=
+\frac{\operatorname{Cov}[V_A^{\alpha}, V_A^{\beta}]}{m}
++
+\frac{\operatorname{Cov}[V_B^{\alpha}, V_B^{\beta}]}{n}.
+\]
+Under the null,
+\[
+Z
+=
+\frac{\hat{\theta}^{\alpha} - \hat{\theta}^{\beta}}
+{\sqrt{\operatorname{Var}[\hat{\theta}^{\alpha} - \hat{\theta}^{\beta}]}}
+\sim \mathcal{N}(0,1).
+\]
+
+### D.3 Non-Inferiority Test
+
+The \(\delta\)-equity criterion is
+\[
+\max_{A,B} |\text{AUC}_A - \text{AUC}_B| \leq \delta.
+\]
+Reformulate as
+\[
+H_0:
+\text{AUC}_{\text{disadvantaged}}
+<
+\text{AUC}_{\text{advantaged}} - \delta,
+\]
+\[
+H_1:
+\text{AUC}_{\text{disadvantaged}}
+\geq
+\text{AUC}_{\text{advantaged}} - \delta.
+\]
+The test statistic is
+\[
+Z_{\text{NI}}
+=
+\frac{
+(\text{AUC}_1 - \text{AUC}_2) - \delta
+}{
+\operatorname{SE}(\text{AUC}_1 - \text{AUC}_2)
+}.
+\]
+Reject \(H_0\) and conclude equity holds if
+\[
+Z_{\text{NI}} < -z_{1-\alpha}^{\text{one-sided}}.
+\]
+For a two-sided \(0.05\) procedure, use \(\alpha = 0.025\) one-sided.
+
+### D.4 Delta Method
+
+If \(\theta = g(\boldsymbol{\pi})\), where \(\boldsymbol{\pi}\) is the vector of confusion-matrix probabilities, then
+\[
+\operatorname{Var}[\hat{\theta}]
+\approx
+\nabla g(\hat{\boldsymbol{\pi}})^{\mathsf{T}}
+\Sigma_{\boldsymbol{\pi}}
+\nabla g(\hat{\boldsymbol{\pi}}).
+\]
+This can address computational and mapping limitations of DeLong’s method.
+
+---
+
+## Appendix E: Stratified FDR, HMP Calibration, and IHW
+
+### E.1 Within-Stratum BH
+
+For ancestry stratum \(a\) with \(m_a\) tests, the BH procedure at level \(\alpha\) controls
+\[
+\text{FDR}_a
+=
+\mathbb{E}
+\left[
+\frac{
+|\mathcal{R}_a \cap \mathcal{H}_{0,a}|
+}{
+|\mathcal{R}_a| \vee 1
+}
+\right]
+\leq \alpha,
+\]
+provided the p-values satisfy positive regression dependence on subsets. Within a single ancestry stratum, local LD structure typically induces this condition.
+
+### E.2 Harmonic Mean P-Values
+
+The harmonic mean p-value is
+\[
+\text{HMP}
+=
+\frac{k}{\sum_{a=1}^{k} \frac{1}{p_a}}.
+\]
+The claim \(k \cdot \text{HMP} \sim \text{Uniform}(0,1)\) asymptotically is not generally valid except for special cases such as \(k=1\). Under the null, calibration requires the exact null distribution of the HMP or a permutation/empirical null.
+
+Permutation calibration:
+1. Generate \(B\) permutation replicates of the ancestry labels.
+2. Recompute the HMP for each replicate.
+3. Estimate the null distribution \(\hat{F}_{\text{HMP}}\).
+4. Compute calibrated p-values as
+\[
+p_{\text{cal}}
+=
+\frac{1 + \#\{b : \text{HMP}_b \leq \text{HMP}_{\text{obs}}\}}{B+1}.
+\]
+
+### E.3 Independent Hypothesis Weighting
+
+When ancestry-specific heritability, MAF distribution, or functional annotation is informative about the prior probability of association, independent hypothesis weighting can increase power relative to BH-within-strata while maintaining FDR control. This permits underpowered ancestries to be up-weighted without inflating the global false discovery rate.
+
+---
+
+## Appendix F: Equity-Adjusted ICER and Incentive Compatibility
+
+### F.1 Equity-Adjusted ICER
+
+Let \(C\) and \(Q\) be cost and QALYs. The equity-adjusted ICER is
+\[
+\text{ICER}_{\text{equity}}
+=
+\frac{C - C_0}{
+\sum_{A} w_A Q_A - Q_0
+}.
+\]
+For interpretability, either normalize \(\sum_A w_A = 1\) or explicitly state the QALY scaling convention.
+
+### F.2 Weight Specifications
+
+Proportional:
+\[
+w_A
+=
+\frac{N_{\text{total}}}{k \cdot n_A}.
+\]
+Disparity-based:
+\[
+w_A
+=
+\frac{\max_B h_B}{h_A}.
+\]
+Atkinson:
+\[
+w_A
+=
+\left(
+\frac{\bar{h}}{h_A}
+\right)^{\epsilon}.
+\]
+Because \(\epsilon\) is ethically charged, report results as a function of \(\epsilon\). Empirical work suggests non-health benefits are valued at approximately \(0.730\)–\(0.756\) QALY per test.
+
+### F.3 Incentive Compatibility
+
+Assume \(C(q)\) is nondecreasing. The pricing rule is
+\[
+R(q)
+=
+R_{\text{base}}
+\left(
+1
++
+\alpha \mathbf{1}\{q \geq q_1\}
++
+\beta \mathbf{1}\{q \geq q_2\}
++
+\gamma \mathbf{1}\{q \geq q_3\}
+\right).
+\]
+If
+\[
+\alpha R_{\text{base}} \geq C(q_1) - C(0),
+\]
+\[
+\beta R_{\text{base}} \geq C(q_2) - C(q_1),
+\]
+\[
+\gamma R_{\text{base}} \geq C(q_3) - C(q_2),
+\]
+then \(q^* = q_3\) is globally optimal.
+
+Proof:
+\[
+\Pi(q) = R(q) - C(q).
+\]
+The conditions imply
+\[
+\Pi(q_1) \geq \Pi(0),\quad
+\Pi(q_2) \geq \Pi(q_1),\quad
+\Pi(q_3) \geq \Pi(q_2).
+\]
+Because \(C\) is nondecreasing, for \(q \in (q_i, q_{i+1})\),
+\[
+R(q) = R(q_i),\qquad
+C(q) \geq C(q_i),
+\]
+so \(\Pi(q) \leq \Pi(q_i)\). Hence \(\Pi(q_3) \geq \Pi(q)\) for all \(q \in [0,1]\).
+
+If \(C\) is not monotone, the stronger global conditions are
+\[
+\Pi(q_3)
+\geq
+\max\{\Pi(0), \Pi(q_1), \Pi(q_2)\},
+\]
+together with interval checks.
+
+---
+
+## Appendix G: AUC Power Analysis
+
+### G.1 Variance of AUC Difference
+
+For correlated AUCs,
+\[
+\operatorname{Var}(\Delta \widehat{\text{AUC}})
+=
+\operatorname{Var}(\widehat{\text{AUC}}_1)
++
+\operatorname{Var}(\widehat{\text{AUC}}_2)
+-
+2\rho
+\sqrt{
+\operatorname{Var}(\widehat{\text{AUC}}_1)
+\operatorname{Var}(\widehat{\text{AUC}}_2)
+}.
+\]
+The required sample size is
+\[
+n
+=
+\frac{
+(z_{1-\alpha/2} + z_{1-\beta})^2
+\operatorname{Var}(\Delta \widehat{\text{AUC}})
+}{
+\Delta^2
+}.
+\]
+For equal variances \(\sigma^2\) and correlation \(\rho\),
+\[
+n
+=
+\frac{
+2(z_{1-\alpha/2} + z_{1-\beta})^2
+\sigma^2(1-\rho)
+}{
+\Delta^2
+}.
+\]
+
+### G.2 Hanley–McNeil Limitation
+
+The Hanley–McNeil approximation is
+\[
+\operatorname{Var}(\widehat{\text{AUC}})
+\approx
+\frac{
+\text{AUC}(1-\text{AUC})
+}{
+\min(n_{\text{cases}}, n_{\text{controls}})
+}.
+\]
+It underestimates variance when AUC is near \(0.5\) or near \(1.0\), and when case/control ratios are extreme. Equity studies often operate in this regime. Therefore, Hanley–McNeil-based sample sizes should be treated as lower bounds. Use Obuchowski or DeLong exact variance when precision is critical.
+
+### G.3 Minimal Detectable Effect
+
+For fixed \(n\),
+\[
+\text{MDE}
+=
+(z_{1-\alpha/2} + z_{1-\beta})
+\sqrt{
+\frac{
+\operatorname{Var}(\Delta \widehat{\text{AUC}})
+}{
+n
+}
+}.
+\]
+
+---
+
+## Appendix H: Admixed Populations and Local Ancestry Error
+
+### H.1 Local Ancestry Model
+
+For admixed individual \(i\) at SNP \(j\), let \(a_{ij} \in \{1,\dots,k\}\) be the local ancestry. The ancestry-specific effect model is
+\[
+y_i
+=
+\mu
++
+\sum_{a=1}^{k}
+\beta_{ja}
+\mathbf{1}\{a_{ij} = a\}
+g_{ij}
++
+\mathbf{z}_i^{\mathsf{T}}\boldsymbol{\gamma}
++
+\epsilon_i.
+\]
+Tractor-Mix extends this to related individuals by incorporating a random effect with covariance \(\mathbf{K}\).
+
+### H.2 Cross-Ancestry Genetic Correlation
+
+The bivariate LMM is
+\[
+\begin{pmatrix}
+\mathbf{y}_1 \\
+\mathbf{y}_2
+\end{pmatrix}
+=
+\begin{pmatrix}
+\mathbf{X}_1 & \mathbf{0} \\
+\mathbf{0} & \mathbf{X}_2
+\end{pmatrix}
+\begin{pmatrix}
+\boldsymbol{\beta}_1 \\
+\boldsymbol{\beta}_2
+\end{pmatrix}
++
+\begin{pmatrix}
+\mathbf{g}_1 \\
+\mathbf{g}_2
+\end{pmatrix}
++
+\begin{pmatrix}
+\boldsymbol{\epsilon}_1 \\
+\boldsymbol{\epsilon}_2
+\end{pmatrix},
+\]
+with
+\[
+\begin{pmatrix}
+\mathbf{g}_1 \\
+\mathbf{g}_2
+\end{pmatrix}
+\sim
+\mathcal{N}
+\left(
+\mathbf{0},
+\begin{pmatrix}
+\sigma_{g_1}^2 \mathbf{K}_1 &
+\rho_g \sigma_{g_1}\sigma_{g_2} \mathbf{K}_{12} \\
+\rho_g \sigma_{g_1}\sigma_{g_2} \mathbf{K}_{12}^{\mathsf{T}} &
+\sigma_{g_2}^2 \mathbf{K}_2
+\end{pmatrix}
+\right).
+\]
+
+### H.3 Local Ancestry Estimation Error
+
+Let \(I = \mathbf{1}\{a_{ij}=a\}\) be the true indicator and \(\hat{I} = \mathbf{1}\{\hat{a}_{ij}=a\}\) the estimated indicator. Suppose
+\[
+\text{sensitivity} = se = P(\hat{I}=1 \mid I=1),
+\qquad
+\text{specificity} = sp = P(\hat{I}=0 \mid I=0).
+\]
+Let \(p = P(I=1)\). Then
+\[
+E[\hat{I}] = p\, se + (1-p)(1-sp),
+\]
+\[
+\operatorname{Var}(\hat{I}) = E[\hat{I}](1-E[\hat{I}]),
+\]
+\[
+\operatorname{Cov}(\hat{I}, I) = p(1-p)(se + sp - 1).
+\]
+If the true model is \(y = \beta I + \epsilon\) and the fitted model uses \(\hat{I}\), the probability limit of the estimated coefficient is
+\[
+\hat{\beta}
+\to
+\beta
+\frac{\operatorname{Cov}(\hat{I}, I)}{\operatorname{Var}(\hat{I})}
+=
+\beta
+\frac{p(1-p)(se+sp-1)}
+{E[\hat{I}](1-E[\hat{I}])}.
+\]
+Thus switch errors and phasing errors attenuate or reverse ancestry-specific effect estimates. In highly admixed samples, bias of \(10\)–\(30\%\) is plausible. Correction requires measurement-error models, multiple imputation over local ancestry, or simulation-based calibration.
+
+---
+
+## Appendix I: Numerical Algorithms for Reproducibility
+
+### I.1 Ancestry-Specific MAF
+
+```python
+valid_mask = geno_ancestry >= 0
+n_valid = np.sum(valid_mask, axis=0)
+allele_sum = np.sum(np.where(valid_mask, geno_ancestry, 0), axis=0)
+maf = allele_sum / (2 * n_valid)
+maf = np.minimum(maf, 1 - maf)
+```
+
+### I.2 DeLong Variance and Non-Inferiority
+
+```python
+def delong_auc(y_true, y_score):
+    # returns auc, var, v_a, v_b
+    ...
+```
+
+```python
+def non_inferiority_z(auc1, auc2, var1, var2, cov, delta):
+    var_diff = var1 + var2 - 2 * cov
+    z = ((auc1 - auc2) - delta) / np.sqrt(var_diff)
+    return z
+```
+
+### I.3 HMP Permutation Calibration
+
+```python
+def hmp(pvals):
+    return len(pvals) / np.sum(1.0 / pvals)
+
+def calibrated_hmp(pvals, B=10000):
+    obs = hmp(pvals)
+    null = []
+    for _ in range(B):
+        perm = np.random.permutation(pvals)
+        null.append(hmp(perm))
+    return (1 + np.sum(np.array(null) <= obs)) / (B + 1)
+```
+
+### I.4 Equity-Adjusted ICER Sensitivity
+
+```python
+def icer_equity(cost, qaly, weights, cost0, qaly0):
+    return (cost - cost0) / (np.sum(weights * qaly) - qaly0)
+```
+
+### I.5 Local Ancestry Error Simulation
+
+```python
+def simulate_ancestry_error(true_anc, se, sp):
+    obs = np.where(true_anc == 1,
+                   np.random.binomial(1, se),
+                   np.random.binomial(1, 1 - sp))
+    return obs
+```
+
+---
+
+## Appendix J: Sensitivity Analysis Protocols
+
+### J.1 Equity Tolerance \(\delta\)
+
+Report non-inferiority conclusions for
+\[
+\delta \in \{0.01, 0.02, 0.05, 0.10\}.
+\]
+For each \(\delta\), report \(Z_{\text{NI}}\) and the corresponding one-sided p-value.
+
+### J.2 Atkinson Inequality Aversion \(\epsilon\)
+
+Report ICER\(_{\text{equity}}\) for
+\[
+\epsilon \in \{0, 0.5, 1, 2, 4\}.
+\]
+Plot ICER\(_{\text{equity}}\) as a function of \(\epsilon\). Identify the threshold \(\epsilon\) at which the intervention ceases to be cost-effective.
+
+### J.3 AUC Correlation \(\rho\)
+
+Report required sample sizes for
+\[
+\rho \in \{0.0, 0.2, 0.4, 0.6, 0.8\}.
+\]
+Use the corrected variance formula from Appendix G.
+
+### J.4 Local Ancestry Error
+
+For sensitivity \(se\) and specificity \(sp\), report bias in \(\hat{\beta}_{ja}\) using
+\[
+\text{bias factor}
+=
+\frac{p(1-p)(se+sp-1)}
+{E[\hat{I}](1-E[\hat{I}])}.
+\]
+Simulate \(se, sp \in \{0.90, 0.95, 0.99\}\) and report the range of attenuation.
+
+### J.5 QC Thresholds
+
+For each ancestry stratum, report:
+1. Optimal \(\tau_i^*\) under cross-validation.
+2. Global FDR after stratified BH.
+3. Number of variants retained per stratum.
+4. Sensitivity of results to \(c_\alpha / c_\beta \in \{0.1, 1, 10\}\).
+
+# ASCII Diagrams for the Theoretical Core
+
+Below are detailed ASCII diagrams for every major component. Each diagram is self-contained and uses consistent notation from the appendices.
+
+---
+
+## Diagram 1: Overall Framework Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                    EQUITABLE GENOMIC MEDICINE — THEORETICAL CORE                    │
+│                                                                                     │
+│  INPUTS                    STATISTICAL CORE                  OUTPUTS                │
+│  ──────                    ────────────────                  ───────                │
+│                                                                                     │
+│  ┌──────────┐         ┌─────────────────────┐         ┌──────────────────┐          │
+│  │ Genotypes│         │  1. SPECTRAL LMM    │         │  Association     │          │
+│  │  G (n×m) │────────▶│     O(n³ + n²m)     │────────▶│  p-values        │          │
+│  └──────────┘         └─────────────────────┘         └──────────────────┘          │
+│       │                        │                              │                     │
+│       │                        │                              │                     │
+│       ▼                        ▼                              ▼                     │
+│  ┌──────────┐         ┌─────────────────────┐         ┌──────────────────┐          │
+│  │Ancestry  │         │  2. ANCESTRY QC     │         │  Clean variant   │          │
+│  │ Labels   │────────▶│  Decision-theoretic │────────▶│  set per stratum │          │
+│  │  A ∈ 1..k│         │  τ*ᵢ per population │         └──────────────────┘          │
+│  └──────────┘         └─────────────────────┘                  │                     │
+│       │                        │                              │                     │
+│       │                        │                              │                     │
+│       ▼                        ▼                              ▼                     │
+│  ┌──────────┐         ┌─────────────────────┐         ┌──────────────────┐          │
+│  │ Phenotypes│        │  4. STRATIFIED FDR  │         │  Significant     │          │
+│  │  y (n×1) │────────▶│  BH within stratum  │────────▶│  variants        │          │
+│  └──────────┘         │  HMP across strata  │         │  by ancestry     │          │
+│       │                │  IHW up-weighting   │         └──────────────────┘          │
+│       │                └─────────────────────┘                  │                     │
+│       │                        │                              │                     │
+│       ▼                        ▼                              ▼                     │
+│  ┌──────────┐         ┌─────────────────────┐         ┌──────────────────┐          │
+│  │ PRS /    │         │  3. EQUITY METRICS  │         │  δ-equity        │          │
+│  │ Risk     │────────▶│  DeLong AUC var     │────────▶│  verdict         │          │
+│  │ Scores   │         │  Non-inferiority Z  │         │  (pass / fail)   │          │
+│  └──────────┘         └─────────────────────┘         └──────────────────┘          │
+│       │                        │                              │                     │
+│       │                        │                              │                     │
+│       ▼                        ▼                              ▼                     │
+│  ┌──────────┐         ┌─────────────────────┐         ┌──────────────────┐          │
+│  │ Costs C  │         │  5. ECONOMIC MODEL  │         │  Equity-adjusted │          │
+│  │ QALYs Q  │────────▶│  ICER_equity        │────────▶│  ICER            │          │
+│  │ Weights w│         │  Incentive compat.  │         │  reimbursement   │          │
+│  └──────────┘         └─────────────────────┘         └──────────────────┘          │
+│       │                        │                              │                     │
+│       │                        │                              │                     │
+│       ▼                        ▼                              ▼                     │
+│  ┌──────────┐         ┌─────────────────────┐         ┌──────────────────┐          │
+│  │ Admixed  │         │  7. LOCAL ANCESTRY  │         │  Ancestry-       │          │
+│  │ Samples  │────────▶│  Tractor-Mix LMM    │────────▶│  specific effect │          │
+│  │          │         │  Logica bivariate   │         │  sizes β_ja      │          │
+│  └──────────┘         └─────────────────────┘         └──────────────────┘          │
+│                                                                                     │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐    │
+│  │  6. POWER ANALYSIS  ──  Corrected AUC sample size with correlation ρ        │    │
+│  │                         Hanley–McNeil lower bounds; MDE                     │    │
+│  └─────────────────────────────────────────────────────────────────────────────┘    │
+│                                                                                     │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐    │
+│  │  SENSITIVITY LAYER  ──  δ, ε, ρ, se/sp, c_α/c_β, threshold τᵢ*             │    │
+│  └─────────────────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Diagram 2: Spectral LMM Pipeline
+
+```
+                    SPECTRAL LMM — COMPUTATIONAL PIPELINE
+                    ═══════════════════════════════════════
+
+  INPUT                    PREPROCESSING                 EIGENDECOMPOSITION
+  ─────                    ─────────────                 ──────────────────
+
+  ┌─────────┐              ┌─────────────┐               ┌──────────────────┐
+  │ y (n×1) │              │ Center y    │               │  K = U S Uᵀ      │
+  │ X (n×p) │─────────────▶│ Center X    │──────────────▶│                  │
+  │ G (n×m) │              │ Standardize │               │  U orthogonal    │
+  │ K (n×n) │              │ K           │               │  S = diag(s₁..sₙ)│
+  └─────────┘              └─────────────┘               └────────┬─────────┘
+                                                                   │
+                                                                   │ O(n³)
+                                                                   ▼
+  ROTATION                 ROTATED DATA                  ┌──────────────────┐
+  ────────                 ────────────                  │  ỹ = Uᵀy         │
+                                                         │  X̃ = UᵀX         │
+  ┌──────────────────┐     ┌──────────────────┐          │  G̃ = UᵀG         │
+  │ ỹ = Uᵀ y        │◀────│ Apply Uᵀ to all  │◀─────────│                  │
+  │ X̃ = Uᵀ X        │     │ data matrices    │          └──────────────────┘
+  │ G̃ = Uᵀ G        │     │                  │
+  └────────┬─────────┘     │ Cost: O(n²m)     │
+           │               └──────────────────┘
+           │
+           ▼
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │                    DIAGONALIZED MODEL                               │
+  │                                                                     │
+  │   ỹᵢ ~ N( X̃ᵢ· β , σ²_g (sᵢ + δ) )    for i = 1,...,n              │
+  │                                                                     │
+  │   where δ = σ²_e / σ²_g                                             │
+  │                                                                     │
+  │   KEY: observations are INDEPENDENT in rotated space                │
+  └─────────────────────────────────────────────────────────────────────┘
+           │
+           │
+           ▼
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │                    PER-SNP SCORE TEST                               │
+  │                                                                     │
+  │   For SNP j = 1,...,m:                                              │
+  │                                                                     │
+  │     1. Rotate genotype:  g̃ⱼ = Uᵀ gⱼ        O(n)                    │
+  │                                                                     │
+  │     2. Compute MLE:                                                 │
+  │                                                                     │
+  │            β̂(δ) = [ Σᵢ X̃ᵢᵀ X̃ᵢ / (sᵢ+δ) ]⁻¹                        │
+  │                    × [ Σᵢ X̃ᵢᵀ ỹᵢ / (sᵢ+δ) ]                       │
+  │                                                                     │
+  │     3. Variance components:                                         │
+  │                                                                     │
+  │            σ̂²_g(δ) = (1/n) Σᵢ (ỹᵢ - X̃ᵢβ̂)² / (sᵢ+δ)                │
+  │                                                                     │
+  │     4. Score statistic:                                             │
+  │                                                                     │
+  │            Zⱼ = g̃ⱼᵀ P ỹ / √(g̃ⱼᵀ P g̃ⱼ · σ̂²_g)                     │
+  │                                                                     │
+  │            where P = V⁻¹ - V⁻¹X(XᵀV⁻¹X)⁻¹XᵀV⁻¹                     │
+  │                                                                     │
+  │     Cost per SNP: O(n)                                              │
+  └─────────────────────────────────────────────────────────────────────┘
+           │
+           ▼
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │                    COMPLEXITY SUMMARY                               │
+  │                                                                     │
+  │   Standard LMM:    T(n,m) = O(n³ m)                                 │
+  │                                                                     │
+  │   Spectral LMM:    T(n,m) = O(n³) + O(n²m) + O(nm)                  │
+  │                            = O(n³ + n²m)                            │
+  │                                                                     │
+  │   Speedup:         T_std / T_spec ≈ n   (for m >> n)                │
+  │                                                                     │
+  │   Low-rank:        T(n,m) = O(n³) + O(n m r_eff)                    │
+  │                                                                     │
+  │                    r_eff = (Σsᵢ)² / Σsᵢ²                            │
+  └─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Diagram 3: Ancestry-Specific QC Decision Tree
+
+```
+                    ANCESTRY-SPECIFIC QC — DECISION THEORETIC FRAMEWORK
+                    ═══════════════════════════════════════════════════
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                         RAW GENOTYPE MATRIX                             │
+  │                              G (n × m)                                  │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    SPLIT BY ANCESTRY LABELS                             │
+  │                                                                         │
+  │   D₁ (pop 1)    D₂ (pop 2)    D₃ (pop 3)   ...   D_k (pop k)          │
+  │   n₁ samples    n₂ samples    n₃ samples         n_k samples           │
+  └──────┬──────────────┬──────────────┬─────────────────────┬──────────────┘
+         │              │              │                     │
+         ▼              ▼              ▼                     ▼
+  ┌───────────┐  ┌───────────┐  ┌───────────┐        ┌───────────┐
+  │ Stratum 1 │  │ Stratum 2 │  │ Stratum 3 │  ...   │ Stratum k │
+  │           │  │           │  │           │        │           │
+  │ Compute:  │  │ Compute:  │  │ Compute:  │        │ Compute:  │
+  │ MAF, miss,│  │ MAF, miss,│  │ MAF, miss,│        │ MAF, miss,│
+  │ HWE       │  │ HWE       │  │ HWE       │        │ HWE       │
+  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘        └─────┬─────┘
+        │              │              │                     │
+        ▼              ▼              ▼                     ▼
+  ┌───────────┐  ┌───────────┐  ┌───────────┐        ┌───────────┐
+  │ F₁¹, F₁⁰  │  │ F₂¹, F₂⁰  │  │ F₃¹, F₃⁰  │        │ F_k¹, F_k⁰│
+  │           │  │           │  │           │        │           │
+  │ Cond. CDF │  │ Cond. CDF │  │ Cond. CDF │        │ Cond. CDF │
+  │ valid /   │  │ valid /   │  │ valid /   │        │ valid /   │
+  │ invalid   │  │ invalid   │  │ invalid   │        │ invalid   │
+  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘        └─────┬─────┘
+        │              │              │                     │
+        └──────────────┴──────────────┴─────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    LOSS MINIMIZATION PER STRATUM                        │
+  │                                                                         │
+  │   Lᵢ(τ) = c_α · αᵢ(τ) + c_β · βᵢ(τ)                                    │
+  │                                                                         │
+  │   where:                                                                │
+  │       αᵢ(τ) = P(X ≤ τ | θ=1, pop i) = Fᵢ¹(τ)     [type I error]        │
+  │       βᵢ(τ) = P(X > τ | θ=0, pop i) = 1 - Fᵢ⁰(τ) [type II error]       │
+  │                                                                         │
+  │   Total loss:                                                           │
+  │                                                                         │
+  │       L(τ₁,...,τ_k) = Σᵢ wᵢ Lᵢ(τᵢ)                                     │
+  │                                                                         │
+  │   First-order condition:                                                │
+  │                                                                         │
+  │       ∂L/∂τᵢ = wᵢ [ c_α fᵢ¹(τᵢ) - c_β fᵢ⁰(τᵢ) ] = 0                  │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    OPTIMAL THRESHOLDS                                   │
+  │                                                                         │
+  │       τ₁* ≠ τ₂* ≠ ... ≠ τ_k*    (if Fᵢ¹ ≠ Fⱼ¹ or Fᵢ⁰ ≠ Fⱼ⁰)            │
+  │                                                                         │
+  │       τ₁* = τ₂* = ... = τ_k*    (if Fᵢ¹ = Fⱼ¹ and Fᵢ⁰ = Fⱼ⁰)            │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    CROSS-VALIDATION & FDR CONTROL                       │
+  │                                                                         │
+  │   1. K-fold CV within each stratum to select τᵢ*                        │
+  │   2. Held-out variants for validation                                   │
+  │   3. Stratified BH for global FDR                                       │
+  │   4. IHW for prior-informed weighting                                   │
+  │                                                                         │
+  │   Final output: variant set 𝒱ᵢ per ancestry with FDR ≤ α               │
+  └─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Diagram 4: MAF Calculation — Dimension Bug vs. Correct
+
+```
+              MAF CALCULATION — DIMENSION-LOSS BUG VS. CORRECT
+              ═══════════════════════════════════════════════
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    INPUT: GENOTYPE MATRIX                               │
+  │                                                                         │
+  │   geno_ancestry ∈ ℝ^(n × m)    values: 0, 1, 2, or -1 (missing)        │
+  │                                                                         │
+  │   n = samples,  m = variants                                            │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  ┌───────────────────────────────┐   ┌───────────────────────────────────┐
+  │       ❌ WRONG (buggy)        │   │       ✅ CORRECT (preserves m)    │
+  │                               │   │                                   │
+  │  valid = geno >= 0            │   │  valid_mask = geno >= 0           │
+  │  n_valid = np.sum(valid)      │   │  n_valid = np.sum(valid_mask,     │
+  │  # ^ scalar! collapses m      │   │                    axis=0)        │
+  │                               │   │  # ^ shape (m,)                   │
+  │  allele_sum = np.sum(         │   │                                   │
+  │      np.where(valid,          │   │  allele_sum = np.sum(             │
+  │               geno, 0))       │   │      np.where(valid_mask,         │
+  │  # ^ scalar                   │   │               geno, 0),           │
+  │                               │   │               axis=0)             │
+  │  maf = allele_sum             │   │  # ^ shape (m,)                   │
+  │        / (2 * n_valid)        │   │                                   │
+  │  # ^ scalar, not vector!      │   │  maf = allele_sum / (2*n_valid)   │
+  │                               │   │  maf = np.minimum(maf, 1 - maf)   │
+  │  Result: single number        │   │                                   │
+  │  for all variants —           │   │  Result: maf[j] for each variant  │
+  │  catastrophic loss of         │   │  Correct per-variant frequency    │
+  │  per-variant information      │   │                                   │
+  └───────────────────────────────┘   └───────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    MATHEMATICAL FORMULATION                             │
+  │                                                                         │
+  │   MAF_j = min(                                                          │
+  │              Σ_{i ∈ V_j} g_{ij} / (2 |V_j|) ,                           │
+  │              1 - Σ_{i ∈ V_j} g_{ij} / (2 |V_j|)                         │
+  │           )                                                             │
+  │                                                                         │
+  │   where V_j = { i : g_{ij} ≥ 0 }  (valid genotypes at SNP j)            │
+  │                                                                         │
+  │   KEY: V_j is VARIANT-SPECIFIC. Each variant has its own missingness    │
+  │        pattern. Collapsing to a global n_valid destroys this.           │
+  └─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Diagram 5: DeLong AUC Variance and Non-Inferiority
+
+```
+              DELONG AUC VARIANCE AND NON-INFERIORITY TESTING
+              ══════════════════════════════════════════════
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    DATA: CASES AND CONTROLS                             │
+  │                                                                         │
+  │   Cases:    a₁, a₂, ..., a_m      (m cases, scores from test)          │
+  │   Controls: b₁, b₂, ..., b_n      (n controls, scores from test)       │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    MANN–WHITNEY KERNEL                                  │
+  │                                                                         │
+  │   ψ(a,b) = 1{a > b} + ½ · 1{a = b}                                     │
+  │                                                                         │
+  │   Interpretation:                                                       │
+  │       ψ = 1   if case score > control score  (correct ordering)         │
+  │       ψ = ½   if case score = control score  (tie)                      │
+  │       ψ = 0   if case score < control score  (incorrect ordering)       │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    PLACEMENT VALUES                                     │
+  │                                                                         │
+  │   For each case i:                                                      │
+  │                                                                         │
+  │       V_{Ai} = (1/n) Σⱼ ψ(aᵢ, bⱼ)                                      │
+  │                                                                         │
+  │   For each control j:                                                   │
+  │                                                                         │
+  │       V_{Bj} = (1/m) Σᵢ ψ(aᵢ, bⱼ)                                      │
+  │                                                                         │
+  │   AUC estimate:                                                         │
+  │                                                                         │
+  │       θ̂ = (1/m) Σᵢ V_{Ai} = (1/n) Σⱼ V_{Bj}                            │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    VARIANCE COMPONENTS                                  │
+  │                                                                         │
+  │   Var[θ̂] = Var[V_A] / m  +  Var[V_B] / n                               │
+  │                                                                         │
+  │   where:                                                                │
+  │       Var[V_A] = sample variance of {V_{Ai}}                            │
+  │       Var[V_B] = sample variance of {V_{Bj}}                            │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    TWO CORRELATED AUCs                                  │
+  │                                                                         │
+  │   Ancestry α:  θ̂^α  with placement values V_A^α, V_B^α                  │
+  │   Ancestry β:  θ̂^β  with placement values V_A^β, V_B^β                  │
+  │                                                                         │
+  │   Difference:  Δθ̂ = θ̂^α - θ̂^β                                          │
+  │                                                                         │
+  │   Var[Δθ̂] = Var[θ̂^α] + Var[θ̂^β] - 2 Cov[θ̂^α, θ̂^β]                    │
+  │                                                                         │
+  │   Cov[θ̂^α, θ̂^β] = Cov[V_A^α, V_A^β] / m                               │
+  │                     + Cov[V_B^α, V_B^β] / n                             │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    Z STATISTIC AND TEST                                 │
+  │                                                                         │
+  │   Under H₀:                                                             │
+  │                                                                         │
+  │       Z = Δθ̂ / √Var[Δθ̂]  ~  N(0,1)                                     │
+  │                                                                         │
+  │   ┌─────────────────────────────────────────────────────────────────┐   │
+  │   │  STANDARD TEST          vs.       NON-INFERIORITY TEST          │   │
+  │   │                                                                 │   │
+  │   │  H₀: θ^α = θ^β                   H₀: θ_dis < θ_adv - δ         │   │
+  │   │  H₁: θ^α ≠ θ^β                   H₁: θ_dis ≥ θ_adv - δ         │   │
+  │   │                                                                 │   │
+  │   │  Z = (θ̂^α - θ̂^β) / SE           Z_NI = (Δθ̂ - δ) / SE          │   │
+  │   │                                                                 │   │
+  │   │  Reject if |Z| > z_{1-α/2}        Reject if Z_NI < -z_{1-α}    │   │
+  │   │                                   (one-sided)                   │   │
+  │   │                                                                 │   │
+  │   │  ✗ Non-significance               ✓ Equity holds if H₀ rejected │   │
+  │   │    ≠ equivalence                                                │   │
+  │   └─────────────────────────────────────────────────────────────────┘   │
+  └─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Diagram 6: Stratified FDR Control
+
+```
+              STRATIFIED FDR CONTROL — WITHIN AND ACROSS ANCESTRIES
+              ═══════════════════════════════════════════════════
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    P-VALUES BY ANCESTRY STRATUM                         │
+  │                                                                         │
+  │   Stratum 1        Stratum 2        Stratum 3        ...  Stratum k    │
+  │   p₁₁,...,p₁ₘ₁     p₂₁,...,p₂ₘ₂     p₃₁,...,p₃ₘ₃          p_k₁,...,p_kₘₖ│
+  │                                                                         │
+  │   m₁ tests         m₂ tests         m₃ tests              m_k tests     │
+  └──────┬──────────────────┬──────────────────┬──────────────────┬─────────┘
+         │                  │                  │                  │
+         ▼                  ▼                  ▼                  ▼
+  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐
+  │ BH at α     │   │ BH at α     │   │ BH at α     │   │ BH at α     │
+  │ within      │   │ within      │   │ within      │   │ within      │
+  │ stratum 1   │   │ stratum 2   │   │ stratum 3   │   │ stratum k   │
+  │             │   │             │   │             │   │             │
+  │ FDR₁ ≤ α    │   │ FDR₂ ≤ α    │   │ FDR₃ ≤ α    │   │ FDR_k ≤ α   │
+  └──────┬──────┘   └──────┬──────┘   └──────┬──────┘   └──────┬──────┘
+         │                  │                  │                  │
+         │                  │                  │                  │
+         └──────────────────┴──────────────────┴──────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    CROSS-ANCESTRY META-ANALYSIS                         │
+  │                                                                         │
+  │   Option A: Harmonic Mean P-value (HMP)                                 │
+  │                                                                         │
+  │       HMP = k / Σ_{a=1}^{k} (1/p_a)                                    │
+  │                                                                         │
+  │       ⚠ Calibration warning:                                            │
+  │         k · HMP ~ Uniform(0,1) is NOT generally valid                   │
+  │         except for special cases (e.g., k=1)                            │
+  │                                                                         │
+  │       ✓ Use permutation calibration:                                    │
+  │         1. Permute ancestry labels B times                              │
+  │         2. Recompute HMP for each permuted dataset                      │
+  │         3. p_cal = (1 + #{HMP_b ≤ HMP_obs}) / (B+1)                    │
+  │                                                                         │
+  │   Option B: Independent Hypothesis Weighting (IHW)                      │
+  │                                                                         │
+  │       - Covariate: ancestry-specific heritability, MAF, annotation      │
+  │       - Weight: w(p) ∝ prior probability of association                 │
+  │       - Up-weights underpowered ancestries                              │
+  │       - Maintains global FDR ≤ α                                        │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    FINAL REJECTION SET                                  │
+  │                                                                         │
+  │   R = R₁ ∪ R₂ ∪ ... ∪ R_k                                              │
+  │                                                                         │
+  │   Global FDR = E[ |R ∩ H₀| / (|R| ∨ 1) ] ≤ α                           │
+  └─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Diagram 7: Economic Model — Equity-Adjusted ICER
+
+```
+              EQUITY-ADJUSTED ICER AND INCENTIVE COMPATIBILITY
+              ═══════════════════════════════════════════════
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    BASE CASE vs. INTERVENTION                           │
+  │                                                                         │
+  │   Base:         C₀ (cost),  Q₀ (QALYs)                                  │
+  │   Intervention: C (cost),   Q_A (QALYs for ancestry A)                  │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    EQUITY WEIGHTS w_A                                   │
+  │                                                                         │
+  │   ┌─────────────────────────────────────────────────────────────────┐   │
+  │   │  PROPORTIONAL (inverse population size)                         │   │
+  │   │                                                                 │   │
+  │   │      w_A = N_total / (k · n_A)                                  │   │
+  │   │                                                                 │   │
+  │   │  Small populations get larger weights                           │   │
+  │   │  Interpretation: equal representation                            │   │
+  │   └─────────────────────────────────────────────────────────────────┘   │
+  │                                                                         │
+  │   ┌─────────────────────────────────────────────────────────────────┐   │
+  │   │  DISPARITY-BASED                                                │   │
+  │   │                                                                 │   │
+  │   │      w_A = max_B h_B / h_A                                      │   │
+  │   │                                                                 │   │
+  │   │  h_A = baseline health in ancestry A                            │   │
+  │   │  Interpretation: compensate for health deficits                 │   │
+  │   └─────────────────────────────────────────────────────────────────┘   │
+  │                                                                         │
+  │   ┌─────────────────────────────────────────────────────────────────┐   │
+  │   │  ATKINSON SOCIAL WELFARE                                        │   │
+  │   │                                                                 │   │
+  │   │      w_A = ( h̄ / h_A )^ε                                        │   │
+  │   │                                                                 │   │
+  │   │  ε = inequality aversion parameter                              │   │
+  │   │  ε = 0: no aversion (utilitarian)                               │   │
+  │   │  ε → ∞: maximum aversion (Rawlsian)                             │   │
+  │   │                                                                 │   │
+  │   │  ⚠ ε is ethically/politically charged — report as function      │   │
+  │   └─────────────────────────────────────────────────────────────────┘   │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    EQUITY-ADJUSTED ICER                                 │
+  │                                                                         │
+  │                    C - C₀                                               │
+  │   ICER_equity = ─────────────────────                                   │
+  │                  Σ_A w_A Q_A - Q₀                                       │
+  │                                                                         │
+  │   Normalize: Σ_A w_A = 1  (for interpretability)                        │
+  │                                                                         │
+  │   Decision rule:                                                        │
+  │       ICER_equity < λ  →  cost-effective                                │
+  │       ICER_equity ≥ λ  →  not cost-effective                            │
+  │                                                                         │
+  │   where λ = willingness-to-pay threshold per QALY                       │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    INCENTIVE COMPATIBILITY                              │
+  │                                                                         │
+  │   Developer cost: C(q),  q ∈ [0,1] = equity quality                     │
+  │   Pricing rule:                                                         │
+  │                                                                         │
+  │       R(q) = R_base ( 1 + α·1{q ≥ q₁} + β·1{q ≥ q₂} + γ·1{q ≥ q₃} )    │
+  │                                                                         │
+  │   Profit: Π(q) = R(q) - C(q)                                            │
+  │                                                                         │
+  │   ┌─────────────────────────────────────────────────────────────────┐   │
+  │   │  R(q)                                                           │   │
+  │   │   │                                                             │   │
+  │   │   │                              ┌─────────── R_base(1+α+β+γ)   │   │
+  │   │   │                              │                               │   │
+  │   │   │                  ┌───────────┘                               │   │
+  │   │   │                  │                                           │   │
+  │   │   │      ┌───────────┘                                           │   │
+  │   │   │      │                                                       │   │
+  │   │   │──────┘                                                       │   │
+  │   │   │                                                              │   │
+  │   │   └──┬──────┬──────┬──────┬───────────────────────────────────▶  │   │
+  │   │      0      q₁     q₂     q₃                                  q   │   │
+  │   │                                                              │   │
+  │   │  IC conditions:                                              │   │
+  │   │      α R_base ≥ C(q₁) - C(0)                                 │   │
+  │   │      β R_base ≥ C(q₂) - C(q₁)                                │   │
+  │   │      γ R_base ≥ C(q₃) - C(q₂)                                │   │
+  │   │                                                              │   │
+  │   │  → q* = q₃ is globally optimal (if C nondecreasing)          │   │
+  │   └─────────────────────────────────────────────────────────────────┘   │
+  └─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Diagram 8: Power Analysis — AUC-Based Sample Size
+
+```
+              AUC-BASED POWER ANALYSIS — CORRELATION AND LIMITATIONS
+              ═══════════════════════════════════════════════════
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    HYPOTHESIS                                           │
+  │                                                                         │
+  │   H₀: ΔAUC = AUC₁ - AUC₂ = 0                                            │
+  │   H₁: ΔAUC ≠ 0                                                          │
+  │                                                                         │
+  │   Two-sided level α, power 1-β                                          │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    VARIANCE OF AUC DIFFERENCE                           │
+  │                                                                         │
+  │   Independent AUCs:                                                     │
+  │       Var[ΔÂUC] = Var[ÂUC₁] + Var[ÂUC₂]                                 │
+  │                                                                         │
+  │   Correlated AUCs (same individuals):                                   │
+  │       Var[ΔÂUC] = Var[ÂUC₁] + Var[ÂUC₂]                                 │
+  │                   - 2ρ √(Var[ÂUC₁] · Var[ÂUC₂])                        │
+  │                                                                         │
+  │   Equal variances σ²:                                                   │
+  │       Var[ΔÂUC] = 2σ² (1 - ρ)                                           │
+  │                                                                         │
+  │   ┌─────────────────────────────────────────────────────────────────┐   │
+  │   │  ρ = 0.0  →  Var = 2σ²        (no correlation)                  │   │
+  │   │  ρ = 0.3  →  Var = 1.4σ²      (moderate)                        │   │
+  │   │  ρ = 0.5  →  Var = σ²         (half)                            │   │
+  │   │  ρ = 0.8  →  Var = 0.4σ²      (strong)                          │   │
+  │   │                                                                 │   │
+  │   │  Sample size reduction:                                         │   │
+  │   │      ρ = 0.8 vs ρ = 0.3  →  49% reduction (discrete)            │   │
+  │   │                          →  68% reduction (continuous)          │   │
+  │   └─────────────────────────────────────────────────────────────────┘   │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    SAMPLE SIZE FORMULA                                  │
+  │                                                                         │
+  │            (z_{1-α/2} + z_{1-β})² · Var[ΔÂUC]                           │
+  │   n = ─────────────────────────────────────                             │
+  │                        Δ²                                               │
+  │                                                                         │
+  │   Equal variances, correlation ρ:                                       │
+  │                                                                         │
+  │            2 (z_{1-α/2} + z_{1-β})² σ² (1-ρ)                            │
+  │   n = ─────────────────────────────────────                             │
+  │                        Δ²                                               │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    HANLEY–McNEIL APPROXIMATION                          │
+  │                                                                         │
+  │                       AUC(1-AUC)                                        │
+  │   Var[ÂUC] ≈ ─────────────────────────                                  │
+  │               min(n_cases, n_controls)                                  │
+  │                                                                         │
+  │   ┌─────────────────────────────────────────────────────────────────┐   │
+  │   │  ⚠ LIMITATIONS:                                                 │   │
+  │   │                                                                 │   │
+  │   │  1. UNDERESTIMATES variance when AUC near 0.5 or 1.0            │   │
+  │   │  2. UNDERESTIMATES variance for extreme case/control ratios     │   │
+  │   │  3. Equity studies often have small n_cases for disadvantaged   │   │
+  │   │     ancestries — exactly the problematic regime                 │   │
+  │   │                                                                 │   │
+  │   │  → Treat Hanley–McNeil sample sizes as LOWER BOUNDS             │   │
+  │   │  → Use Obuchowski or DeLong exact variance when precision       │   │
+  │   │    is critical                                                  │   │
+  │   └─────────────────────────────────────────────────────────────────┘   │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    MINIMAL DETECTABLE EFFECT                            │
+  │                                                                         │
+  │   For fixed n:                                                          │
+  │                                                                         │
+  │   MDE = (z_{1-α/2} + z_{1-β}) √( Var[ΔÂUC] / n )                       │
+  │                                                                         │
+  │   Reframing: "Given our biobank's ancestry composition, what is the     │
+  │   smallest AUC disparity we can reliably detect?"                       │
+  └─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Diagram 9: Admixed Populations — Local Ancestry and Error Propagation
+
+```
+              ADMIXED POPULATIONS — LOCAL ANCESTRY AND ERROR
+              ═══════════════════════════════════════════════
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    ADMIXED INDIVIDUAL                                   │
+  │                                                                         │
+  │   Chromosome pair:                                                      │
+  │                                                                         │
+  │   ────────A────────────B────────────A────────────C────────────          │
+  │   ────────B────────────A────────────C────────────A────────────          │
+  │                                                                         │
+  │   Local ancestry at SNP j:  a_{ij} ∈ {1,...,k}                          │
+  │                                                                         │
+  │   Switch points = recombination events                                  │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    ANCESTRY-SPECIFIC EFFECT MODEL                       │
+  │                                                                         │
+  │   y_i = μ + Σ_{a=1}^{k} β_{ja} · 1{a_{ij}=a} · g_{ij}                  │
+  │           + z_iᵀ γ + ε_i                                                │
+  │                                                                         │
+  │   where:                                                                │
+  │       β_{ja} = effect size of SNP j in ancestry a                       │
+  │       1{a_{ij}=a} = local ancestry indicator                            │
+  │       g_{ij} = genotype dosage                                          │
+  │       z_i = covariates                                                  │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    TRACTOR-MIX EXTENSION                                │
+  │                                                                         │
+  │   For related individuals:                                              │
+  │                                                                         │
+  │       y = Xβ + g + ε                                                    │
+  │                                                                         │
+  │       g ~ N(0, σ²_g K)                                                  │
+  │                                                                         │
+  │   where K incorporates both:                                            │
+  │       1. Genetic relatedness                                            │
+  │       2. Local ancestry similarity                                      │
+  │                                                                         │
+  │   → Well-calibrated association in admixed samples with relatedness     │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    LOCAL ANCESTRY ESTIMATION ERROR                      │
+  │                                                                         │
+  │   True indicator:     I = 1{a_{ij} = a}                                 │
+  │   Estimated indicator: Î = 1{â_{ij} = a}                                │
+  │                                                                         │
+  │   Measurement error:  Î = I + e_{ij}                                    │
+  │                                                                         │
+  │   Sensitivity: se = P(Î=1 | I=1)                                        │
+  │   Specificity: sp = P(Î=0 | I=0)                                        │
+  │   Prevalence:  p = P(I=1)                                               │
+  │                                                                         │
+  │   ┌─────────────────────────────────────────────────────────────────┐   │
+  │   │  ATTENUATION FORMULA                                            │   │
+  │   │                                                                 │   │
+  │   │  If true model:  y = β I + ε                                     │   │
+  │   │  Fitted model:   y = β̂ Î + ε                                     │   │
+  │   │                                                                 │   │
+  │   │            Cov(Î, I)         p(1-p)(se+sp-1)                     │   │
+  │   │  β̂ → β ─────────── = β ─────────────────────                    │   │
+  │   │            Var(Î)         E[Î](1-E[Î])                           │   │
+  │   │                                                                 │   │
+  │   │  where E[Î] = p·se + (1-p)(1-sp)                                │   │
+  │   │                                                                 │   │
+  │   │  Bias factor:  p(1-p)(se+sp-1) / (E[Î](1-E[Î]))                 │   │
+  │   └─────────────────────────────────────────────────────────────────┘   │
+  │                                                                         │
+  │   Numerical example:                                                    │
+  │   ┌─────────────────────────────────────────────────────────────────┐   │
+  │   │  se = 0.95, sp = 0.95, p = 0.5                                  │   │
+  │   │  E[Î] = 0.5·0.95 + 0.5·0.05 = 0.5                               │   │
+  │   │  Cov(Î,I) = 0.25·(0.95+0.95-1) = 0.225                          │   │
+  │   │  Var(Î) = 0.5·0.5 = 0.25                                        │   │
+  │   │  Bias factor = 0.225/0.25 = 0.90  →  10% attenuation            │   │
+  │   │                                                                 │   │
+  │   │  se = 0.90, sp = 0.90, p = 0.5                                  │   │
+  │   │  Bias factor = 0.20/0.25 = 0.80  →  20% attenuation             │   │
+  │   └─────────────────────────────────────────────────────────────────┘   │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    CORRECTION STRATEGIES                                │
+  │                                                                         │
+  │   1. Measurement-error models                                           │
+  │   2. Multiple imputation over local ancestry                            │
+  │   3. Simulation-based calibration                                       │
+  │   4. Sensitivity analysis over se, sp                                   │
+  │                                                                         │
+  │   Without correction: ancestry-specific effects may appear more         │
+  │   precise than data warrant                                             │
+  └─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Diagram 10: Cross-Ancestry Genetic Correlation (Logica)
+
+```
+              CROSS-ANCESTRY GENETIC CORRELATION — LOGICA FRAMEWORK
+              ═══════════════════════════════════════════════════════
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    BIVARIATE LINEAR MIXED MODEL                         │
+  │                                                                         │
+  │   ┌   ┐   ┌           ┐ ┌   ┐   ┌   ┐   ┌   ┐                           │
+  │   │ y₁│   │ X₁    0   │ │ β₁│   │ g₁│   │ ε₁│                           │
+  │   │   │ = │           │ │   │ + │   │ + │   │                           │
+  │   │ y₂│   │ 0     X₂  │ │ β₂│   │ g₂│   │ ε₂│                           │
+  │   └   ┘   └           ┘ └   ┘   └   ┘   └   ┘                           │
+  │                                                                         │
+  │   Random effects:                                                       │
+  │                                                                         │
+  │   ┌   ┐        ┌                                              ┐        │
+  │   │ g₁│        │ σ²_{g₁} K₁        ρ_g σ_{g₁}σ_{g₂} K₁₂       │        │
+  │   │   │ ~ N(0, │                                              │ )      │
+  │   │ g₂│        │ ρ_g σ_{g₁}σ_{g₂} K₁₂ᵀ    σ²_{g₂} K₂          │        │
+  │   └   ┘        └                                              ┘        │
+  │                                                                         │
+  │   where:                                                                │
+  │       K₁, K₂ = within-ancestry GRMs                                     │
+  │       K₁₂ = cross-ancestry GRM                                          │
+  │       ρ_g = cross-ancestry genetic correlation                          │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    LD PATTERN MODELING                                  │
+  │                                                                         │
+  │   Ancestry 1:          Ancestry 2:                                      │
+  │                                                                         │
+  │   SNP1 ──┐             SNP1 ──┐                                         │
+  │          │ LD₁                  │ LD₂                                   │
+  │   SNP2 ──┘             SNP2 ──┘                                         │
+  │                                                                         │
+  │   Different LD patterns → K₁ ≠ K₂                                       │
+  │                                                                         │
+  │   Logica explicitly models this via K₁₂                                 │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    PERFORMANCE COMPARISON                               │
+  │                                                                         │
+  │   ┌─────────────────────────────────────────────────────────────────┐   │
+  │   │  Method              MSE for local genetic correlation           │   │
+  │   │  ──────              ─────────────────────────────────           │   │
+  │   │  Method of moments   Baseline                                    │   │
+  │   │  Logica              2.23–4.13× lower MSE                        │   │
+  │   │                                                                 │   │
+  │   │  FDR control:        Logica 14–58% better than MoM               │   │
+  │   │  Power:              Logica 8–40% increased                      │   │
+  │   └─────────────────────────────────────────────────────────────────┘   │
+  └─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Diagram 11: Integration — From Data to Equity Verdict
+
+```
+              INTEGRATION — FROM RAW DATA TO EQUITY VERDICT
+              ═══════════════════════════════════════════════
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  STAGE 1: DATA PREPARATION                                              │
+  │  ─────────────────────────                                              │
+  │                                                                         │
+  │  Genotypes ──▶ Ancestry labels ──▶ Phenotypes ──▶ Covariates           │
+  │  G (n×m)       A ∈ {1..k}          y (n×1)        Z (n×q)              │
+  │                                                                         │
+  │  ──▶ Build GRM K (n×n)                                                  │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  STAGE 2: PER-ANCESTRY QC                                               │
+  │  ─────────────────────────                                              │
+  │                                                                         │
+  │  For each ancestry a = 1..k:                                            │
+  │      Compute MAF, missingness, HWE                                      │
+  │      Select optimal threshold τ_a* via CV                               │
+  │      Retain variants V_a with FDR ≤ α                                   │
+  │                                                                         │
+  │  Output: Clean variant sets {V_1, ..., V_k}                             │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  STAGE 3: ASSOCIATION TESTING                                           │
+  │  ────────────────────────────                                           │
+  │                                                                         │
+  │  Spectral LMM:  O(n³ + n²m)                                             │
+  │                                                                         │
+  │  For each SNP j and ancestry a:                                         │
+  │      Compute score statistic Z_{ja}                                     │
+  │      Compute p-value p_{ja}                                             │
+  │                                                                         │
+  │  Output: P-value matrix P (m × k)                                       │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  STAGE 4: STRATIFIED FDR                                                │
+  │  ───────────────────────                                                │
+  │                                                                         │
+  │  Within each ancestry: BH at α                                          │
+  │  Across ancestries: HMP + permutation calibration OR IHW               │
+  │                                                                         │
+  │  Output: Significant variants R_a per ancestry                          │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  STAGE 5: PRS CONSTRUCTION AND EQUITY EVALUATION                        │
+  │  ──────────────────────────────────────────────                         │
+  │                                                                         │
+  │  Build PRS for each ancestry using R_a                                  │
+  │                                                                         │
+  │  Compute AUC_a for each ancestry                                        │
+  │                                                                         │
+  │  DeLong variance: Var[ÂUC_a]                                            │
+  │                                                                         │
+  │  Non-inferiority test:                                                  │
+  │                                                                         │
+  │      Z_NI = (AUC_dis - AUC_adv + δ) / SE                                │
+  │                                                                         │
+  │  ┌─────────────────────────────────────────────────────────────────┐   │
+  │  │  EQUITY VERDICT:                                                │   │
+  │  │                                                                 │   │
+  │  │  Z_NI < -z_{1-α}  →  ✓ Equity holds (within δ)                  │   │
+  │  │  Z_NI ≥ -z_{1-α}  →  ✗ Equity not established                   │   │
+  │  └─────────────────────────────────────────────────────────────────┘   │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  STAGE 6: ECONOMIC EVALUATION                                           │
+  │  ────────────────────────────                                           │
+  │                                                                         │
+  │  Costs C, QALYs Q, equity weights w_A                                   │
+  │                                                                         │
+  │  ICER_equity = (C - C₀) / (Σ_A w_A Q_A - Q₀)                            │
+  │                                                                         │
+  │  Sensitivity analysis over ε, δ, ρ                                      │
+  │                                                                         │
+  │  Output: Equity-adjusted cost-effectiveness                             │
+  └─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Diagram 12: Sensitivity Analysis — Parameter Space
+
+```
+              SENSITIVITY ANALYSIS — PARAMETER SPACE
+              ═══════════════════════════════════════
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    PARAMETER GRID                                       │
+  │                                                                         │
+  │   ┌──────────────┬──────────────────────────────────────────────────┐   │
+  │   │ Parameter    │ Values                                           │   │
+  │   ├──────────────┼──────────────────────────────────────────────────┤   │
+  │   │ δ (equity)   │ 0.01, 0.02, 0.05, 0.10                          │   │
+  │   │ ε (Atkinson) │ 0, 0.5, 1, 2, 4                                  │   │
+  │   │ ρ (AUC corr) │ 0.0, 0.2, 0.4, 0.6, 0.8                         │   │
+  │   │ se (ancestry)│ 0.90, 0.95, 0.99                                 │   │
+  │   │ sp (ancestry)│ 0.90, 0.95, 0.99                                 │   │
+  │   │ c_α/c_β      │ 0.1, 1, 10                                       │   │
+  │   └──────────────┴──────────────────────────────────────────────────┘   │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                    OUTPUT VISUALIZATION                                 │
+  │                                                                         │
+  │   ICER_equity                                                           │
+  │       │                                                                 │
+  │       │  ╲                                                              │
+  │       │   ╲                                                             │
+  │       │    ╲                                                            │
+  │       │     ╲___________                                                │
+  │       │                 ╲___________                                    │
+  │       │                             ╲___________                        │
+  │       │                                         ╲___________            │
+  │       └───────────────────────────────────────────────────▶ ε           │
+  │       0     0.5     1      2      4                                     │
+  │                                                                         │
+  │   Threshold ε* where ICER_equity = λ (WTP threshold)                    │
+  │                                                                         │
+  │   ┌─────────────────────────────────────────────────────────────────┐   │
+  │   │  Required n per group                                           │   │
+  │   │       │                                                         │   │
+  │   │       │  ●                                                      │   │
+  │   │       │     ●                                                   │   │
+  │   │       │        ●                                                │   │
+  │   │       │           ●                                             │   │
+  │   │       │              ●                                          │   │
+  │   │       └──────────────────────────────▶ ρ                        │   │
+  │   │       0.0  0.2  0.4  0.6  0.8                                   │   │
+  │   │                                                                 │   │
+  │   │  Strong correlation → smaller n required                        │   │
+  │   └─────────────────────────────────────────────────────────────────┘   │
+  └─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Diagram 13: Theorem Dependency Graph
+
+```
+              THEOREM DEPENDENCY GRAPH
+              ═══════════════════════
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                                                                         │
+  │  ┌─────────────────────┐                                                │
+  │  │ Theorem 1.1         │                                                │
+  │  │ Standard LMM        │                                                │
+  │  │ O(n³m)              │                                                │
+  │  └──────────┬──────────┘                                                │
+  │             │                                                           │
+  │             ▼                                                           │
+  │  ┌─────────────────────┐                                                │
+  │  │ Theorem 1.2         │                                                │
+  │  │ Spectral LMM        │                                                │
+  │  │ O(n³ + n²m)         │                                                │
+  │  └──────────┬──────────┘                                                │
+  │             │                                                           │
+  │             ├───────────────────────────────┐                           │
+  │             ▼                               ▼                           │
+  │  ┌─────────────────────┐        ┌─────────────────────┐                │
+  │  │ Corollary 1.3       │        │ Low-rank refinement │                │
+  │  │ Speedup ≈ n         │        │ O(n³ + n m r_eff)   │                │
+  │  └─────────────────────┘        └─────────────────────┘                │
+  │                                                                         │
+  │  ┌─────────────────────┐                                                │
+  │  │ Theorem 2.1         │                                                │
+  │  │ Ancestry-specific   │                                                │
+  │  │ QC optimality       │                                                │
+  │  └──────────┬──────────┘                                                │
+  │             │                                                           │
+  │             ▼                                                           │
+  │  ┌─────────────────────┐                                                │
+  │  │ Multiple testing    │                                                │
+  │  │ across strata       │                                                │
+  │  │ (CV + stratified BH)│                                                │
+  │  └─────────────────────┘                                                │
+  │                                                                         │
+  │  ┌─────────────────────┐                                                │
+  │  │ Theorem 3.1         │                                                │
+  │  │ DeLong variance     │                                                │
+  │  └──────────┬──────────┘                                                │
+  │             │                                                           │
+  │             ├───────────────────────────────┐                           │
+  │             ▼                               ▼                           │
+  │  ┌─────────────────────┐        ┌─────────────────────┐                │
+  │  │ Corollary 3.2       │        │ Non-inferiority     │                │
+  │  │ AUC difference      │        │ test Z_NI           │                │
+  │  │ variance            │        │                     │                │
+  │  └─────────────────────┘        └─────────────────────┘                │
+  │                                                                         │
+  │  ┌─────────────────────┐                                                │
+  │  │ Theorem 4.1         │                                                │
+  │  │ BH within strata    │                                                │
+  │  └──────────┬──────────┘                                                │
+  │             │                                                           │
+  │             ▼                                                           │
+  │  ┌─────────────────────┐                                                │
+  │  │ HMP calibration     │                                                │
+  │  │ + IHW               │                                                │
+  │  └─────────────────────┘                                                │
+  │                                                                         │
+  │  ┌─────────────────────┐                                                │
+  │  │ Proposition 5.1     │                                                │
+  │  │ Incentive           │                                                │
+  │  │ compatibility       │                                                │
+  │  └──────────┬──────────┘                                                │
+  │             │                                                           │
+  │             ▼                                                           │
+  │  ┌─────────────────────┐                                                │
+  │  │ Global optimality   │                                                │
+  │  │ q* = q₃             │                                                │
+  │  └─────────────────────┘                                                │
+  │                                                                         │
+  │  ┌─────────────────────┐                                                │
+  │  │ Theorem 6.1         │                                                │
+  │  │ Corrected AUC       │                                                │
+  │  │ sample size         │                                                │
+  │  └──────────┬──────────┘                                                │
+  │             │                                                           │
+  │             ▼                                                           │
+  │  ┌─────────────────────┐                                                │
+  │  │ MDE                 │                                                │
+  │  │ Hanley-McNeil       │                                                │
+  │  │ lower bounds        │                                                │
+  │  └─────────────────────┘                                                │
+  │                                                                         │
+  │  ┌─────────────────────┐                                                │
+  │  │ Local ancestry      │                                                │
+  │  │ error propagation   │                                                │
+  │  └──────────┬──────────┘                                                │
+  │             │                                                           │
+  │             ▼                                                           │
+  │  ┌─────────────────────┐                                                │
+  │  │ Bias factor         │                                                │
+  │  │ formula             │                                                │
+  │  └─────────────────────┘                                                │
+  │                                                                         │
+  └─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Diagram 14: Complete Algorithm Flowchart
+
+```
+              COMPLETE ALGORITHM FLOWCHART
+              ═════════════════════════════
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                         START                                           │
+  │                           │                                             │
+  │                           ▼                                             │
+  │              ┌─────────────────────────┐                                │
+  │              │ Input: G, y, A, Z       │                                │
+  │              │ n samples, m variants   │                                │
+  │              │ k ancestries            │                                │
+  │              └────────────┬────────────┘                                │
+  │                           │                                             │
+  │                           ▼                                             │
+  │              ┌─────────────────────────┐                                │
+  │              │ Build GRM K = GGᵀ/m     │                                │
+  │              │ O(n²m)                  │                                │
+  │              └────────────┬────────────┘                                │
+  │                           │                                             │
+  │                           ▼                                             │
+  │              ┌─────────────────────────┐                                │
+  │              │ Eigendecompose K        │                                │
+  │              │ K = U S Uᵀ              │                                │
+  │              │ O(n³)                   │                                │
+  │              └────────────┬────────────┘                                │
+  │                           │                                             │
+  │                           ▼                                             │
+  │              ┌─────────────────────────┐                                │
+  │              │ Rotate data             │                                │
+  │              │ ỹ = Uᵀy, X̃ = UᵀX, G̃ = UᵀG│                              │
+  │              │ O(n²m)                  │                                │
+  │              └────────────┬────────────┘                                │
+  │                           │                                             │
+  │         ┌─────────────────┴─────────────────┐                           │
+  │         │                                   │                           │
+  │         ▼                                   ▼                           │
+  │  ┌──────────────┐                  ┌──────────────┐                     │
+  │  │ For each     │                  │ For each     │                     │
+  │  │ ancestry a   │                  │ SNP j        │                     │
+  │  └──────┬───────┘                  └──────┬───────┘                     │
+  │         │                                 │                             │
+  │         ▼                                 ▼                             │
+  │  ┌──────────────┐                  ┌──────────────┐                     │
+  │  │ Compute QC   │                  │ Compute Z_j  │                     │
+  │  │ stats        │                  │ score test   │                     │
+  │  │ MAF, miss,   │                  │ O(n)         │                     │
+  │  │ HWE          │                  └──────┬───────┘                     │
+  │  └──────┬───────┘                         │                             │
+  │         │                                 │                             │
+  │         ▼                                 ▼                             │
+  │  ┌──────────────┐                  ┌──────────────┐                     │
+  │  │ Select τ_a*  │                  │ Compute      │                     │
+  │  │ via CV       │                  │ p-value p_j  │                     │
+  │  └──────┬───────┘                  └──────┬───────┘                     │
+  │         │                                 │                             │
+  │         ▼                                 │                             │
+  │  ┌──────────────┐                         │                             │
+  │  │ Retain V_a   │                         │                             │
+  │  │ variants     │                         │                             │
+  │  └──────┬───────┘                         │                             │
+  │         │                                 │                             │
+  │         └─────────────┬───────────────────┘                             │
+  │                       │                                                 │
+  │                       ▼                                                 │
+  │         ┌─────────────────────────┐                                     │
+  │         │ Stratified FDR          │                                     │
+  │         │ BH within strata        │                                     │
+  │         │ HMP across strata       │                                     │
+  │         └────────────┬────────────┘                                     │
+  │                      │                                                  │
+  │                      ▼                                                  │
+  │         ┌─────────────────────────┐                                     │
+  │         │ Build PRS per ancestry  │                                     │
+  │         │ Using significant R_a   │                                     │
+  │         └────────────┬────────────┘                                     │
+  │                      │                                                  │
+  │                      ▼                                                  │
+  │         ┌─────────────────────────┐                                     │
+  │         │ Compute AUC_a           │                                     │
+  │         │ DeLong variance         │                                     │
+  │         └────────────┬────────────┘                                     │
+  │                      │                                                  │
+  │                      ▼                                                  │
+  │         ┌─────────────────────────┐                                     │
+  │         │ Non-inferiority test    │                                     │
+  │         │ Z_NI = (ΔAUC - δ)/SE    │                                     │
+  │         └────────────┬────────────┘                                     │
+  │                      │                                                  │
+  │         ┌────────────┴────────────┐                                     │
+  │         │                         │                                     │
+  │         ▼                         ▼                                     │
+  │  ┌──────────────┐          ┌──────────────┐                            │
+  │  │ Z_NI < -z_α  │          │ Z_NI ≥ -z_α  │                            │
+  │  │ Equity holds │          │ Equity not   │                            │
+  │  │              │          │ established  │                            │
+  │  └──────┬───────┘          └──────┬───────┘                            │
+  │         │                         │                                     │
+  │         └────────────┬────────────┘                                     │
+  │                      │                                                  │
+  │                      ▼                                                  │
+  │         ┌─────────────────────────┐                                     │
+  │         │ Economic evaluation     │                                     │
+  │         │ ICER_equity             │                                     │
+  │         │ Sensitivity over ε, δ   │                                     │
+  │         └────────────┬────────────┘                                     │
+  │                      │                                                  │
+  │                      ▼                                                  │
+  │         ┌─────────────────────────┐                                     │
+  │         │ Output:                 │                                     │
+  │         │ - Equity verdict        │                                     │
+  │         │ - ICER_equity           │                                     │
+  │         │ - Sensitivity bounds    │                                     │
+  │         └────────────┬────────────┘                                     │
+  │                      │                                                  │
+  │                      ▼                                                  │
+  │                   ┌─────┐                                               │
+  │                   │ END │                                               │
+  │                   └─────┘                                               │
+  └─────────────────────────────────────────────────────────────────────────┘
+```
+
