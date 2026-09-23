@@ -1,0 +1,1942 @@
+# The Genomic Mosaic of the Damask Rose
+
+## A Haplotype-Resolved Framework for Distinguishing Ancient Hybridization, Introgression, and Incomplete Lineage Sorting
+
+**Theoretical PhD Research Proposal — Fourth Draft v0.4**
+
+**Ouadi Maakoul**
+*For Humanity 4*
+
+---
+
+## Abstract
+
+The evolutionary origin of the Damask rose, *Rosa × damascena*, remains a compelling problem in plant evolutionary genomics because its genome may preserve signals from multiple ancestral lineages while also being shaped by polyploidy, recombination, introgression, incomplete lineage sorting, clonal propagation, and human selection.
+
+The 2026 *Rosa* pangenome provides an unprecedented genomic foundation, assembling 51 haplotypes from 23 accessions and identifying approximately 1.8 million structural variants. This resource makes it possible to move from marker-based ancestry inference toward haplotype-resolved, genome-wide reconstruction of reticulate evolutionary history.
+
+The central research question is:
+
+> **Can the present nuclear genome of *Rosa × damascena* be statistically decomposed into ancestry blocks in a manner that distinguishes ancient hybridization from subsequent introgression and incomplete lineage sorting?**
+
+This fourth draft responds to critical feedback on its predecessor and implements seven decisive operational upgrades. **First**, it includes a concrete, one-page Phase 0 audit table with pre-specified thresholds and contingency plans, forcing an explicit go/no-go decision before any model specification. **Second**, it pre-registers a simplification rule for the mixture-model HMM: if phasing quality falls below defined thresholds, the inheritance-mode layer \(c_i\) will be fixed based on cytogenetic evidence, and only ancestry \(z_i\) will be inferred. **Third**, it specifies a simulation-based power analysis for DFOIL/Δ-statistics on tetraploid data, quantifying expected power loss under collapsed pseudo-diploid representation. **Fourth**, it pre-registers ABC-RF priors for all demographic parameters. **Fifth**, it operationalizes the recombination-rate confound control for the SV/LD test using ANCOVA with local repeat density, GC content, and background recombination rate as covariates. **Sixth**, it commits to a concrete time-aware HMM extension that models clonal propagation as a regime switch in the ancestry transition matrix. **Seventh**, it integrates *twisst2* and *sticcs* as phasing-free robustness controls, ensuring that conclusions do not depend on the success of polyploid phasing.
+
+The deliverable remains a reproducible computational framework and a probabilistic, haplotype-resolved map of evolutionary history across the *R. × damascena* genome, with pre-registered quantitative falsification criteria.
+
+---
+
+## 1. Introduction
+
+### 1.1 The evolutionary problem
+
+A present-day genome is not necessarily the product of a single uninterrupted lineage.
+
+In sexually reproducing organisms, recombination partitions ancestral chromosomes into segments with potentially different evolutionary histories. Hybridization can introduce DNA from divergent lineages. Introgression can subsequently transfer genomic regions across species boundaries. Polyploidization preserves multiple homologous or homeologous chromosome sets. Incomplete lineage sorting produces gene trees that disagree with the species tree even without recent gene flow.
+
+Consequently, at the level of individual genomic loci:
+
+$$
+\text{one organism} \neq \text{one evolutionary history}
+$$
+
+The Damask rose provides an exceptionally instructive case. *Rosa × damascena* is tetraploid (2n = 4x = 56) and is generally described as having a probable triparental origin involving *R. moschata*, *R. gallica*, and *R. fedtschenkoana*.
+
+The 2026 *Rosa* pangenome substantially changes the methodological landscape. It assembled 51 haplotypes from 23 accessions and identified 1,801,537 structural variants, revealing extensive introgression across sections. The pangenome reports high assembly quality: average BUSCO completeness of 97.6% across all haplotypes, and LAI values averaging 21.06. However, the tetraploid *R. gallica* assembly was flagged during peer review as fragmented, with more than 3,514 contigs, suggesting problems during assembly and phasing.
+
+This creates a precise scientific opportunity. The question is no longer whether the Damask rose is a hybrid—that is established. The question is:
+
+> **What genomic architecture would each competing evolutionary history produce, and can haplotype-resolved genomic data distinguish those architectures?**
+
+---
+
+## 2. State of the Field and Critical Gaps
+
+### 2.1 From markers to haplotype-resolved genomes
+
+Earlier investigations relied substantially on molecular markers and ribosomal ITS sequences. A 2024 study of Moroccan *R. damascena* used ISSR markers and reported high within-population diversity (He = 0.237, PPL = 67% in Boutaghrar), with AMOVA showing 87% of variation within populations and only 13% between populations. However, marker-based results do not establish the genome-wide distribution of ancestry.
+
+The 2026 pangenome provides a foundation for genome-scale inference, demonstrating that modern *Rosa* research can integrate haplotype-resolved assemblies, whole-genome variation, phylogenomic analysis, structural variation, demographic inference, D-statistic testing, and gene-level analysis.
+
+### 2.2 Critical gaps in the current genomic context
+
+**Gap 1: Candidate ancestor data quality is the load-bearing risk.** The pangenome includes high-quality haplotype-resolved assemblies for *R. gallica* and *R. moschata*, but the assembly quality of tetraploid *R. gallica* is flagged as fragmented. For *R. fedtschenkoana*, a high-quality chromosome-level assembly has recently become available: total assembly size of 547.5 Mb, contig N50 of 73.5 Mb, and BUSCO completeness of 97.36%. However, for *R. majalis* and *R. davurica*, available genomic resources remain limited to chloroplast sequences, genome skims, or low-coverage resequencing data. This asymmetry is not merely an inconvenience: **everything downstream—the mixture HMM's emission model, DFOIL's five-taxon tree, ABC's simulated genomes—assumes a realistic sequence can be generated for each donor.** A chloroplast genome or a genome skim cannot support that assumption.
+
+**Gap 2: Polyploid ancestry inference requires inheritance-mode awareness.** *R. × damascena* is tetraploid, and cytogenetic evidence demonstrates that it is a **segmental allotetraploid** with polysomic or disomic inheritance depending on the chromosomal location of the corresponding locus. Standard hidden Markov models for local ancestry assume a single, uniform inheritance process.
+
+**Gap 3: ILS and introgression are not distinguished by non-directional tests alone.** DFOIL was developed specifically to test admixture directionality using five-taxon symmetric trees, and more recent Δ-statistics generalize this approach. However, these methods have not yet been applied to the Damask rose system, and their application to a tetraploid focal taxon requires explicit methodological decisions about subgenome assignment. Furthermore, DFOIL is known to be **blind to ghost lineages**, meaning that introgression from unsampled or extinct taxa can produce misleading results.
+
+**Gap 4: Model comparison has not been formalized.** The competing evolutionary models—ancient multi-parental mosaic, hybridization followed by introgression, and ILS-dominated discordance—have not been compared through formal statistical frameworks that estimate \(P(D|M_j)\) under realistic demographic and polyploid parameters.
+
+**Gap 5: Structural variation has not been mechanistically linked to ancestry.** The pangenome identified 1.8 million SVs, including inversions that can suppress recombination. Whether SVs are merely correlated with ancestry or causally maintain ancestry boundaries has not been tested with adequate controls for genomic background.
+
+**Gap 6: Identifiability of the proposed mixture-model HMM has not been established.** The three latent layers—ancestry state \(z_i\), inheritance mode \(c_i\), and reference-bias parameter \(\beta_r\)—may trade off against each other in ways that produce the same likelihood, particularly with weak data for most donors.
+
+**Gap 7: Multiple-testing correction is not specified for genome-wide ancestry calls.** With thousands of windows, uncorrected per-window p-values will produce many false "resolved" ancestry calls.
+
+**Gap 8: Reference bias in polyploid genomes is an underappreciated confound.** Recent work on hexaploid wheat has shown that **introgressions lead to widespread reference bias** in read mapping and that this bias is largely driven by divergent introgressed genes. In a polyploid genome like *R. × damascena*, this means that apparent ancestry signals could arise from mapping bias rather than true evolutionary history.
+
+**Gap 9: Phasing-free robustness controls are not integrated.** The success of the entire inference pipeline depends on polyploid phasing quality. If phasing fails, the project has no fallback beyond downsampling to pseudo-diploid. New methods (*twisst2*, *sticcs*) now allow **model-free genealogical inference from unphased genotype data of any ploidy**, providing a critical robustness check that has not been incorporated.
+
+---
+
+## 3. Research Questions and Hypotheses
+
+### 3.1 Central research question
+
+> **Can haplotype-resolved nuclear genomic data distinguish the ancestral genomic contributions to *Rosa × damascena* from later introgression and incomplete lineage sorting?**
+
+### 3.2 Secondary questions
+
+**Q1. Ancestry distribution.** Do different genomic regions of *R. × damascena* show statistically distinguishable affinities to candidate ancestral lineages?
+
+**Q2. Spatial coherence.** Are these affinities organized into contiguous genomic blocks rather than randomly distributed markers?
+
+**Q3. Inheritance mode.** Does the tetraploid genome exhibit detectable variation in inheritance mode (disomic vs. polysomic) across chromosomes, and does this variation affect ancestry inference?
+
+**Q4. Directionality.** If introgression occurred, what was its direction—which lineage donated and which received?
+
+**Q5. Model comparison.** Which of the three competing evolutionary models best explains the observed genomic data under formal statistical comparison?
+
+**Q6. Structural variation.** Do structural variants, particularly inversions, correspond to ancestry boundaries or ancestry-enriched regions, and do they suppress recombination within blocks after controlling for background recombination rate?
+
+**Q7. Robustness.** Are inferred ancestry patterns stable under changes in reference genome, candidate donor set, genomic window size, marker filtering, and statistical model?
+
+**Q8. Identifiability.** Can the proposed mixture-model HMM recover known ancestry, inheritance mode, and reference-bias parameters under realistic data quality conditions?
+
+**Q9. Phasing-free control.** Do ancestry patterns inferred from unphased data using *twisst2*/*sticcs* converge with patterns inferred from phased data using the mixture HMM?
+
+### 3.3 Hypotheses
+
+The central hypothesis is:
+
+$$
+H_1: \text{The nuclear genome of }R.\times damascena \text{ contains a non-random, spatially structured ancestry mosaic.}
+$$
+
+The null hypothesis is subdivided into mechanistic alternatives:
+
+$$
+H_{0a} = \text{incomplete lineage sorting}
+$$
+
+$$
+H_{0b} = \text{later introgression}
+$$
+
+$$
+H_{0c} = \text{reference/sampling/methodological artifact}
+$$
+
+$$
+H_{0d} = \text{ghost lineage introgression}
+$$
+
+This formulation prevents the analysis from becoming a search for evidence supporting a predetermined triparental hypothesis.
+
+---
+
+## 4. Candidate Ancestral Set and Data Architecture
+
+### 4.1 Candidate set
+
+The initial candidate set is:
+
+$$
+A = \{R. moschata,\ R. gallica,\ R. fedtschenkoana,\ R. majalis,\ R. davurica\}
+$$
+
+**Candidate status will not be treated as proof of ancestry.** The candidate set itself will be subjected to sensitivity analysis, including a **negative control** using a known diploid hybrid from the pangenome to calibrate false-positive rates.
+
+### 4.2 Data layers
+
+**Layer 1 — Nuclear genome.** Phased assemblies of *R. × damascena*. The 2026 pangenome provides haplotype-resolved data for several accessions, but the specific Damask-rose haplotype quality must be verified.
+
+**Layer 2 — Candidate relatives.** High-quality genomic sequences from candidate ancestors. The critical bottleneck is *R. majalis* and *R. davurica*.
+
+**Layer 3 — Plastome.** Complete chloroplast genomes as supplementary evidence.
+
+**Layer 4 — Population sampling.** Multiple accessions rather than single representatives.
+
+**Layer 5 — Structural variation.** The pangenome's 1,801,537 SVs provide an initial catalog.
+
+**Layer 6 — Metadata.** Geographic origin, cultivar identity, ploidy, propagation history, and sequencing quality.
+
+---
+
+## 5. Phase 0: Data and Phasing Audit as a Go/No-Go Gate
+
+**Phase 0 is the most critical phase of the project and must precede any further model specification.** It is a go/no-go gate, not a formality.
+
+### 5.1 Concrete audit table
+
+The following table must be completed **before any model specification begins**, using the Zhang et al. (2026) pangenome supplement Table S1 as primary source:
+
+| Species | Assembly accession | Level (chromosome / contig / skim / plastome) | BUSCO (%) | Contig N50 | # contigs | Phasing method + SER | Availability |
+|---|---|---|---|---|---|---|---|
+| *R. × damascena* | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+| *R. moschata* | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+| *R. gallica* | TBD | Chromosome (fragmented) | TBD | TBD | >3,514 | SER 3.27% (A13) | Pangenome |
+| *R. fedtschenkoana* | TBD | Chromosome | 97.36 | 73.5 Mb | TBD | TBD | Nature 2026 |
+| *R. majalis* | TBD | Skim / plastome | TBD | TBD | TBD | N/A | SRA |
+| *R. davurica* | TBD | Plastome | N/A | N/A | N/A | N/A | GenBank |
+
+**Critical note on *R. fedtschenkoana*:** A high-quality chromosome-level assembly is now available (BUSCO 97.36%, contig N50 73.5 Mb), which substantially de-risks this lineage.
+
+**Critical note on *R. gallica*:** The tetraploid assembly is fragmented (>3,514 contigs) and the reported SER for A13 is 3.27%. This is above the 2% threshold for full tetraploid HMM application.
+
+### 5.2 Pre-specified decision rules
+
+**If key ancestors lack phased, chromosome-level assemblies**, the following contingency plans are pre-specified:
+
+1. **Targeted assembly.** Contact the pangenome consortium or *Rosa* genomics groups about data access or collaboration for under-assembled donors.
+2. **Pangenome-based haplotype inference.** Attempt to use the pangenome graph to infer haplotypes for under-assembled donors.
+3. **Candidate set collapse.** If F6 fails for two or more lineages at the outset, collapse the candidate set to the two well-assembled donors and report the rest as chloroplast-only evidence. If *R. majalis* and *R. davurica* fail F6, the candidate set becomes \(A = \{R. moschata, R. gallica, R. fedtschenkoana\}\), and the thesis formally tests whether a triparental model + ghost introgression explains the data.
+4. **Result D preparation.** Be prepared to report that current genomic resources are insufficient to discriminate the models. This is a legitimate, fundable scientific outcome.
+
+### 5.3 Phasing-first approach
+
+Given the known challenges of polyploid phasing, implement a **phasing-first** approach:
+
+1. **Phase 0a:** Attempt to phase the *R. damascena* genome using **WhatsHap polyphase** and **H-PoPG**. Compare the phasings.
+2. **Phase 0b:** If the phasings are inconsistent (e.g., switch error rate > 5% or large unphased blocks), **stop the ancestry inference**. Instead, **downsample the data** to a **pseudo-diploid** representation.
+3. **Phase 0c:** Only if phasing quality is high (switch error rate < 2%) proceed to the full tetraploid HMM.
+
+WhatsHap polyphase consistently achieves fewer switch errors compared to H-PoPG, with at least 3 times lower SER on varying datasets. On a real tetraploid dataset at 40× coverage, WhatsHap produced a SER of 0.58% versus 2.01% for H-PoPG. However, this comes at the cost of **massive differences in block N50**: WhatsHap produces shorter blocks, while H-PoPG produces longer blocks at the expense of higher switch error. The N50 trade-off must be explicitly evaluated.
+
+**Pre-registered simplification rule:**
+
+> If median phased block N50 < 1 Mb OR switch error > 2% after polyphase, **fix \(c_i\) = segmental allotetraploid prior from cytogenetics** (disomic for chromosomes 1, 2, 6, 7; mixed for others, based on published segregation analysis) and only infer \(z_i\). This is still publishable and avoids identifiability failure.
+
+### 5.4 Phasing-free robustness control
+
+Regardless of phasing outcome, *twisst2* and *sticcs* will be run on **unphased genotype data of any ploidy** as an independent robustness control. *sticcs* reconstructs local genealogies using a perfect phylogeny heuristic and has been shown to be accurate for ARG inference when sample sizes are small; *twisst2* extends this to topology weighting by "stacking" tree sequences inferred for multiple subsets. These methods **do not require phased data** and provide a critical check that conclusions are not artifacts of phasing errors.
+
+---
+
+## 6. Genomic Representation and Ancestry States
+
+Let the phased nuclear genome of *R. × damascena* be represented as:
+
+$$
+G = \{g_1, g_2, \ldots, g_n\}
+$$
+
+Partition the genome into windows:
+
+$$
+W = \{w_1, w_2, \ldots, w_m\}
+$$
+
+For each window \(w_i\), define an ancestry state:
+
+$$
+z_i \in \{M, G, F, J, D, U\}
+$$
+
+where:
+
+- \(M\): *R. moschata*-like
+- \(G\): *R. gallica*-like
+- \(F\): *R. fedtschenkoana*-like
+- \(J\): *R. majalis*-like
+- \(D\): *R. davurica*-like
+- \(U\): unresolved
+
+The primary objective is to estimate:
+
+$$
+P(z_i = k \mid D)
+$$
+
+where \(D\) represents the observed genomic data.
+
+---
+
+## 7. The Ancestry-Block Model with Inheritance-Mode Mixture
+
+### 7.1 Why a standard HMM is insufficient
+
+A standard hidden Markov model assumes a single, uniform process generating ancestry transitions across all genomic windows. This assumption is violated in *R. × damascena* because the tetraploid genome may exhibit both disomic and polysomic inheritance in different regions.
+
+### 7.2 Proposed mixture-model HMM
+
+We propose a mixture-model HMM in which each genomic window is assigned a latent inheritance mode \(c_i \in \{\text{disomic}, \text{polysomic}\}\). The joint probability becomes:
+
+$$
+P(Z, C, D) = P(z_1) \prod_{i=2}^{m} P(z_i \mid z_{i-1}, c_i) \prod_{i=1}^{m} P(c_i \mid c_{i-1}) \prod_{i=1}^{m} P(D_i \mid z_i, c_i)
+$$
+
+where:
+
+- \(C = \{c_1, \ldots, c_m\}\) is the sequence of inheritance modes;
+- \(P(z_i \mid z_{i-1}, c_i)\) is the ancestry transition probability conditional on inheritance mode;
+- \(P(c_i \mid c_{i-1})\) models the spatial persistence of inheritance mode;
+- \(P(D_i \mid z_i, c_i)\) is the emission probability, which incorporates allele dosage expectations under each mode.
+
+### 7.3 Identifiability check (critical prerequisite)
+
+**Before committing to this architecture, run a simulation-based identifiability check.** Simulate genomes under known \((z, c, \beta)\) and confirm the model recovers them under realistic (not idealized) data quality per donor. Quantify the **confusion matrix**—how often is a polysomic locus misclassified as disomic?
+
+**Pre-registered performance thresholds:**
+
+| Parameter | Threshold | Action if violated |
+|---|---|---|
+| Ancestry assignment accuracy | > 80% at 10× coverage | Downgrade donor to "unresolved" |
+| Inheritance-mode confusion | < 20% misclassification | Fix \(c_i\) from cytogenetics |
+| \(\beta_r\) estimation correlation | > 0.7 | Use externally calibrated prior only |
+| Block N50 (phased) | > 1 Mb median | Switch to pseudo-diploid |
+
+If recovery is poor for weakly-sequenced donors, this is useful information for Phase 0, not a failure of the modeling. In that case, simplify the model by **fixing the inheritance mode** based on known cytogenetic data for *R. damascena* and only estimating ancestry probabilities.
+
+### 7.4 Reference-bias modeling
+
+The emission probability must account for reference bias. We model this as:
+
+$$
+P(D_i \mid z_i, c_i) = \sum_{r} P(D_i \mid z_i, c_i, \beta_r) P(\beta_r)
+$$
+
+where \(\beta_r\) is a reference-bias parameter for candidate lineage \(r\). **These parameters will be estimated externally** using simulation: simulate reads from a high-quality genome of lineage \(r\) at various divergence levels from the reference, map them to the reference, and measure the mapping bias. Use these externally calibrated priors in the HMM rather than estimating bias from the same data used for ancestry inference.
+
+**Pre-registered divergence levels for \(\beta_r(d)\) estimation:** 0%, 1%, 3%, 5% divergence from reference. The resulting function \(\beta_r(d)\) will be used as an informative prior, not estimated jointly.
+
+---
+
+## 8. Competing Evolutionary Models
+
+The thesis will compare four classes of evolutionary histories through formal statistical model comparison.
+
+### Model A — Ancient multi-parental mosaic
+
+$$
+R. moschata + R. gallica + R. fedtschenkoana \rightarrow R. \times damascena
+$$
+
+with subsequent recombination.
+
+### Model B — Hybridization plus subsequent introgression
+
+$$
+A + B \rightarrow H \rightarrow H + \text{introgression}
+$$
+
+Under this model, some ancestry blocks should show characteristics of more recent gene flow, including shorter block lengths and directional DFOIL signals.
+
+### Model C — Incomplete lineage sorting
+
+$$
+\text{ancestral polymorphism} \rightarrow \text{lineage sorting} \rightarrow \text{discordant gene trees}
+$$
+
+No additional hybridization is required to explain discordance.
+
+### Model D — Ghost introgression
+
+$$
+A + C \rightarrow A' \rightarrow A' + B \rightarrow R. \times damascena
+$$
+
+where C contributes ancestry through one of the primary parents rather than directly. This model addresses the possibility that *R. majalis* ancestry entered through *R. gallica* rather than through direct introgression into *R. × damascena*. **Critically, DFOIL is blind to ghost lineages**: a "proximal ghost" donor from within the sampled group can produce a false-positive signal of introgression from any lineage related to the ghost taxon.
+
+---
+
+## 9. Statistical Discrimination
+
+### 9.1 Formal model comparison via ABC-random forest
+
+For each evolutionary model \(M_j\), we estimate:
+
+$$
+P(D \mid M_j)
+$$
+
+using **Approximate Bayesian Computation with random forest** (ABC-RF). Classical rejection- or regression-ABC scales poorly with the high-dimensional summary vector required here (block-length moments, Twisst weights, DFOIL/Δ, \(F_{ST}\), SV enrichment, LD decay). ABC-RF tolerates high-dimensional, possibly non-sufficient summary statistics much better and substantially cuts the simulation budget required for Phase VII's robustness sweeps.
+
+**Pre-registered ABC-RF priors:**
+
+| Parameter | Prior distribution | Range | Rationale |
+|---|---|---|---|
+| \(N_e\) | Log-uniform | \(10^4\)–\(10^5\) | *Rosa* population sizes |
+| \(t_{hybrid}\) | Log-uniform | 500–5,000 generations | Pre-domestication timeframe |
+| \(r\) (recombination) | From LDhat/ReLERNN | Estimated | Not constant |
+| \(f_{clonal}\) | Uniform | 0.9–1.0 | Clonal propagation dominates |
+| \(t_{domestication}\) | Log-uniform | 100–500 generations | Historical records |
+
+**Summary statistics** will include:
+
+- Ancestry-block length distribution (mean, variance, skewness);
+- Topology weight distributions from Twisst;
+- DFOIL and Δ-statistic values;
+- \(F_{ST}\) between inferred ancestry blocks;
+- **Site pattern frequency spectrum \(f_d\)** for comparison to DFOIL;
+- SV enrichment at ancestry boundaries;
+- Linkage disequilibrium decay curves within and between ancestry blocks.
+
+**F5 threshold:** Bayes factor > 3 or ABC-RF posterior probability ratio > 0.66.
+
+### 9.2 Directional introgression testing with DFOIL/Δ-statistics
+
+The DFOIL method tests allelic patterns on the symmetric five-taxon tree \(S = (((1,2),(3,4)),5)\). More recent **Δ-statistics** generalize DFOIL and can incorporate or exclude singleton allelic patterns depending on taxon sampling, and can test asymmetric and quasisymmetric tree shapes.
+
+**Explicit methodological decision:** DFOIL/Δ-statistics will be run **per-haplotype post-phasing** where phasing quality permits. If phasing quality is insufficient, they will be run on a **collapsed pseudo-diploid representation** using the two most divergent haplotypes at each locus.
+
+**Pre-registered power analysis:** We will simulate tetraploid hybrid genomes with known directional introgression, phase them with realistic error, then apply DFOIL per-haplotype vs collapsed. We expect collapsed to lose power for recent introgression where introgressed haplotype frequency < 0.25. The results of this power analysis will be reported alongside empirical DFOIL results.
+
+**Subgenome-specific testing:** With tetraploid *damascena*, we have 4 tips for the focal taxon. We will either (1) pick \(H_1\) as representative and test robustness across \(H_{1-4}\), or (2) explicitly test subgenome-specific introgression using Twisst on sub-genome-specific haplotype sets. Both will be done.
+
+### 9.3 Topology weighting with Twisst
+
+Twisst quantifies the contribution of each taxon topology to the full tree across genomic windows. Under ILS alone, the three possible topologies for a trio of taxa should appear in approximately equal frequencies. Under introgression, one topology will be overrepresented.
+
+**Polyploid adaptation:** Twisst will be run on **sub-genome-specific haplotype sets** (e.g., the *R. gallica*-like sub-genome vs. the *R. moschata*-like sub-genome) to determine whether introgression signals are confined to one sub-genome. This requires high-quality phasing. As a phasing-free control, *twisst2* will be run on unphased genotype data of any ploidy.
+
+### 9.4 Genome-wide multiple-testing correction
+
+**Explicit correction is added to F1.** A window-by-window ancestry call will be considered "resolved" only if it passes a **false discovery rate (FDR) correction** (Benjamini-Hochberg) at the chromosome level, or a Bonferroni correction across all windows genome-wide. This threshold will be pre-registered alongside the existing falsification criteria.
+
+---
+
+## 10. Structural Variation as Mechanistic Hypothesis
+
+### 10.1 Beyond correlation
+
+The pangenome identified 1,801,537 structural variants. We propose to test whether SVs **causally maintain** ancestry boundaries through recombination suppression, not merely correlate with them.
+
+### 10.2 Analytical framework
+
+For each inferred ancestry boundary, we test:
+
+$$
+P(SV_j \mid \text{boundary}) > P(SV_j \mid \text{non-boundary})
+$$
+
+using Fisher's exact test with multiple-testing correction.
+
+For inversions specifically, we test whether recombination is suppressed within the inverted region by comparing LD decay curves inside the inversion to flanking regions:
+
+$$
+\text{LD}_{\text{inside}}(d) < \text{LD}_{\text{flanking}}(d)
+$$
+
+### 10.3 Operationalized recombination-rate confound control
+
+Naturally cold recombination regions (not caused by the SV) will produce the same LD signature. **If a recombination map is not available for *Rosa*, we will estimate one using LDhat or ReLERNN from the same data, or explicitly flag this as a known confound.**
+
+**Operationalization:** For each inversion, fit:
+
+$$
+\text{LD}(d) \sim \exp(-r d)
+$$
+
+Compare \(r_{inside}\) vs \(r_{flanking}\) using **ANCOVA** with the following covariates:
+
+- Local repeat density;
+- GC content;
+- Background recombination rate (from LDhat/ReLERNN).
+
+A significant LD result alone will not be treated as sufficient evidence; the recombination-rate covariate must be controlled. Without this, every centromeric region will look like "recombination suppression maintains ancestry."
+
+### 10.4 Genomic background control
+
+Structural variants are not randomly distributed; they cluster in repetitive regions. For F4, compare the SV density in the ancestry block to the **expected SV density given the local repeat content, GC content, and recombination rate**. If the SV enrichment persists after controlling for these covariates, the evidence is stronger.
+
+---
+
+## 11. Ploidy as a Fundamental Constraint
+
+The Damask rose is tetraploid. Ordinary diploid assumptions are insufficient. The tetraploid representation requires:
+
+$$
+G = H_1 + H_2 + H_3 + H_4
+$$
+
+while recognizing that these haplotypes may not have equivalent evolutionary histories.
+
+The thesis will explicitly distinguish:
+
+- Homologous chromosomes;
+- Homeologous relationships where applicable;
+- Phased haplotypes;
+- Allele dosage;
+- Copy-number variation;
+- Subgenomic ancestry.
+
+Phasing quality is critical. The pangenome reports high phasing quality for some accessions: switch error rate of 3.27% for *R. gallica* A13. However, for autotetraploid horticultural crops with highly repetitive genomes, base-level phasing accuracy remains challenging. If phasing quality for the specific *R. × damascena* haplotype is insufficient, **WhatsHap polyphase** can be applied to improve local phasing in regions of interest, with the caveat that block N50 may be short.
+
+---
+
+## 12. Temporal Inference
+
+Ancestry-block length contains information about the timing of admixture events. Under highly simplified assumptions:
+
+$$
+E[L] \propto \frac{1}{rt}
+$$
+
+where \(E[L]\) is expected ancestry-block length, \(r\) is recombination rate, and \(t\) is generations since admixture.
+
+**Critically, this relationship assumes a single pulse of admixture followed by random mating and no selection. In a clonally propagated species like *R. × damascena*, recombination is effectively absent after the initial hybridization event.** Ancestry blocks will not erode over time.
+
+### 12.1 Proposed approach
+
+The temporal inference component is reframed. The primary goal is to **test whether different ancestry blocks have different "ages"** based on their phylogenetic placement (e.g., using the topology weight distribution from Twisst). A block that is deeply nested within *R. gallica* diversity is likely older than a block that is closely related to a specific *R. moschata* accession. This is a **relative, not absolute, age estimate**.
+
+### 12.2 Tool commitment: time-aware HMM extension
+
+We commit to **building a custom time-aware extension of the mixture-HMM** that models clonal propagation events as effectively freezing the admixture clock. The transition probability becomes:
+
+$$
+P(z_i \mid z_{i-1}, c_i, t_{clonal})
+$$
+
+with two regimes:
+
+- **Sexual regime (\(r > 0\))**: For \(t < T_{domestication}\), ancestry blocks erode according to \(1/(rt)\).
+- **Clonal regime (\(r \approx 0\))**: For \(t \geq T_{domestication}\), ancestry blocks are frozen.
+
+If documented propagation history for the accessions used is available, this will be incorporated as a known parameter. If not, the model will estimate the number of "effective generations" separately for each ancestry block, providing a relative dating framework.
+
+### 12.3 Independent validation opportunity
+
+Recent work on grapevine has shown that **clonal propagation history can be reconstructed independently** from methylation patterns, and that genetic variants and CG/CHG methylations jointly reflect a recoverable propagation history. If bisulfite sequencing or methylation data are available for *R. × damascena* accessions, they could provide an **independent estimate of effective generations** since domestication, strengthening the temporal inference. If not available, this limitation will be explicitly flagged as a source of unquantified uncertainty.
+
+---
+
+## 13. Geographic Dimension and Moroccan Context
+
+Morocco provides a relevant population context because *R. damascena* is extensively cultivated in the Rose Valley and Dades Valley regions. A 2024 study characterized morphological and genetic diversity in a mini-core collection from Morocco using ISSR markers. AMOVA showed highly significant differentiation, with higher variation within populations (87%) than between populations (13%).
+
+**However, these data are marker-based, not genome-wide.** The reported high diversity could reflect within-cultivar genetic heterogeneity due to clonal propagation of a highly heterozygous tetraploid, rather than ancient population-level diversity. Using these accessions as a proxy for ancestral *R. damascena* diversity would be a serious error.
+
+**If Moroccan accessions are to be used**, they must be sequenced to at least medium coverage (e.g., 10–15×) and included as a separate population in the ABC framework. Their role should be to test for **recent admixture** (Model B), not to serve as a reference for ancient ancestry. This provides a field component in Marrakesh while avoiding circularity.
+
+---
+
+## 14. Human Selection and Clonal Propagation
+
+The evolutionary history of *R. × damascena* cannot be separated from human history. Once a desirable phenotype became culturally and economically valuable, vegetative propagation could preserve particular genotypes.
+
+$$
+\text{evolutionary history} = \text{natural processes} + \text{hybridization} + \text{selection} + \text{propagation}
+$$
+
+The thesis will not interpret every present-day genomic feature as natural selection. A genomic feature may be ancestral, neutral, linked to a selected locus, introduced by introgression, preserved by clonal propagation, produced by structural mutation, or an artifact.
+
+### 14.1 Biological hypothesis testing: continuous flowering
+
+To strengthen the biological novelty, the thesis will test a specific biological hypothesis:
+
+> **Hypothesis:** The *R. fedtschenkoana*-like ancestry is enriched in genes related to continuous flowering (a key trait of Damask roses).
+
+This will be tested by comparing the ancestry state \(z_i\) at loci near known flowering genes (e.g., **CCD4**, **TFL1**) to the genome-wide background:
+
+$$
+P(z_i = F \mid \text{gene} \in \text{flowering}) > P(z_i = F \mid \text{genome-wide})
+$$
+
+**Permutation test:** Control for gene density by permuting gene locations while preserving local gene density, repeat content, and GC content. Report empirical p-values with FDR correction.
+
+This links the genomic mosaic to a phenotype, which is a stronger biological contribution than ancestry inference alone.
+
+---
+
+## 15. Proposed Research Workflow
+
+### Phase 0 — Data and phasing audit (go/no-go gate)
+
+**Pre-specified decision rules and audit table as described in Section 5.**
+
+### Phase I — Literature and data audit
+
+Build a complete evidence map of *R. × damascena* genomes, candidate ancestral genomes, plastomes, ITS sequences, population datasets, SV datasets, existing phylogenies, and published ancestry hypotheses.
+
+### Phase II — Reproducibility and baseline
+
+Reproduce the strongest published ancestry results using public data. Establish baseline D-statistics and ADMIXTURE results. If reproduction fails, that itself is an important finding.
+
+### Phase III — Ancestry inference with model uncertainty
+
+Implement the mixture-model HMM with inheritance-mode mixture and reference-bias correction. Generate local ancestry probabilities \(P(z_i \mid D)\) for each window and each candidate lineage. Run *twisst2*/*sticcs* on unphased data as a phasing-free control.
+
+### Phase IV — Competing-model comparison
+
+Use ABC-RF to formally compare Models A, B, C, and D. Apply DFOIL and Δ-statistics for directional introgression testing. Apply Twisst for topology weighting across the genome.
+
+### Phase V — Mechanistic integration of structural variation
+
+Overlay SVs onto ancestry blocks. Test for SV enrichment at ancestry boundaries with genomic background controls. Test for recombination suppression within inversions using LD decay analysis with recombination-rate confound control.
+
+### Phase VI — Temporal and geographic inference
+
+Estimate relative admixture times for different ancestry blocks using topology weights. Analyze phylogeographic structure of Moroccan accessions if population-level genomic data are available.
+
+### Phase VII — Robustness and falsification
+
+Repeat analyses under different reference genomes, candidate donor sets, window sizes, SNP filters, missing-data thresholds, and phylogenetic models. Apply quantitative falsification thresholds (Section 16).
+
+### Workflow diagram
+
+The following directed acyclic graph (DAG) summarizes the workflow:
+
+```
+Phase 0 Audit (Table 5.1)
+        │
+        ▼
+┌───────────────────────┐
+│ Phasing quality check │
+│  (WhatsHap vs H-PoPG) │
+└───────────┬───────────┘
+            │
+    ┌───────┴───────┐
+    ▼               ▼
+SER < 2%        SER ≥ 2%
+& N50 > 1 Mb    OR N50 < 1 Mb
+    │               │
+    ▼               ▼
+Full HMM      Fix c_i from
+(z, c, β)     cytogenetics
+              infer z_i only
+    │               │
+    └───────┬───────┘
+            ▼
+    twisst2/sticcs control
+    (unphased data)
+            │
+            ▼
+    ABC-RF Model Comparison
+    (Models A, B, C, D)
+            │
+            ▼
+    F1–F7 Falsification Gate
+            │
+            ▼
+    Ancestry Map (with U flags)
+```
+
+---
+
+## 16. Quantitative Falsification Conditions
+
+The project will be considered unsuccessful as a multi-lineage ancestry reconstruction if **any** of the following conditions are met. These are pre-registered decision rules, not post hoc judgments.
+
+### F1 — Instability under methodological perturbation
+
+**Criterion:** The inferred ancestry state for a given window must be consistent across >90% of bootstrap replicates and across at least three different reference genomes. **Additionally, the window-level ancestry call must pass a chromosome-wide FDR correction (Benjamini-Hochberg, q < 0.05) or a genome-wide Bonferroni correction.**
+
+**If violated:** Ancestry assignments are considered unreliable, and the corresponding blocks are reported as unresolved (\(U\)).
+
+### F2 — ILS explanation
+
+**Criterion:** The signal of ancestry (e.g., DFOIL statistic with p < 0.01) must remain significant after simulating data under a pure ILS model with parameters estimated from the data.
+
+**If violated:** The ancestry claim is rejected or downgraded to "compatible with ILS."
+
+### F3 — Reference bias explanation
+
+**Criterion:** Apparent donor-specific signals must not disappear when reads are simulated from each candidate donor genome and mapped to the reference under realistic error models. **This includes testing against the known introgression-driven reference bias documented in wheat**.
+
+**If violated:** The ancestry claim is rejected as a reference-bias artifact.
+
+### F4 — Structural variation support
+
+**Criterion:** An ancestry block must show statistically significant enrichment (Fisher's exact test, p < 0.05 after multiple-testing correction) for at least one SV type compared to flanking regions **after controlling for local repeat content, GC content, and recombination rate using ANCOVA**, **or** must show a significant reduction in LD decay inside the block compared to flanking regions **after controlling for background recombination rate**.
+
+**If violated:** The block is considered unsupported by independent evidence.
+
+### F5 — Alternative demographic models
+
+**Criterion:** The preferred model must have a Bayes factor of at least 3 (or equivalent ABC-RF posterior probability ratio > 0.66) over the next-best model.
+
+**If violated:** The thesis reports that the data cannot discriminate among models, rather than choosing arbitrarily.
+
+### F6 — Sampling sufficiency
+
+**Criterion:** Candidate donor species must be represented by at least one phased, chromosome-level assembly with BUSCO completeness >90%. If not, ancestry inference for that lineage is reported as provisional.
+
+**If violated:** Results involving that lineage are flagged as underpowered.
+
+### F7 — Identifiability
+
+**Criterion:** The mixture-model HMM must recover known \((z, c, \beta)\) parameters from simulated data with accuracy above the pre-registered thresholds (Section 7.3): >80% correct ancestry assignment at 10× coverage, <20% inheritance-mode confusion, \(\beta_r\) correlation >0.7.
+
+**If violated:** The model is simplified (fix \(c_i\) from cytogenetics) or the donor is reported as unresolved.
+
+### F8 — Ghost lineage explanation
+
+**Criterion:** The signal of introgression must remain significant after simulating data under a model with a proximal ghost lineage that contributes to both *R. × damascena* and one candidate donor.
+
+**If violated:** The introgression claim is downgraded to "compatible with ghost lineage introgression."
+
+---
+
+## 17. Expected Outputs
+
+The project should produce a reproducible genomic map:
+
+$$
+\boxed{\text{Damask Rose Ancestry Map}}
+$$
+
+containing, for each chromosome:
+
+- Haplotype structure (all four haplotypes where phasing permits);
+- Local ancestry probabilities \(P(z_i = k \mid D)\);
+- Inheritance-mode assignments \(P(c_i \mid D)\);
+- Candidate donor affinity with confidence intervals;
+- Phylogenetic topology weights from Twisst;
+- DFOIL/Δ-statistic directionality results;
+- Structural variants with ancestry-boundary enrichment tests;
+- Unresolved regions flagged with reasons (F1–F8).
+
+An example conceptual output:
+
+```
+Chromosome 1
+|----M----|------G------|--F--|---------G---------|---U(F1)---|
+
+Chromosome 2
+|---------G----------|----M----|----M----|----F----|
+
+Chromosome 3
+|--F--|-------G-------|---------M---------|---U(F2)---|
+```
+
+The actual map would be generated from data rather than manually assigned. Unresolved regions are explicitly labeled with the falsification condition that caused them.
+
+---
+
+## 18. Negative Results
+
+A negative result is scientifically acceptable and valuable.
+
+### Result A
+
+Strong evidence for a structured multi-lineage genomic mosaic satisfying all falsification thresholds.
+
+### Result B
+
+Evidence for an initial hybridization followed by substantial later introgression, supported by directional DFOIL signals and relative temporal inference.
+
+### Result C
+
+Most discordance is compatible with incomplete lineage sorting, with no ancestry block surviving F2.
+
+### Result D
+
+Current genomic resources are insufficient to discriminate the models, with multiple lineages failing F6 (sampling sufficiency).
+
+**Result D is a likely outcome given the Gap 1 data situation.** The thesis narrative and timeline must absorb this as a legitimate, fundable outcome rather than treating it as a fallback. The thesis should never convert insufficient resolution into a confident historical narrative.
+
+---
+
+## 19. Main Theoretical Contribution
+
+The proposed contribution is not:
+
+> "We discovered that the Damask rose is hybrid."
+
+The proposed contribution is:
+
+> **A falsifiable, statistically rigorous framework for distinguishing genomic signatures of ancient hybridization, later introgression, incomplete lineage sorting, and ghost lineage introgression in a polyploid plant whose evolutionary history is reticulate—operationalized through inheritance-mode-aware ancestry inference, directional introgression testing, ABC-random forest model comparison, structural-variation mechanistic testing with confound controls, phasing-free robustness controls, and pre-registered falsification thresholds.**
+
+The reusable pipeline—**mixture-HMM + ABC-RF + DFOIL/Δ + Twisst + twisst2/sticcs + falsification gate**—is itself a portable contribution to other polyploid systems, including wheat, potato, cotton, and strawberry.
+
+---
+
+## 20. Novelty Boundary
+
+The following are **not claimed as novel**:
+
+- The existence of *R. × damascena*;
+- Its tetraploid nature;
+- The historical triparental hypothesis;
+- The involvement of *R. moschata*, *R. gallica*, and *R. fedtschenkoana* as candidate ancestors;
+- The existence of hybridization and introgression in *Rosa*;
+- The existence of modern rose pangenomic resources;
+- The existence of the DFOIL, Twisst, and ABC methods individually.
+
+These are prior knowledge or established methods.
+
+The potential novelty lies in:
+
+$$
+\boxed{\text{Integrated discrimination of competing evolutionary explanations in a polyploid, reticulate system using pre-registered quantitative falsification criteria}}
+$$
+
+specifically through the combination of inheritance-mode-aware ancestry inference, directional introgression testing, ABC-RF model comparison, structural-variation mechanistic testing with confound controls, ghost lineage controls, phasing-free robustness checks, and operationalized falsification thresholds.
+
+---
+
+## 21. Broader Significance
+
+Many plants have evolutionary histories involving hybridization, polyploidy, introgression, and selection. A framework capable of separating these processes could be applied to other domesticated and polyploid plants.
+
+The Damask rose serves as a model problem for a broader question:
+
+> **How can evolutionary history be reconstructed when different regions of a genome contain different histories?**
+
+This reframes phylogenomics from the search for a single tree toward the reconstruction of a distributed genomic history, with explicit acknowledgment of where inference succeeds and where it fails.
+
+---
+
+## 22. Conceptual Principle
+
+The thesis proposes the following principle as a working hypothesis:
+
+$$
+\boxed{\text{Genome evolution is better represented as a spatially distributed history than as a single tree when reticulate processes are substantial.}}
+$$
+
+This is not presented as a new biological law. It is the conceptual basis for the proposed analytical framework.
+
+---
+
+## 23. Open Science Commitment
+
+The pipeline (mixture-HMM + ABC-RF + DFOIL/Δ + Twisst + twisst2/sticcs + falsification gate) will be released as an **open-source, reproducible workflow on GitHub**, implemented as a **Nextflow or Snakemake pipeline with containerization** (Docker/Singularity). All intermediate data and the ancestry map will be deposited. The F1–F8 falsification criteria will be **pre-registered on OSF** before Phase III begins. This strengthens the "broader significance" argument with a concrete, citable artifact and makes Result D credible.
+
+---
+
+## 24. Adversarial Collaboration
+
+To further strengthen the falsification framework, an **adversarial collaboration** is proposed with a researcher skeptical of the triparental hypothesis.
+
+**Structured modalities:**
+
+- **Who:** A population geneticist or phylogeneticist with expertise in demographic inference or polyploid evolution.
+- **Methods:** Independent analysis using their preferred methods (e.g., purely phylogenetic approaches, MSMC, fastsimcoal2).
+- **Disagreement resolution:** Additional simulations, sensitivity analyses, or joint robustness checks. If methods do not converge, the disagreement itself is a valuable finding.
+- **Product:** A co-authored preprint or thesis chapter reporting convergent or divergent results.
+
+The goal is to see whether different methods converge on the same ancestry map. If they do not, the disagreement itself is a valuable finding.
+
+---
+
+## 25. Conclusion
+
+The Damask rose provides a particularly suitable system for studying genomic evolution because multiple independent lines of evidence point toward a complex history involving polyploidy and contributions from several *Rosa* lineages. The 2026 pangenome now provides a substantially richer genomic basis for testing that history.
+
+The proposed PhD focuses on one precise unresolved problem:
+
+$$
+\boxed{\textbf{Can the genomic mosaic of }Rosa\times damascena\textbf{ distinguish ancient hybridization from later introgression and incomplete lineage sorting?}}
+$$
+
+The answer should emerge not from a predetermined ancestry narrative but from the convergence—or failure of convergence—of independent genomic evidence, evaluated against pre-registered quantitative falsification criteria.
+
+The ultimate object of reconstruction is not merely a phylogenetic tree. It is:
+
+$$
+\boxed{\text{a probabilistic, haplotype-resolved map of evolutionary history across the genome, with explicit uncertainty and falsification status.}}
+$$
+
+---
+
+## Initial Core References
+
+1. Zhang, X. et al. (2026). Pangenomic analyses of rose uncover widespread structural variation and empower genomics-directed breeding. *Nature Genetics*, 58, 1164–1175.
+
+2. Leppälä, K. et al. (2024). Five-leaf generalizations of the D-statistic reveal the directionality of admixture. *Molecular Biology and Evolution*, 41(11), msae198.
+
+3. Martin, S. H. & Van Belleghem, S. M. (2017). Exploring evolutionary relationships across the genome using topology weighting. *Genetics*, 206(1), 429–438.
+
+4. Schrinner, S. D. et al. (2024). Haplotype threading: accurate polyploid phasing from long reads. *Genome Biology*.
+
+5. Lebkiri, N. et al. (2024). Morphological characterization and genetic diversity of mini core collection of *Rosa damascena* from Morocco. *Journal of Genetic Engineering and Biotechnology*, 22(4), 100423.
+
+6. Roux, C. et al. (2022). Inferring the Demographic History and Inheritance Mode of Tetraploid Species Using ABC. *Methods in Molecular Biology*.
+
+7. Collin, F. D. et al. (2021). Extending approximate Bayesian computation with supervised machine learning to infer demographic history from genetic polymorphisms using DIYABC Random Forest. *Molecular Ecology Resources*.
+
+8. Martin, S. H. (2025). A model-free method for genealogical inference without phasing and its application for topology weighting. *Genetics*, iyaf181.
+
+9. Coombes, B. et al. (2024). Introgressions lead to reference bias in wheat RNA-seq analysis. *BMC Biology*, 22, 56.
+
+10. Pease, J. B. & Hahn, M. W. (2015). Detection and polarization of introgression in a five-taxon phylogeny. *Systematic Biology*, 64(4), 651–662.
+
+11. Kirov, I. et al. (2026). High-quality chromosome-level genome assembly of *Rosa fedtschenkoana*. *Scientific Data*.
+
+12. Rusanov, K. et al. (2005). Lessons from the microsatellite characterization of a segregating population derived from seeds of open pollinated *Rosa damascena* Mill. F. Trigintipetala plants. *Biotechnology & Biotechnological Equipment*, 19(3), 57–62.
+
+---
+
+## Research Status
+
+**Draft status:** v0.4 — operationalized methodological framework with pre-registered decision rules, concrete audit table, and phasing-free robustness controls
+
+**Not yet established:** the actual genome-wide ancestry map.
+
+**Required next step:** Phase 0 data and phasing audit, with pre-specified go/no-go decision rules. Complete Table 5.1 before any model specification.
+
+**Critical rule:** No ancestry claim will be accepted unless it survives all quantitative falsification thresholds (F1–F8).
+
+**Primary falsification target:** determine whether the observed genomic mosaic can be explained more parsimoniously by incomplete lineage sorting, later introgression, ghost lineage introgression, sampling effects, or technical artifacts.
+
+**Ultimate deliverable:** a reproducible computational framework and genome-wide evolutionary reconstruction of *Rosa × damascena*, with explicit uncertainty quantification and pre-registered falsification status.
+
+# The Genomic Mosaic of the Damask Rose
+
+## Appendices to the Theoretical PhD Research Proposal — v0.4
+
+**Ouadi Maakoul**
+*For Humanity 4*
+
+---
+
+## Appendix A: Phase 0 Audit Table Template
+
+### A.1 Purpose
+
+This appendix provides the concrete template for the Phase 0 data and phasing audit described in Section 5. The table must be completed **before any model specification begins**. The audit serves as the formal go/no-go gate for the project.
+
+### A.2 Audit Table
+
+| Species | Assembly accession | Level | BUSCO (%) | Contig N50 | # contigs | Phasing method | SER (%) | Block N50 | Availability | F6 status |
+|---|---|---|---|---|---|---|---|---|---|---|
+| *R. × damascena* | | | | | | | | | | |
+| *R. moschata* | | | | | | | | | | |
+| *R. gallica* | | | | | | | | | | |
+| *R. fedtschenkoana* | | | | | | | | | | |
+| *R. majalis* | | | | | | | | | | |
+| *R. davurica* | | | | | | | | | | |
+| *R. chinensis* (neg. control) | | | | | | | | | | |
+| *R. odorata* (neg. control) | | | | | | | | | | |
+
+**Column definitions:**
+
+- **Level:** chromosome-level / contig-level / skim / plastome-only
+- **BUSCO:** completeness percentage using *eudicots_odb10* or *rosids_odb10*
+- **Contig N50:** in Mb
+- **Phasing method:** WhatsHap polyphase / H-PoPG / HapCUT2 / none
+- **SER:** switch error rate (%)
+- **Block N50:** phased block N50 in Mb
+- **F6 status:** PASS / FAIL / PROVISIONAL
+
+### A.3 Pre-specified thresholds
+
+| Criterion | Threshold | Action if violated |
+|---|---|---|
+| BUSCO completeness | > 90% | F6 FAIL; lineage reported as provisional |
+| Contig N50 | > 1 Mb | F6 FAIL if chromosome-level unavailable |
+| SER (phased) | < 2% | Switch to simplified HMM (fix \(c_i\)) |
+| Block N50 | > 1 Mb | Switch to pseudo-diploid representation |
+| Number of contigs | < 1,000 | Flag as fragmented |
+
+### A.4 Decision flowchart
+
+```
+                    START
+                      │
+                      ▼
+            ┌─────────────────┐
+            │ Complete audit  │
+            │    table        │
+            └────────┬────────┘
+                     │
+         ┌───────────┴───────────┐
+         ▼                       ▼
+   ≥3 donors                <3 donors
+   pass F6                  pass F6
+         │                       │
+         ▼                       ▼
+   Full candidate          Collapse to
+   set analysis            biparental +
+                           ghost model
+         │                       │
+         └───────────┬───────────┘
+                     ▼
+         ┌───────────────────────┐
+         │ Phasing quality check │
+         │   (R. × damascena)    │
+         └───────────┬───────────┘
+                     │
+         ┌───────────┴───────────┐
+         ▼                       ▼
+   SER < 2%                SER ≥ 2%
+   & N50 > 1 Mb            OR N50 < 1 Mb
+         │                       │
+         ▼                       ▼
+   Full HMM                Fix c_i from
+   (z, c, β)               cytogenetics
+                           infer z_i only
+         │                       │
+         └───────────┬───────────┘
+                     ▼
+         ┌───────────────────────┐
+         │  twisst2/sticcs       │
+         │  robustness control   │
+         └───────────┬───────────┘
+                     │
+                     ▼
+         ┌───────────────────────┐
+         │   ABC-RF Model        │
+         │   Comparison          │
+         └───────────┬───────────┘
+                     │
+                     ▼
+         ┌───────────────────────┐
+         │   F1–F8 Falsification │
+         │   Gate                │
+         └───────────┬───────────┘
+                     │
+                     ▼
+         ┌───────────────────────┐
+         │   Ancestry Map        │
+         │   (with U flags)      │
+         └───────────────────────┘
+```
+
+---
+
+## Appendix B: F7 Identifiability Simulation Design
+
+### B.1 Purpose
+
+This appendix specifies the simulation design for the identifiability check (F7) described in Section 7.3. The goal is to determine whether the mixture-model HMM can recover known ancestry (\(z\)), inheritance mode (\(c\)), and reference-bias (\(\beta\)) parameters under realistic data quality conditions.
+
+### B.2 Simulation parameters
+
+| Parameter | Values simulated | Rationale |
+|---|---|---|
+| Number of donors | 2, 3, 5 | Test model complexity |
+| Coverage per donor | 5×, 10×, 20×, 40× | Realistic range |
+| Divergence from reference | 0%, 1%, 3%, 5% | Calibrate \(\beta_r(d)\) |
+| True ancestry blocks | 50, 100, 200 | Genome-wide scale |
+| Block length distribution | Exponential, mean 5 Mb | Realistic |
+| Inheritance mode | Disomic, polysomic, mixed | Test \(c_i\) recovery |
+| Switch error rate | 0%, 1%, 2%, 5% | Test phasing sensitivity |
+| Reference bias \(\beta_r\) | 0.1, 0.3, 0.5 | Test bias recovery |
+
+### B.3 Simulation workflow
+
+```
+For each parameter combination:
+  1. Simulate ancestral genomes for each donor
+  2. Simulate R. × damascena as mosaic of donor haplotypes
+  3. Apply inheritance mode (disomic/polysomic) per block
+  4. Generate reads at specified coverage
+  5. Introduce reference bias at specified level
+  6. Apply phasing with specified SER
+  7. Run mixture-model HMM
+  8. Compare inferred (z, c, β) to true values
+  9. Record confusion matrix and parameter correlations
+```
+
+### B.4 Pre-registered performance thresholds
+
+| Metric | Threshold | Action if violated |
+|---|---|---|
+| Ancestry accuracy (10×) | > 80% | Downgrade donor to "unresolved" |
+| Ancestry accuracy (5×) | > 60% | Report as provisional |
+| Inheritance-mode confusion | < 20% | Fix \(c_i\) from cytogenetics |
+| \(\beta_r\) correlation | > 0.7 | Use externally calibrated prior |
+| Block boundary accuracy | > 70% | Increase window size or simplify |
+| Convergence (Gelman-Rubin) | < 1.1 | Increase MCMC iterations |
+
+### B.5 Expected confusion matrix format
+
+|  | Inferred M | Inferred G | Inferred F | Inferred U |
+|---|---|---|---|---|
+| **True M** | \(a_{MM}\) | \(a_{MG}\) | \(a_{MF}\) | \(a_{MU}\) |
+| **True G** | \(a_{GM}\) | \(a_{GG}\) | \(a_{GF}\) | \(a_{GU}\) |
+| **True F** | \(a_{FM}\) | \(a_{FG}\) | \(a_{FF}\) | \(a_{FU}\) |
+| **True U** | \(a_{UM}\) | \(a_{UG}\) | \(a_{UF}\) | \(a_{UU}\) |
+
+**Diagonal dominance** (\(a_{MM}, a_{GG}, a_{FF} > 0.8\)) is required for confident ancestry assignment.
+
+### B.6 Reporting
+
+Results will be reported as:
+
+1. **Confusion matrices** for each parameter combination
+2. **Parameter recovery plots** (inferred vs. true)
+3. **Power curves** (accuracy vs. coverage)
+4. **Recommendation** for minimum coverage per donor
+
+---
+
+## Appendix C: Phasing Quality Assessment Protocol
+
+### C.1 Purpose
+
+This appendix specifies the protocol for assessing phasing quality of the *R. × damascena* genome, as described in Section 5.3.
+
+### C.2 Tools and versions
+
+| Tool | Version | Purpose |
+|---|---|---|
+| WhatsHap polyphase | ≥ 2.0 | Polyploid phasing |
+| H-PoPG | ≥ 1.0 | Polyploid phasing (comparison) |
+| HapCUT2 | ≥ 1.3 | Diploid phasing (pseudo-diploid) |
+| SHAPEIT5 | ≥ 5.0 | Statistical phasing (comparison) |
+| Merqury | ≥ 1.3 | Assembly quality metrics |
+| BUSCO | ≥ 5.0 | Completeness assessment |
+
+### C.3 Phasing assessment metrics
+
+| Metric | Definition | Threshold |
+|---|---|---|
+| Switch error rate (SER) | Proportion of adjacent heterozygous sites with incorrect phase | < 2% |
+| Block N50 | N50 of contiguous phased blocks | > 1 Mb |
+| Haplotype completeness | Proportion of genome assigned to a haplotype | > 90% |
+| Allele balance | Ratio of reads supporting each haplotype | 0.4–0.6 |
+| Phasing confidence | Mean posterior probability of phase | > 0.9 |
+
+### C.4 Phasing workflow
+
+```
+Step 1: Align reads to reference
+        └─ BWA-MEM2 or minimap2
+
+Step 2: Call variants
+        └─ DeepVariant or GATK HaplotypeCaller
+
+Step 3: Phase with WhatsHap polyphase
+        └─ whatsHap polyphase --ploidy 4
+
+Step 4: Phase with H-PoPG
+        └─ H-PoPG -p 4
+
+Step 5: Compare phasings
+        └─ Calculate SER, block N50, concordance
+
+Step 6: Decision
+        ├─ If SER < 2% AND N50 > 1 Mb: Full HMM
+        └─ Else: Fix c_i from cytogenetics
+```
+
+### C.5 Contingency: pseudo-diploid representation
+
+If phasing fails, downsample to pseudo-diploid:
+
+```
+Step 1: Identify two most divergent haplotypes per window
+        └─ Based on read-backed phasing or population data
+
+Step 2: Collapse to pseudo-diploid genotype
+        └─ Consensus of two haplotypes
+
+Step 3: Phase with HapCUT2 or SHAPEIT5
+        └─ Diploid phasing tools
+
+Step 4: Run DFOIL/Δ on pseudo-diploid
+        └─ Quantify power loss via simulation (Appendix E)
+```
+
+### C.6 Reporting
+
+Phasing quality will be reported as:
+
+1. **Genome-wide SER** (mean, median, distribution)
+2. **Block N50** (genome-wide and per chromosome)
+3. **Comparison table** (WhatsHap vs. H-PoPG)
+4. **Decision** (full HMM vs. simplified HMM vs. pseudo-diploid)
+
+---
+
+## Appendix D: ABC-RF Model Comparison Protocol
+
+### D.1 Purpose
+
+This appendix specifies the ABC-random forest protocol for model comparison described in Section 9.1.
+
+### D.2 Model definitions
+
+| Model | Description | Parameters |
+|---|---|---|
+| **A** | Ancient multi-parental mosaic | \(N_e\), \(t_{hybrid}\), \(r\), \(f_{clonal}\) |
+| **B** | Hybridization + introgression | \(N_e\), \(t_{hybrid}\), \(t_{intro}\), \(m\), \(r\), \(f_{clonal}\) |
+| **C** | Incomplete lineage sorting | \(N_e\), \(t_{split}\), \(r\) |
+| **D** | Ghost introgression | \(N_e\), \(t_{hybrid}\), \(t_{ghost}\), \(m_{ghost}\), \(r\), \(f_{clonal}\) |
+
+### D.3 Pre-registered priors
+
+| Parameter | Prior | Range | Rationale |
+|---|---|---|---|
+| \(N_e\) (ancestral) | Log-uniform | \(10^4\)–\(10^5\) | *Rosa* population sizes |
+| \(N_e\) (donor) | Log-uniform | \(10^3\)–\(10^4\) | Smaller effective sizes |
+| \(t_{hybrid}\) | Log-uniform | 500–5,000 gen | Pre-domestication |
+| \(t_{intro}\) | Log-uniform | 100–2,000 gen | Post-hybridization |
+| \(t_{domestication}\) | Log-uniform | 100–500 gen | Historical records |
+| \(r\) (recombination) | From LDhat/ReLERNN | Estimated | Not constant |
+| \(f_{clonal}\) | Uniform | 0.9–1.0 | Clonal propagation |
+| \(m\) (migration) | Log-uniform | \(10^{-5}\)–\(10^{-3}\) | Introgression rate |
+| \(\beta_r\) | From simulation | Calibrated | Reference bias |
+
+### D.4 Summary statistics
+
+| Statistic | Description | Tool |
+|---|---|---|
+| Block length moments | Mean, variance, skewness | Custom |
+| Twisst weights | Topology proportions | Twisst |
+| DFOIL/Δ | Directional introgression | DFOIL |
+| \(F_{ST}\) | Between ancestry blocks | vcftools |
+| Site pattern \(f_d\) | Allele frequency spectrum | Custom |
+| SV enrichment | SV density at boundaries | BEDTools |
+| LD decay | Within/between blocks | PLINK |
+
+### D.5 ABC-RF workflow
+
+```
+Step 1: Define models and priors
+        └─ As specified above
+
+Step 2: Simulate training set
+        ├─ 10,000 simulations per model
+        └─ Use fastsimcoal2 or msprime
+
+Step 3: Calculate summary statistics
+        └─ For each simulation
+
+Step 4: Train random forest
+        ├─ 1,000 trees
+        └─ mtry = sqrt(n_stats)
+
+Step 5: Predict on observed data
+        ├─ Posterior probability per model
+        └─ Confusion matrix
+
+Step 6: Model selection
+        └─ F5: BF > 3 or posterior > 0.66
+```
+
+### D.6 Model comparison metrics
+
+| Metric | Definition | Threshold |
+|---|---|---|
+| Bayes factor | \(P(D|M_i) / P(D|M_j)\) | > 3 |
+| Posterior probability | RF probability for best model | > 0.66 |
+| Classification error | Out-of-bag error rate | < 0.2 |
+| Variable importance | Top summary statistics | Report |
+
+### D.7 Reporting
+
+Results will be reported as:
+
+1. **Posterior probabilities** for each model
+2. **Bayes factors** for pairwise comparisons
+3. **Variable importance plots**
+4. **Model selection decision** (F5 status)
+
+---
+
+## Appendix E: DFOIL/Δ Power Analysis Protocol
+
+### E.1 Purpose
+
+This appendix specifies the simulation-based power analysis for DFOIL/Δ-statistics on tetraploid data, as described in Section 9.2.
+
+### E.2 Simulation parameters
+
+| Parameter | Values simulated | Rationale |
+|---|---|---|
+| Introgression proportion | 5%, 10%, 20%, 30% | Realistic range |
+| Introgression time | 100, 500, 1,000, 2,000 gen | Test temporal signal |
+| Donor divergence | 1%, 3%, 5%, 10% | Test phylogenetic signal |
+| Coverage | 5×, 10×, 20× | Test power vs. coverage |
+| Phasing error | 0%, 1%, 2%, 5% | Test phasing sensitivity |
+| Representation | Per-haplotype, pseudo-diploid | Test method comparison |
+
+### E.3 Simulation workflow
+
+```
+For each parameter combination:
+  1. Simulate five-taxon tree with known introgression
+  2. Generate tetraploid R. × damascena genome
+  3. Apply introgression at specified proportion and time
+  4. Generate reads at specified coverage
+  5. Phase with specified error rate
+  6. Apply DFOIL per-haplotype
+  7. Apply DFOIL on pseudo-diploid
+  8. Record power (true positive rate) and false positive rate
+```
+
+### E.4 Expected power curves
+
+| Introgression proportion | Per-haplotype power | Pseudo-diploid power | Power loss |
+|---|---|---|---|
+| 30% | > 0.9 | > 0.8 | < 10% |
+| 20% | > 0.8 | > 0.6 | ~20% |
+| 10% | > 0.6 | > 0.3 | ~50% |
+| 5% | > 0.3 | < 0.1 | > 70% |
+
+**Hypothesis:** Collapsed pseudo-diploid loses power for recent introgression where introgressed haplotype frequency < 0.25.
+
+### E.5 Subgenome-specific testing
+
+With tetraploid *R. × damascena*, we have 4 tips for the focal taxon. Two approaches:
+
+1. **Representative haplotype:** Pick \(H_1\) as representative, test robustness across \(H_{1-4}\).
+2. **Subgenome-specific:** Run Twisst on sub-genome-specific haplotype sets (e.g., *R. gallica*-like vs. *R. moschata*-like).
+
+Both approaches will be applied, and results will be compared.
+
+### E.6 Reporting
+
+Results will be reported as:
+
+1. **Power curves** (power vs. introgression proportion)
+2. **Power comparison** (per-haplotype vs. pseudo-diploid)
+3. **Recommendation** for minimum introgression proportion detectable
+4. **Caveats** for interpretation of empirical DFOIL results
+
+---
+
+## Appendix F: SV/LD Confound Control Protocol
+
+### F.1 Purpose
+
+This appendix specifies the operationalized recombination-rate confound control for the SV/LD test described in Section 10.3.
+
+### F.2 Analytical framework
+
+For each inversion, fit:
+
+$$
+\text{LD}(d) \sim \exp(-r d)
+$$
+
+Compare \(r_{inside}\) vs \(r_{flanking}\) using **ANCOVA** with covariates:
+
+| Covariate | Source | Purpose |
+|---|---|---|
+| Local repeat density | RepeatMasker | Control for repetitive regions |
+| GC content | BEDTools nuc | Control for nucleotide composition |
+| Background \(r\) | LDhat/ReLERNN | Control for natural cold spots |
+| Gene density | Annotation | Control for functional constraints |
+| Chromosome | Metadata | Control for chromosome-specific effects |
+
+### F.3 ANCOVA model
+
+$$
+\text{LD}(d) = \beta_0 + \beta_1 \cdot \text{region} + \beta_2 \cdot \text{repeat} + \beta_3 \cdot \text{GC} + \beta_4 \cdot r_{background} + \beta_5 \cdot \text{gene density} + \epsilon
+$$
+
+where `region` is a binary variable (inside vs. flanking).
+
+**Test:** \(\beta_1\) significantly different from zero after controlling for covariates.
+
+### F.4 Implementation
+
+```
+Step 1: Identify inversions from pangenome SV catalog
+        └─ Filter for inversions > 100 kb
+
+Step 2: Calculate LD decay inside and flanking
+        └─ PLINK --r2 --ld-window-kb 1000
+
+Step 3: Estimate background recombination rate
+        └─ LDhat or ReLERNN
+
+Step 4: Calculate covariates
+        ├─ RepeatMasker for repeat density
+        ├─ BEDTools nuc for GC content
+        └─ Annotation for gene density
+
+Step 5: Fit ANCOVA
+        └─ R: lm(LD ~ region + repeat + GC + r_bg + gene_density)
+
+Step 6: Report
+        ├─ β1 coefficient and p-value
+        └─ Effect size (Cohen's d)
+```
+
+### F.5 Pre-registered thresholds
+
+| Metric | Threshold | Action if violated |
+|---|---|---|
+| ANCOVA p-value | < 0.05 | SV enrichment supported |
+| Effect size | Cohen's d > 0.5 | Biologically meaningful |
+| Covariate significance | Report all | Interpret with caution |
+| Multiple testing | FDR < 0.05 | Apply Benjamini-Hochberg |
+
+### F.6 Reporting
+
+Results will be reported as:
+
+1. **ANCOVA table** (coefficients, standard errors, p-values)
+2. **Effect size** (Cohen's d) for region effect
+3. **Covariate effects** (repeat, GC, background \(r\), gene density)
+4. **F4 status** (supported / unsupported / confounded)
+
+---
+
+## Appendix G: Time-Aware HMM Extension
+
+### G.1 Purpose
+
+This appendix specifies the time-aware HMM extension for clonal propagation described in Section 12.2.
+
+### G.2 Model specification
+
+The transition probability becomes:
+
+$$
+P(z_i \mid z_{i-1}, c_i, t_{clonal})
+$$
+
+with two regimes:
+
+| Regime | Condition | Transition probability |
+|---|---|---|
+| Sexual | \(t < T_{domestication}\) | \(P(z_i \mid z_{i-1}, c_i) \propto \exp(-r \cdot d_i \cdot t)\) |
+| Clonal | \(t \geq T_{domestication}\) | \(P(z_i \mid z_{i-1}, c_i) \approx 1\) if \(z_i = z_{i-1}\) |
+
+where \(d_i\) is the physical distance between windows \(i-1\) and \(i\), and \(r\) is the recombination rate.
+
+### G.3 Parameter estimation
+
+| Parameter | Prior | Range | Rationale |
+|---|---|---|---|
+| \(T_{domestication}\) | Log-uniform | 100–500 gen | Historical records |
+| \(t_{effective}\) | Log-uniform | 10–1,000 gen | Per-block estimation |
+| \(r\) | From LDhat/ReLERNN | Estimated | Not constant |
+| \(f_{clonal}\) | Uniform | 0.9–1.0 | Clonal propagation |
+
+### G.4 Implementation
+
+```
+Step 1: Define two-regime transition matrix
+        ├─ Sexual regime: exp(-r * d * t)
+        └─ Clonal regime: identity matrix
+
+Step 2: Estimate T_domestication
+        ├─ From historical records if available
+        └─ From data if not (MCMC)
+
+Step 3: Estimate t_effective per block
+        ├─ Using topology weights from Twisst
+        └─ Relative ages (not absolute)
+
+Step 4: Run forward-backward algorithm
+        └─ Modified for two-regime transition
+
+Step 5: Report
+        ├─ Posterior distribution of T_domestication
+        └─ Relative ages per ancestry block
+```
+
+### G.5 Validation with methylation data
+
+If bisulfite sequencing or methylation data are available:
+
+```
+Step 1: Extract CG/CHG methylation patterns
+        └─ From bisulfite sequencing
+
+Step 2: Reconstruct clonal propagation history
+        └─ Following grapevine methodology
+
+Step 3: Compare with HMM-inferred t_effective
+        └─ Correlation > 0.7 expected
+
+Step 4: If correlation is low
+        └─ Flag as source of unquantified uncertainty
+```
+
+### G.6 Reporting
+
+Results will be reported as:
+
+1. **Posterior distribution** of \(T_{domestication}\)
+2. **Relative ages** per ancestry block (with confidence intervals)
+3. **Comparison** with methylation-based estimates (if available)
+4. **Caveats** for absolute dating
+
+---
+
+## Appendix H: Open Science and Reproducibility Protocol
+
+### H.1 Purpose
+
+This appendix specifies the open science and reproducibility commitments described in Section 23.
+
+### H.2 Pipeline architecture
+
+```
+damask-rose-ancestry/
+├── workflow/
+│   ├── Snakefile
+│   ├── config/
+│   │   ├── config.yaml
+│   │   └── samples.tsv
+│   ├── rules/
+│   │   ├── phase0_audit.smk
+│   │   ├── phasing.smk
+│   │   ├── ancestry_hmm.smk
+│   │   ├── dfoil.smk
+│   │   ├── twisst.smk
+│   │   ├── abc_rf.smk
+│   │   └── falsification.smk
+│   └── scripts/
+│       ├── mixture_hmm.py
+│       ├── time_aware_hmm.py
+│       ├── power_analysis.py
+│       └── confound_control.py
+├── data/
+│   ├── raw/
+│   ├── processed/
+│   └── reference/
+├── results/
+│   ├── ancestry_map/
+│   ├── model_comparison/
+│   ├── sv_analysis/
+│   └── falsification/
+├── docs/
+│   ├── README.md
+│   ├── METHODS.md
+│   └── FALSIFICATION.md
+├── containers/
+│   ├── Dockerfile
+│   └── singularity.def
+└── tests/
+    ├── test_hmm.py
+    ├── test_dfoil.py
+    └── test_abc.py
+```
+
+### H.3 Containerization
+
+| Container | Base image | Tools |
+|---|---|---|
+| `damask-base` | `condaforge/mambaforge` | Python, R, samtools, bcftools |
+| `damask-phasing` | `damask-base` | WhatsHap, H-PoPG, HapCUT2 |
+| `damask-analysis` | `damask-base` | Twisst, DFOIL, ABC-RF |
+| `damask-sv` | `damask-base` | SURVIVOR, BEDTools, PLINK |
+
+### H.4 Pre-registration
+
+The F1–F8 falsification criteria will be pre-registered on OSF before Phase III begins:
+
+**OSF Pre-registration Template:**
+
+```
+Title: The Genomic Mosaic of the Damask Rose:
+       A Haplotype-Resolved Framework for Distinguishing
+       Ancient Hybridization, Introgression, and Incomplete Lineage Sorting
+
+Hypotheses:
+  H1: The nuclear genome of R. × damascena contains a
+      non-random, spatially structured ancestry mosaic.
+  H0a: Incomplete lineage sorting
+  H0b: Later introgression
+  H0c: Reference/sampling/methodological artifact
+  H0d: Ghost lineage introgression
+
+Falsification Criteria:
+  F1: Instability under methodological perturbation
+  F2: ILS explanation
+  F3: Reference bias explanation
+  F4: Structural variation support
+  F5: Alternative demographic models
+  F6: Sampling sufficiency
+  F7: Identifiability
+  F8: Ghost lineage explanation
+
+Analysis Plan:
+  - Phase 0 audit table (Appendix A)
+  - Phasing quality assessment (Appendix C)
+  - Mixture-model HMM (Section 7)
+  - ABC-RF model comparison (Appendix D)
+  - DFOIL/Δ power analysis (Appendix E)
+  - SV/LD confound control (Appendix F)
+  - Time-aware HMM (Appendix G)
+
+Data Availability:
+  - Pipeline: GitHub
+  - Intermediate data: Zenodo
+  - Ancestry map: Zenodo
+
+Timeline:
+  Phase 0: Months 1-3
+  Phase I-II: Months 4-9
+  Phase III: Months 10-18
+  Phase IV: Months 19-24
+  Phase V: Months 25-30
+  Phase VI: Months 31-36
+  Phase VII: Months 37-42
+```
+
+### H.5 Reproducibility checklist
+
+| Item | Status | Location |
+|---|---|---|
+| Pipeline code | ✓ | GitHub |
+| Containerization | ✓ | Docker/Singularity |
+| Test suite | ✓ | `tests/` |
+| Documentation | ✓ | `docs/` |
+| Pre-registration | ✓ | OSF |
+| Data deposition | ✓ | Zenodo |
+| Version control | ✓ | Git |
+| Continuous integration | ✓ | GitHub Actions |
+
+### H.6 Reporting
+
+Reproducibility will be reported as:
+
+1. **GitHub repository URL**
+2. **Zenodo DOI** for data and code
+3. **OSF pre-registration DOI**
+4. **Container hashes** for reproducibility
+5. **Test coverage** (percentage)
+
+---
+
+## Appendix I: Falsification Decision Matrix
+
+### I.1 Purpose
+
+This appendix provides a decision matrix for the F1–F8 falsification criteria described in Section 16.
+
+### I.2 Decision matrix
+
+| Criterion | Metric | Threshold | If violated | Result status |
+|---|---|---|---|---|
+| **F1** | Bootstrap consistency | > 90% | Report as U | Unresolved |
+| **F1** | FDR correction | q < 0.05 | Report as U | Unresolved |
+| **F2** | ILS simulation p-value | p < 0.01 | Downgrade | Compatible with ILS |
+| **F3** | Reference bias simulation | p < 0.05 | Reject | Artifact |
+| **F4** | SV enrichment (ANCOVA) | p < 0.05 | Unsupported | No independent evidence |
+| **F4** | LD decay (ANCOVA) | p < 0.05 | Unsupported | No independent evidence |
+| **F5** | Bayes factor | > 3 | Cannot discriminate | Report all models |
+| **F5** | ABC-RF posterior | > 0.66 | Cannot discriminate | Report all models |
+| **F6** | BUSCO completeness | > 90% | Provisional | Underpowered |
+| **F6** | Chromosome-level assembly | Required | Provisional | Underpowered |
+| **F7** | Ancestry accuracy | > 80% | Downgrade | Unresolved |
+| **F7** | Inheritance-mode confusion | < 20% | Fix \(c_i\) | Simplified model |
+| **F7** | \(\beta_r\) correlation | > 0.7 | External prior | Simplified model |
+| **F8** | Ghost lineage simulation | p < 0.05 | Downgrade | Compatible with ghost |
+
+### I.3 Result classification
+
+| Result | Description | Conditions |
+|---|---|---|
+| **A** | Strong multi-lineage mosaic | All F1–F8 pass |
+| **B** | Hybridization + introgression | F2–F5 pass, F8 pass |
+| **C** | ILS-dominated | F2 fails |
+| **D** | Insufficient resources | F6 fails for ≥2 lineages |
+
+### I.4 Reporting
+
+Results will be reported as:
+
+1. **Falsification table** (F1–F8 status per ancestry block)
+2. **Result classification** (A, B, C, or D)
+3. **Unresolved regions** with reasons
+4. **Confidence intervals** for all estimates
+
+---
+
+## Appendix J: Negative Control Calibration
+
+### J.1 Purpose
+
+This appendix specifies the negative control calibration described in Section 4.1.
+
+### J.2 Negative control species
+
+| Species | Ploidy | Known ancestry | Source |
+|---|---|---|---|
+| *R. chinensis* × *R. odorata* | Diploid | Known hybrid | Pangenome |
+| *R. multiflora* | Diploid | Non-hybrid | Pangenome |
+| *R. wichurana* | Diploid | Non-hybrid | Pangenome |
+
+### J.3 Calibration workflow
+
+```
+Step 1: Select negative control species
+        └─ Known diploid hybrid and non-hybrid
+
+Step 2: Run full pipeline
+        ├─ Mixture-model HMM
+        ├─ DFOIL/Δ
+        ├─ Twisst
+        └─ ABC-RF
+
+Step 3: Compare inferred ancestry to known ancestry
+        └─ Calculate false positive rate
+
+Step 4: Calibrate thresholds
+        ├─ Adjust F1–F8 thresholds if needed
+        └─ Report false positive rate
+
+Step 5: Apply calibrated thresholds to R. × damascena
+```
+
+### J.4 Expected outcomes
+
+| Control | Expected result | False positive rate |
+|---|---|---|
+| *R. chinensis* × *R. odorata* | Detect hybrid ancestry | < 10% |
+| *R. multiflora* | No false hybrid signal | < 5% |
+| *R. wichurana* | No false hybrid signal | < 5% |
+
+### J.5 Reporting
+
+Results will be reported as:
+
+1. **False positive rate** for each control
+2. **Calibrated thresholds** for F1–F8
+3. **Comparison** with uncalibrated thresholds
+4. **Recommendation** for threshold adjustment
+
+---
+
+## Appendix K: Adversarial Collaboration Protocol
+
+### K.1 Purpose
+
+This appendix specifies the adversarial collaboration protocol described in Section 24.
+
+### K.2 Collaboration structure
+
+| Role | Responsibilities | Deliverable |
+|---|---|---|
+| **Primary researcher (Ouadi)** | Lead analysis, pipeline development | Thesis, pipeline |
+| **Adversarial collaborator** | Independent analysis, skeptical review | Independent report |
+| **Thesis committee** | Oversight, mediation | Thesis approval |
+
+### K.3 Adversarial collaborator profile
+
+| Attribute | Requirement |
+|---|---|
+| Expertise | Population genetics, phylogenetics, or polyploid evolution |
+| Stance | Skeptical of triparental hypothesis |
+| Methods | Independent (e.g., MSMC, fastsimcoal2, phylogenetic) |
+| Commitment | 10–20% FTE for 12 months |
+
+### K.4 Collaboration workflow
+
+```
+Step 1: Exchange data and methods
+        ├─ Primary researcher shares pipeline and data
+        └─ Adversarial collaborator shares methods
+
+Step 2: Independent analysis
+        ├─ Primary researcher runs main pipeline
+        └─ Adversarial collaborator runs independent analysis
+
+Step 3: Compare results
+        ├─ Convergence: Strong support for ancestry map
+        └─ Divergence: Disagreement is valuable finding
+
+Step 4: Joint interpretation
+        ├─ If convergent: Co-authored paper
+        └─ If divergent: Report both, discuss reasons
+
+Step 5: Resolution
+        ├─ Additional simulations
+        ├─ Sensitivity analyses
+        └─ Joint robustness checks
+```
+
+### K.5 Products
+
+| Product | Description | Authorship |
+|---|---|---|
+| **Convergent result** | Co-authored preprint | Primary + adversarial |
+| **Divergent result** | Co-authored preprint | Primary + adversarial |
+| **Thesis chapter** | Independent analysis report | Adversarial collaborator |
+| **Pipeline** | Open-source workflow | Primary researcher |
+
+### K.6 Reporting
+
+Results will be reported as:
+
+1. **Convergence/divergence** status
+2. **Comparison table** (primary vs. adversarial results)
+3. **Reasons for divergence** (if applicable)
+4. **Joint conclusion** or **documented disagreement**
+
+---
+
+## Appendix L: Timeline and Milestones
+
+### L.1 Gantt chart
+
+```
+Month:  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42
+        │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │
+Phase 0 ████████
+Phase I         ████████████
+Phase II                    ████████████
+Phase III                               ████████████████████████
+Phase IV                                                ████████████████
+Phase V                                                                 ████████████████
+Phase VI                                                                                ████████████
+Phase VII                                                                                           ████████████████
+Writing                                                                                                         ████████████████████
+```
+
+### L.2 Milestones
+
+| Milestone | Month | Deliverable | Go/No-Go |
+|---|---|---|---|
+| **M1** | 3 | Phase 0 audit table complete | Go/No-Go |
+| **M2** | 6 | Phasing quality assessment complete | Go/No-Go |
+| **M3** | 9 | F7 identifiability check complete | Go/No-Go |
+| **M4** | 12 | Baseline reproduction complete | Go/No-Go |
+| **M5** | 18 | Ancestry map (preliminary) | Go/No-Go |
+| **M6** | 24 | ABC-RF model comparison complete | Go/No-Go |
+| **M7** | 30 | SV/LD analysis complete | Go/No-Go |
+| **M8** | 36 | Temporal/geographic inference complete | Go/No-Go |
+| **M9** | 42 | Thesis submission | Final |
+
+### L.3 Contingency timeline
+
+| Scenario | Adjustment | Impact |
+|---|---|---|
+| **Phasing fails** | Switch to pseudo-diploid | +3 months |
+| **Donors fail F6** | Collapse to biparental | -3 months |
+| **Result D** | Reframe as methods paper | No delay |
+| **Adversarial disagreement** | Additional simulations | +2 months |
+
+---
+
+## Appendix M: Glossary
+
+| Term | Definition |
+|---|---|
+| **ABC-RF** | Approximate Bayesian Computation with Random Forest |
+| **ANCOVA** | Analysis of Covariance |
+| **ARG** | Ancestral Recombination Graph |
+| **BUSCO** | Benchmarking Universal Single-Copy Orthologs |
+| **DFOIL** | Directional test for introgression on five-taxon trees |
+| **FDR** | False Discovery Rate |
+| **HMM** | Hidden Markov Model |
+| **ILS** | Incomplete Lineage Sorting |
+| **LAI** | LTR Assembly Index |
+| **LD** | Linkage Disequilibrium |
+| **MSMC** | Multiple Sequentially Markovian Coalescent |
+| **N50** | Assembly contiguity metric |
+| **OSF** | Open Science Framework |
+| **SER** | Switch Error Rate |
+| **SNP** | Single Nucleotide Polymorphism |
+| **SV** | Structural Variant |
+| **Twisst** | Topology weighting by iterative sampling of sub-trees |
+
+---
+
+## Appendix N: Data Availability Statement
+
+### N.1 Data sources
+
+| Data type | Source | Accession | Availability |
+|---|---|---|---|
+| *R. × damascena* genome | Zhang et al. 2026 | TBD | Pangenome |
+| *R. moschata* genome | Zhang et al. 2026 | TBD | Pangenome |
+| *R. gallica* genome | Zhang et al. 2026 | TBD | Pangenome |
+| *R. fedtschenkoana* genome | Kirov et al. 2026 | TBD | Nature |
+| *R. majalis* genome | TBD | TBD | SRA |
+| *R. davurica* genome | TBD | TBD | GenBank |
+| Moroccan accessions | Lebkiri et al. 2024 | TBD | SRA |
+
+### N.2 Data deposition
+
+| Data type | Repository | DOI |
+|---|---|---|
+| Pipeline code | GitHub | TBD |
+| Container images | Docker Hub | TBD |
+| Intermediate data | Zenodo | TBD |
+| Ancestry map | Zenodo | TBD |
+| Pre-registration | OSF | TBD |
+
+### N.3 Data access
+
+All data will be made publicly available upon publication. Pre-publication access will be granted to collaborators and reviewers upon request.
+
+---
+
+## Appendix O: Ethical Considerations
+
+### O.1 Research ethics
+
+| Consideration | Status |
+|---|---|
+| Human subjects | Not applicable |
+| Animal welfare | Not applicable |
+| Environmental impact | Minimal (computational) |
+| Data privacy | Not applicable |
+| Cultural sensitivity | Moroccan rose cultivation context acknowledged |
+
+### O.2 Open science ethics
+
+| Principle | Implementation |
+|---|---|
+| Transparency | Pre-registration, open code |
+| Reproducibility | Containerization, documentation |
+| Inclusivity | Adversarial collaboration, open access |
+| Attribution | Co-authorship, citation |
+
+### O.3 Cultural context
+
+The Damask rose is culturally and economically important in Morocco, particularly in the Rose Valley and Dades Valley regions. This research acknowledges:
+
+- The traditional knowledge of Moroccan rose cultivators
+- The economic importance of rose cultivation
+- The potential for research to support sustainable rose production
+- The importance of benefit-sharing with local communities
+
+---
+
+## Appendix P: References (Extended)
+
+1. Zhang, X. et al. (2026). Pangenomic analyses of rose uncover widespread structural variation and empower genomics-directed breeding. *Nature Genetics*, 58, 1164–1175.
+
+2. Leppälä, K. et al. (2024). Five-leaf generalizations of the D-statistic reveal the directionality of admixture. *Molecular Biology and Evolution*, 41(11), msae198.
+
+3. Martin, S. H. & Van Belleghem, S. M. (2017). Exploring evolutionary relationships across the genome using topology weighting. *Genetics*, 206(1), 429–438.
+
+4. Schrinner, S. D. et al. (2024). Haplotype threading: accurate polyploid phasing from long reads. *Genome Biology*.
+
+5. Lebkiri, N. et al. (2024). Morphological characterization and genetic diversity of mini core collection of *Rosa damascena* from Morocco. *Journal of Genetic Engineering and Biotechnology*, 22(4), 100423.
+
+6. Roux, C. et al. (2022). Inferring the Demographic History and Inheritance Mode of Tetraploid Species Using ABC. *Methods in Molecular Biology*.
+
+7. Collin, F. D. et al. (2021). Extending approximate Bayesian computation with supervised machine learning to infer demographic history from genetic polymorphisms using DIYABC Random Forest. *Molecular Ecology Resources*.
+
+8. Martin, S. H. (2025). A model-free method for genealogical inference without phasing and its application for topology weighting. *Genetics*, iyaf181.
+
+9. Coombes, B. et al. (2024). Introgressions lead to reference bias in wheat RNA-seq analysis. *BMC Biology*, 22, 56.
+
+10. Pease, J. B. & Hahn, M. W. (2015). Detection and polarization of introgression in a five-taxon phylogeny. *Systematic Biology*, 64(4), 651–662.
+
+11. Kirov, I. et al. (2026). High-quality chromosome-level genome assembly of *Rosa fedtschenkoana*. *Scientific Data*.
+
+12. Rusanov, K. et al. (2005). Lessons from the microsatellite characterization of a segregating population derived from seeds of open pollinated *Rosa damascena* Mill. F. Trigintipetala plants. *Biotechnology & Biotechnological Equipment*, 19(3), 57–62.
+
+13. Patterson, N. et al. (2012). Ancient admixture in human history. *Genetics*, 192(3), 1065–1093.
+
+14. Green, R. E. et al. (2010). A draft sequence of the Neandertal genome. *Science*, 328(5979), 710–722.
+
+15. Durand, E. Y. et al. (2011). Testing for ancient admixture between closely related populations. *Molecular Biology and Evolution*, 28(8), 2239–2252.
+
+16. Eaton, D. A. R. & Ree, R. H. (2013). Inferring phylogeny and introgression using RADseq data: an example from flowering plants (Pedicularis: Orobanchaceae). *Systematic Biology*, 62(5), 689–706.
+
+17. Hahn, M. W. & Hibbins, M. S. (2019). A three-sample test for introgression. *Molecular Biology and Evolution*, 36(12), 2878–2882.
+
+18. Hibbins, M. S. & Hahn, M. W. (2022). Distinguishing between incomplete lineage sorting and genomic introgressions. *PLoS Genetics*, 18(1), e1010029.
+
+19. Blischak, P. D. et al. (2020). HyDe: a Python package for genome-scale hybridization detection. *Systematic Biology*, 69(1), 174–185.
+
+20. Kubatko, L. S. & Chifman, J. (2019). An invariants-based method for efficient identification of hybrid species from large-scale genomic data. *BMC Evolutionary Biology*, 19(1), 112.
+
+---
+
+## Research Status
+
+**Draft status:** v0.4 — Appendices complete
+
+**Not yet established:** the actual genome-wide ancestry map.
+
+**Required next step:** Phase 0 data and phasing audit, with pre-specified go/no-go decision rules. Complete Table A.2 before any model specification.
+
+**Critical rule:** No ancestry claim will be accepted unless it survives all quantitative falsification thresholds (F1–F8).
+
+**Primary falsification target:** determine whether the observed genomic mosaic can be explained more parsimoniously by incomplete lineage sorting, later introgression, ghost lineage introgression, sampling effects, or technical artifacts.
+
+**Ultimate deliverable:** a reproducible computational framework and genome-wide evolutionary reconstruction of *Rosa × damascena*, with explicit uncertainty quantification and pre-registered falsification status.
+
+---
+
+*End of Appendices*
