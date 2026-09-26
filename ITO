@@ -1,0 +1,2312 @@
+Information Trajectory Optimization (ITO)
+
+A First-Principles Taxonomy of Computational Operations for Efficient Information Retrieval and Knowledge Systems
+
+Version 0.4 — Validated Theoretical Draft
+
+Epistemic status: Literature-anchored theoretical framework. No original experiments, training runs, benchmarks, or physical deployments have been conducted by the authors. All quantitative values are labelled according to the discipline defined in §14. All proposals are validated through internet literature search and LLM analysis only.
+
+Authors: Ouadi Maakoul + AI Collaborative Research
+
+---
+
+Abstract
+
+Modern information retrieval and retrieval-augmented generation systems are composed of increasingly complex computational pipelines. Despite substantial progress in retrieval quality, generation quality, adaptive retrieval, indexing, reranking, compression, and verification, existing architectures are generally evaluated as complete systems rather than decomposed into reusable computational operations.
+
+This work proposes Information Trajectory Optimization (ITO), a first-principles framework for decomposing heterogeneous information-access architectures into elementary operations, measuring their information contribution and multidimensional computational cost, identifying architectural redundancies and dependencies, and ultimately optimizing information trajectories rather than optimizing entire architectures as indivisible objects.
+
+The central hypothesis is that many information-seeking tasks can be solved through substantially shorter computational trajectories than those implemented by full architectures, while preserving an acceptable level of answer quality, evidence quality, or decision quality.
+
+ITO does not initially propose another retrieval architecture. Instead, it constructs an architecture × operation representation of existing systems and progressively refines the operation taxonomy through contact with real architectures.
+
+Five architectures have so far been used as structural tests: BM25, Naive RAG, Self-RAG, DPR, and ColBERT. These tests have produced several refinements:
+
+· Dense retrieval cannot be represented by a single cost value — its cost depends strongly on index configuration, dataset, and hardware.
+· Self-RAG demonstrates that retrieval gating and candidate selection must be distinguished from conventional retrieval and from stopping.
+· DPR reveals the need to separate representation construction from similarity search, and to distinguish integrated top-k selection from an independent candidate-selection operation.
+· ColBERT validates the decomposition of late interaction into token-level representation, storage, MaxSim interaction, and token pruning — and establishes that MaxSim belongs to retrieval itself, not to post-retrieval reranking.
+
+The resulting framework represents computational cost as a vector conditioned on configuration, data distribution, and execution environment:
+
+\mathbf{C}_i(\theta, D, H) = (C_{\text{compute}}, C_{\text{latency}}, C_{\text{tokens}}, C_{\text{memory}}, C_{\text{network}}, C_{\text{calls}})
+
+with explicit separation between offline and online cost, a per-dimension composition operator, a dependency-aware feasible trajectory space, and a strict convention that absence of measurement is never interpreted as zero cost.
+
+The framework deliberately does not claim that any operation is globally optimal. Conditional information gain remains an empirical quantity to be measured through ablation, controlled intervention, and eventually dependency-aware Shapley-style attribution.
+
+The long-term objective is a general theory for selecting the smallest sufficient information trajectory for a query under explicit quality and resource constraints.
+
+---
+
+1. Problem Statement
+
+Modern knowledge systems increasingly combine lexical retrieval, dense retrieval, late-interaction retrieval, query transformation, reranking, filtering, graph traversal, evidence verification, adaptive retrieval, context compression, generation, answer verification, provenance tracking, memory, and stopping policies.
+
+These mechanisms are usually presented as architectures:
+
+\text{Query} \rightarrow \text{Retriever} \rightarrow \text{Reranker} \rightarrow \text{Generator}
+
+or:
+
+\text{Query} \rightarrow \text{Retrieve} \rightarrow \text{Reflect} \rightarrow \text{Retrieve again} \rightarrow \text{Generate}
+
+The difficulty is that two architectures may contain many of the same computational functions while arranging them differently. Consequently, comparing architectures as indivisible objects can hide the actual source of computational cost and informational benefit.
+
+ITO asks a different question:
+
+What elementary operations does an information system actually perform, what does each operation cost, what information does it contribute conditional on the state already reached, and can the same decision quality be obtained through a shorter trajectory?
+
+1.1 Related Work Positioning
+
+ITO is not the first framework to decompose retrieval systems. Existing taxonomies organise design choices across architectural layers — for example, Representation, Granularity, Orchestration, and Robustness. Such taxonomies are complementary to ITO: they describe what a system is composed of, whereas ITO describes what it costs and how little of it is sufficient.
+
+Dimension Existing taxonomies ITO
+Decomposition level Architectural layers Computational primitives
+Cost model Not specified Vector-valued, configuration-conditioned
+Quality model Not specified Vector-valued, task-specific
+Optimization object Design choices Trajectories
+Empirical protocol Not specified Controlled ablation + dependency-aware attribution
+
+A recent SoK formalises agentic RAG loops as finite-horizon POMDPs with explicit control policies. ITO's contribution is not the POMDP formulation itself but the operation-level decomposition that makes the state space, action space, and cost function measurable.
+
+---
+
+2. The Fundamental Object: An Information Trajectory
+
+Let a query be $q \in \mathcal{Q}$, and let a computational trajectory be
+
+p = (o_1, o_2, \ldots, o_n)
+
+where each $o_i$ is an operation from a finite or progressively refined operation set $\mathcal{O} = \{O_1, O_2, \ldots, O_m\}$.
+
+The trajectory transforms an initial information state $S_0$ into successive states:
+
+S_0 \xrightarrow{o_1} S_1 \xrightarrow{o_2} S_2 \rightarrow \cdots \xrightarrow{o_n} S_n.
+
+The final state is used to produce an answer, decision, retrieval result, or other task output.
+
+ITO therefore treats computation not simply as a collection of modules, but as a path through an information state space.
+
+2.1 Explicit State Definition
+
+The information state $S$ is defined explicitly as a tuple:
+
+\boxed{S = (Q_{\text{retrieved}}, Q_{\text{compressed}}, \text{budget\_consumed}, \text{verification\_flags})}
+
+where:
+
+· $Q_{\text{retrieved}}$ = the set of retrieved evidence items,
+· $Q_{\text{compressed}}$ = the compressed context derived from retrieved evidence,
+· $\text{budget\_consumed}$ = the vector of resources consumed so far,
+· $\text{verification\_flags}$ = the set of epistemic flags raised by verification operations.
+
+This definition makes conditional information gain $G_i(S) = \Delta Q(O_i \mid S)$ falsifiable and measurable in principle. It aligns with the POMDP belief state formalized in the SoK on agentic RAG.
+
+---
+
+3. The Architecture × Operation Matrix
+
+The first methodological instrument is an architecture–operation presence matrix:
+
+P_{ji} = \begin{cases} 1 & \text{if architecture } A_j \text{ contains operation } O_i \\ 0 & \text{otherwise} \end{cases}
+
+This matrix is explicitly not the final optimization model. It is a microscope. It allows us to identify common operations, architecture-specific operations, apparent redundancies, missing operations, structural invariants, dependencies, and candidate substitution points.
+
+The matrix must therefore be supplemented by at least four additional objects:
+
+P, \quad C, \quad G, \quad D
+
+where:
+
+· $P$ = presence,
+· $C$ = cost (vector-valued, configuration-conditioned),
+· $G$ = conditional information/quality gain,
+· $D$ = dependency structure (DAG).
+
+3.1 Functional Operation vs Independent Execution Primitive
+
+A critical methodological distinction emerges from the DPR and Self-RAG analyses:
+
+An operation may exist conceptually without appearing as a separately measurable computational node.
+
+For example, DPR performs top-k selection, so candidate selection functionally exists. But in DPR's actual implementation, top-k selection is integrated into the similarity search itself, not implemented as an independent module.
+
+ITO therefore distinguishes:
+
+· Functional operations — what the system accomplishes as a whole.
+· Independent execution primitives — what can be separately measured, ablated, and assigned a distinct cost.
+
+Only the second category earns a column in the experimental matrix. The first category may still be tracked for conceptual clarity.
+
+3.2 Layered Operation Registry (L0/L1/L2)
+
+Following validated critical advice, the operation registry is organized into three layers:
+
+· L0 — Primitives: Operations that can in principle be measured with the instruments defined in §4.2. If an operation cannot be profiled with a declared instrument, it does not receive an L0 ID.
+· L1 — Families: Composite operations such as $O_7 = \{O_{7a}, O_{7b}, O_{7c}\}$ and $O_8 = \{O_{8a}, O_{8b}, O_{8c}, O_{8d}\}$.
+· L2 — Patterns: Meta-taxonomic categories such as compression, routing, and verification. No cost is assigned at this layer.
+
+Rule: Do not assign an ID to a hypothesis. Hypotheses are labeled [H] and tracked separately.
+
+---
+
+4. Cost Must Be a Vector
+
+A central result emerging from the DPR and ColBERT analyses is that an operation does not possess one universal cost.
+
+\mathbf{C}_i = (C_{\text{compute}}, C_{\text{latency}}, C_{\text{tokens}}, C_{\text{memory}}, C_{\text{network}}, C_{\text{calls}}).
+
+Furthermore:
+
+\mathbf{C}_i = \mathbf{C}_i(\theta, D, H)
+
+where:
+
+· $\theta$ = algorithmic / index configuration,
+· $D$ = dataset and query distribution,
+· $H$ = hardware / execution environment.
+
+This distinction is essential. Dense retrieval using a flat index and dense retrieval using an approximate-nearest-neighbour structure can implement essentially the same semantic retrieval operation while exhibiting radically different online latency and memory requirements.
+
+Therefore:
+
+\boxed{C(O_7) \neq \text{constant}}
+
+and more appropriately:
+
+\boxed{C(O_7 \mid \theta_{\text{index}}, D, H)}
+
+must be measured.
+
+4.1 NR ≠ 0
+
+If a publication does not report a specific cost dimension (e.g., memory), ITO records:
+
+\boxed{\text{NR}}
+
+— not $0$. Absence of measurement is not evidence of zero cost. NR is not imputed in the optimization layer.
+
+4.2 Measurement Instruments
+
+Each cost dimension requires an explicit measurement instrument:
+
+Dimension Unit Instrument
+$C_{\text{compute}}$ FLOPs or GPU-seconds Hardware profiler
+$C_{\text{latency}}$ milliseconds Wall-clock timer
+$C_{\text{tokens}}$ count Tokenizer
+$C_{\text{memory}}$ GB Memory profiler
+$C_{\text{network}}$ bytes or requests Network monitor
+$C_{\text{calls}}$ count Instrumentation
+
+$C_{\text{calls}}$ counts discrete invocation events that incur fixed overhead: API calls, model forward passes, network requests.
+
+4.3 Per-Dimension Cost Composition Rules
+
+The trajectory cost is defined via a composition operator $\oplus$:
+
+\mathbf{C}(p) = \bigoplus_{o_i \in p} \mathbf{C}_i(\theta_i, D, H).
+
+The composition operator must be specified per dimension, because different physical quantities compose differently:
+
+\boxed{
+\begin{aligned}
+C_{\text{latency}}(p) &= \begin{cases} \max_i C_{\text{latency}}(o_i) & \text{under pipelining} \\ \sum_i C_{\text{latency}}(o_i) & \text{under sequential execution} \end{cases} \\
+C_{\text{memory}}(p) &= \begin{cases} \max_i C_{\text{memory}}(o_i) & \text{under shared pool} \\ \sum_i C_{\text{memory}}(o_i) & \text{under isolated execution} \end{cases} \\
+C_{\text{tokens}}(p) &= \sum_i C_{\text{tokens}}(o_i) \\
+C_{\text{calls}}(p) &= \sum_i C_{\text{calls}}(o_i) \\
+C_{\text{compute}}(p) &= \text{model-dependent (e.g., Roofline)} \\
+C_{\text{network}}(p) &= \text{model-dependent}
+\end{aligned}
+}
+
+The additive form $\sum$ is a first-order approximation valid when operations are resource-independent and sequentially executed. The general operator is $\oplus$, with the above rules specifying its instantiation per dimension.
+
+---
+
+5. Offline Cost Versus Online Cost
+
+ITO explicitly separates:
+
+\mathbf{C}_i = \mathbf{C}_i^{\text{offline}} + \mathbf{C}_i^{\text{online}}
+
+although the dimensions themselves should not be added numerically without explicit deployment weights, because they represent different physical/resource quantities.
+
+Offline cost may include document encoding, index construction, model preparation, token representation generation, storage construction, pruning, and graph construction.
+
+Online cost may include query encoding, retrieval, similarity computation, reranking, generation, verification, network calls, and additional retrieval iterations.
+
+This distinction became unavoidable in the DPR and ColBERT analyses. An expensive offline computation can reduce online latency.
+
+5.1 Principle: Optimization as Temporal Redistribution
+
+This suggests a general ITO principle:
+
+\boxed{\text{Optimization can be temporal redistribution of computational cost.}}
+
+For example:
+
+C_{\text{offline}} \uparrow \quad\text{while}\quad C_{\text{online}} \downarrow.
+
+The framework is therefore not simply about minimizing cost, but about choosing where in time cost is paid subject to deployment constraints.
+
+---
+
+6. Information Gain Cannot Yet Be Assumed
+
+A preliminary efficiency concept is:
+
+\eta_i = \frac{\Delta I_i}{C_i}.
+
+This formulation is incomplete for two reasons.
+
+First, the benefit of an operation depends on what has already been performed:
+
+G_i(S) = \Delta Q(O_i \mid S)
+
+where $S$ is the current information state as defined in §2.1. Therefore:
+
+G_i(S_1) \neq G_i(S_2)
+
+in general. An operation may be highly useful early in a trajectory and nearly useless after another operation has already extracted the relevant information.
+
+Second, vector division is not mathematically defined in the ordinary scalar sense. The scalar $\eta_i$ must be replaced by a quality–cost response vector, or converted into a scalar only after deployment weights are explicitly specified.
+
+---
+
+7. Why Operation Ordering Matters
+
+Consider:
+
+O_a \rightarrow O_b \quad\text{versus}\quad O_b \rightarrow O_a.
+
+The marginal contribution of $O_b$ can differ between the two trajectories:
+
+\Delta Q_b \mid O_a \neq \Delta Q_b \mid \varnothing.
+
+ITO therefore cannot assign universal values such as "O7 gives 0.4 information units" without specifying the state in which O7 is executed.
+
+7.1 Dependency Structure $D$
+
+The dependency structure is a directed acyclic graph $D = (V, E)$ where $V = \mathcal{O}$ and edges have types:
+
+\boxed{E \subseteq V \times V \times \{\text{requires}, \text{conditions}, \text{mutually\_excludes}\}}
+
+· requires: $O_j$ cannot execute without $O_i$. Example: $O_{7c}$ requires $O_{7a}$ and $O_{7b}$.
+· conditions: $O_i$ modifies the cost or behavior of $O_j$ but is not a prerequisite. Example: $O_{30}$ (Retrieval Gate) conditions $O_7$.
+· mutually_excludes: $O_i$ and $O_j$ cannot both appear in a feasible trajectory.
+
+Feasible trajectory space: The feasible trajectory space $\mathcal{P}(q)$ is the set of topological orderings of $D$ compatible with the query, not the full powerset of $\mathcal{O}$.
+
+Example DAG — ColBERT-style late interaction:
+
+```
+OFFLINE
+  O8a Token Encoding ──► O8b Token Storage
+                              │
+                              ▼
+                        Θ_index (parameter space)
+
+ONLINE
+  Query ──► O7a Query Encoding ──► O8c MaxSim Interaction ──► O31 Candidate Selection
+                                                                      │
+                                                                      ▼
+                                                                O24 Generation
+```
+
+Edges:
+
+· $O_{8a} \xrightarrow{\text{requires}} O_{8b}$
+· $O_{8b} \xrightarrow{\text{conditions}} O_{8c}$ (via $\Theta_{\text{index}}$)
+· $O_{7a} \xrightarrow{\text{requires}} O_{8c}$
+· $O_{8c} \xrightarrow{\text{requires}} O_{31}$
+· $O_{31} \xrightarrow{\text{requires}} O_{24}$
+· $O_{8d} \xrightarrow{\text{conditions}} O_{8b}$ (pruning reduces storage)
+
+7.2 Three Empirical Approaches
+
+· A. Canonical trajectories. Define standard architecture-specific orders. Simple, but biased by the choice of order.
+· B. Dependency-aware Shapley attribution. Sample feasible permutations (respecting $D$) of operations and estimate average marginal contributions. Non-biased but costly. Prior work on Shapley Context Pruning provides Monte Carlo sample-complexity bounds for the closely related problem of context-unit attribution; ITO extends this to operation-level attribution with the caveat that the standard permutation-invariance assumption is violated by $D$.
+· C. Controlled ablation. Remove one operation or operation class while keeping other variables fixed. Approximate but an order of magnitude cheaper than Shapley.
+
+For the first empirical phase, controlled ablation (C) with query stratification is the cleanest starting point. Dependency-aware Shapley (B) can subsequently be applied to a smaller set of promising operations identified by (C).
+
+---
+
+8. The Experimental Hypothesis
+
+The central ITO hypothesis is:
+
+\boxed{\exists p \in \mathcal{P}(q) : \operatorname{Cost}(p) \ll \operatorname{Cost}(p_{\text{full}})}
+
+while:
+
+\boxed{Q(p) \approx Q(p_{\text{full}})}
+
+where $p$ is a reduced trajectory, $p_{\text{full}}$ is the reference architecture, and $Q$ is task-specific quality.
+
+This is a hypothesis. It is not yet a result.
+
+The null hypothesis is:
+
+H_0 : \text{decomposition does not improve the Pareto frontier.}
+
+The alternative is:
+
+H_1 : \text{decomposition enables a less costly trajectory at equivalent quality.}
+
+This formulation is falsifiable.
+
+---
+
+9. The Five Architectural Tests
+
+ITO has so far been stress-tested structurally against:
+
+1. BM25 — lexical retrieval baseline,
+2. Naive RAG — minimal retrieval-to-generation pipeline,
+3. Self-RAG — conditional retrieval and reflection,
+4. DPR — dense bi-encoder retrieval,
+5. ColBERT — late-interaction retrieval.
+
+The purpose was not to determine which architecture is superior. The purpose was to ask: Can the proposed operations survive contact with fundamentally different retrieval paradigms?
+
+The taxonomy has changed after each test. That refinement is itself evidence that the methodology is useful, but it is not evidence that the final taxonomy is correct.
+
+---
+
+10. BM25: Lexical Retrieval as the Baseline
+
+BM25 originates within the probabilistic relevance framework and became a standard lexical ranking function in information retrieval.
+
+A simplified BM25 trajectory is:
+
+```
+QUERY
+  │
+  ▼
+O5 Lexical Retrieval
+  │
+  ▼
+Ranked Documents
+```
+
+Status. BM25 is a retrieval model, not a complete RAG architecture. It is retained in the matrix as a primitive baseline, not as a comparable architecture.
+
+BM25 demonstrates that a retrieval system does not necessarily require neural query encoding, dense representations, late interaction, generation, adaptive retrieval, or multi-hop control.
+
+Operation presence. Only $O_5 = 1$; all other operations $= 0$. Query parsing is not counted as $O_1$ merely because an inverted index tokenises the query — that would artificially upgrade a mechanical step into a modelled operation.
+
+---
+
+11. Naive RAG: The Minimal Trajectory
+
+A minimal retrieval-augmented generation architecture can be represented as:
+
+```
+QUERY
+  │
+  ▼
+O7 Dense Retrieval
+  │
+  ▼
+Retrieved Passages
+  │
+  ▼
+O24 Generation
+  │
+  ▼
+ANSWER
+```
+
+Status. Naive RAG establishes a useful baseline containing $O_7 + O_{24}$. It does not demonstrate that additional verification, reranking, decomposition, or adaptive control is always necessary.
+
+Cost structure. Online cost decomposes as:
+
+C_{\text{RAG}} = C_{\text{embed}} + C_{\text{retrieve}} + C_{\text{LLM}}
+
+with offline cost corresponding primarily to document encoding and index construction.
+
+---
+
+12. Self-RAG: Retrieval Becomes Conditional
+
+Self-RAG introduced adaptive retrieval and reflection mechanisms within a single language-model framework. A simplified trajectory is:
+
+```
+QUERY
+  │
+  ▼
+O30 Retrieval Gate
+  ├── NO  ──────────────► GENERATION
+  └── YES
+        │
+        ▼
+      O7 Retrieval
+        │
+        ▼
+      Retrieved Evidence
+        │
+        ▼
+      Evidence Verification (O15)
+        │
+        ▼
+      Generation (O24)
+        │
+        ▼
+      Answer Verification (O27)
+        ├── sufficient ──► STOP
+        └── insufficient ► further retrieval
+```
+
+12.1 Taxonomic Refinements from Self-RAG
+
+O30: Retrieval Gate. This operation decides whether retrieval should begin. It is not equivalent to STOP.
+
+O21: STOP. STOP terminates an active trajectory.
+
+\boxed{\text{Retrieval Gate} \neq \text{STOP}}
+
+Self-RAG also motivates explicit representation of answer verification and evidence verification.
+
+12.2 Sufficiency Estimation vs STOP
+
+Following validated critical advice, $O_{20}$ (Sufficiency Estimation) and $O_{21}$ (STOP) are distinct primitives:
+
+· $O_{20}$ — Sufficiency Estimation: Determines whether the current state contains sufficient information to answer.
+· $O_{21}$ — STOP: Terminates the trajectory. May be triggered by sufficiency, by budget exhaustion, or by a training-free predicate.
+
+TASR implements STOP as a training-free predicate based on answer stability; S2G-RAG implements sufficiency as a trained structured judge. These are different computational primitives with different cost profiles and failure modes.
+
+Theorem (Cost of Reduced Retrieval): Reduced retrieval calls do not imply reduced total compute:
+
+\boxed{C_{\text{total}} = C_{\text{retrieval\_saved}} + C_{\text{judge}}}
+
+The judge itself consumes compute; the net effect depends on the relative magnitudes.
+
+12.3 Implementation Note
+
+In Self-RAG, the concepts ISREL, ISSUP, ISUSE, and retrieval decision are implemented as reflection tokens produced by the same model. They are not necessarily independent modules. This validates the rule that the matrix must record the implementation mechanism, not merely the functional presence.
+
+Self-RAG therefore motivates an additional primitive:
+
+\boxed{O_{31} = \text{Candidate Selection}}
+
+when a mechanism explicitly selects a subset from an already-produced candidate set, distinctly from scoring or filtering. Status: [H] — functional existence unresolved.
+
+---
+
+13. DPR: The First Major Refinement of O7
+
+Dense Passage Retrieval introduced a dense bi-encoder architecture for open-domain question answering. The fundamental transformation is:
+
+q \xrightarrow{E_Q} \mathbf{q}, \qquad d_i \xrightarrow{E_D} \mathbf{d}_i.
+
+Similarity is computed through:
+
+s(q, d_i) = \mathbf{q}^\top \mathbf{d}_i.
+
+The top candidates are retrieved according to this similarity.
+
+---
+
+14. DPR Demonstrates That O7 Is a Family
+
+The initial taxonomy treated $O_7$ as Dense Retrieval. DPR demonstrates that this is too coarse. At minimum:
+
+· $O_{7a}$ — Query Encoding: $q \rightarrow \mathbf{q}$
+· $O_{7b}$ — Document Encoding: $d_i \rightarrow \mathbf{d}_i$
+· $O_{7c}$ — Similarity Search: $\mathbf{q}, \{\mathbf{d}_i\} \rightarrow \{s_i\}$
+
+```
+OFFLINE
+Corpus
+  │
+  ▼
+O7b Document Encoding
+  │
+  ▼
+Document Representations
+  │
+  ▼
+Θ_index (Index Configuration)
+  │
+  ▼
+Search Index
+
+ONLINE
+Query
+  │
+  ▼
+O7a Query Encoding
+  │
+  ▼
+O7c Similarity Search
+  │
+  ▼
+Top-k passages
+```
+
+This is a major refinement because the three components have different temporal and computational properties. $O_{7b}$ is offline; $O_{7a}$ and $O_{7c}$ are online.
+
+---
+
+15. DPR and the O31 Candidate Selection Question
+
+The top-k mechanism creates an important taxonomic ambiguity. One could represent DPR as $O_7 \rightarrow O_{31}$ where $O_{31}$ selects the final candidates. But in the actual DPR implementation, top-k selection is integrated into the retrieval/search process.
+
+Therefore the correct conclusion is not:
+
+DPR proves that $O_{31}$ is an independent module.
+
+Instead:
+
+\boxed{\text{DPR demonstrates the functional existence of candidate selection,}}
+
+but does not yet demonstrate that candidate selection must be represented as an independent execution primitive. This distinction is crucial, and ITO must preserve it in all future analyses. $O_{31}$ is currently classified as [H] — functional operation, independence unresolved.
+
+---
+
+16. DPR and Index Configuration
+
+Large-scale dense retrieval makes index structure a major determinant of system cost. A controlled comparison on 21M documents reports the following configuration-specific measurements:
+
+Configuration Build time Index size Retrieval latency NQ Top-5
+BM25 0.5 h 2.4 GB 0.15 s 43.8
+DPR standard 3.5 h 64 GB 22.4 s 68.3
+DPR + HNSW 8.5 h 142 GB 0.04 s 68.0
+
+Epistemic status: [V]. These values are directly reported by the cited source under specified experimental conditions. They are configuration-specific measurements, not universal constants for BM25 or DPR, and must not be transferred to other hardware, corpus sizes, or implementations without explicit re-measurement.
+
+Note: This table is presented as a configuration-specific illustration, not as a validated point estimate. For the Pareto frontier, a $C(\theta)$ curve should be derived rather than a single point.
+
+The result demonstrates the structural principle:
+
+\boxed{C(O_7) = C(O_7 \mid \theta_{\text{index}}, D, H)}
+
+rather than $C(O_7) = \text{constant}$.
+
+---
+
+17. Index Configuration as Parameter Space Θ_index
+
+Following validated critical advice, index configuration is not an operation with its own cost. It is a parameter space:
+
+\boxed{\Theta_{\text{index}} = \{\text{Flat}, \text{HNSW}, \text{IVF}, \text{PQ}, \ldots\}}
+
+that conditions the cost function of retrieval operations. The composition operator $\oplus$ is defined over operations, not configurations.
+
+```
+INDEX DESIGN
+  │
+  ▼
+Θ_index (Parameter Space)
+  ╱          ╲
+Flat         HNSW
+  ╲          ╱
+   ▼        ▼
+   O7
+   │
+ ONLINE
+   ▼
+Retrieval
+```
+
+ITO principle: An operation is not fully characterised without its implementation configuration. Configuration has no direct cost; it only conditions cost.
+
+---
+
+18. ColBERT: The Second Major Stress Test
+
+ColBERT introduces a fundamentally different retrieval mechanism. Instead of representing each document using a single vector, ColBERT represents documents and queries at token level and performs a late interaction using MaxSim. The central score is:
+
+S(Q, D) = \sum_{i=1}^{L_Q} \max_{j=1}^{L_D} \langle Q_i, D_j \rangle.
+
+The original ColBERT paper explicitly positions late interaction as an alternative between expensive cross-encoding and cheaper single-vector retrieval, while allowing document representations to be computed offline. This provides a direct test of whether $O_8$ should remain a single operation. It should not.
+
+---
+
+19. O8: Late Interaction as a Composite Family
+
+ITO now decomposes $O_8$ into:
+
+\boxed{O_8 = \{O_{8a}, O_{8b}, O_{8c}, O_{8d}\}}
+
+· $O_{8a}$ — Token Encoding. Each document token is transformed into a vector representation: $d \rightarrow (D_1, \ldots, D_{L_D})$.
+· $O_{8b}$ — Token Representation Storage. Unlike DPR ($1 \text{ doc} \rightarrow 1 \text{ vector}$), ColBERT produces $1 \text{ doc} \rightarrow L_D \text{ vectors}$. This produces a fundamentally different memory profile.
+· $O_{8c}$ — MaxSim Interaction. For each query token $Q_i$, the system finds $\max_j \langle Q_i, D_j \rangle$ and aggregates the maxima.
+· $O_{8d}$ — Token Pruning. The representation set can be reduced: $\{D_1, \ldots, D_L\} \rightarrow \{D_{j_1}, \ldots, D_{j_m}\}$ with $m < L$, while attempting to preserve retrieval quality.
+
+---
+
+20. Why MaxSim Is Not Ordinary Reranking
+
+A conventional cross-encoder reranker receives a query–document pair and performs a new joint neural forward pass:
+
+(q, d) \rightarrow \text{cross-encoder} \rightarrow s(q, d).
+
+ColBERT instead uses separately encoded representations and performs late interaction:
+
+Q_i, D_j \rightarrow \operatorname{sim}(Q_i, D_j) \rightarrow \operatorname{MaxSim} \rightarrow S(Q, D).
+
+\boxed{O_{8c} \neq O_{12}}
+
+· $O_{8c}$ = MaxSim late interaction, part of the retrieval mechanism itself.
+· $O_{12}$ = reranking through an additional scoring mechanism applied to an existing candidate set.
+
+The original ColBERT paper reports substantially lower computational requirements than BERT-based reranking approaches, reflecting the architectural difference between precomputed document representations and repeated joint encoding. More recent ColBERT analyses have reported millisecond-scale warm MaxSim execution under specific implementations, but such latency values must remain tied to the particular hardware, corpus, index, software implementation, and candidate regime in which they were measured. ITO therefore does not encode any specific MaxSim latency as a universal constant. Instead:
+
+\boxed{C(O_{8c} \mid \theta, D, H, k)}
+
+is the scientifically defensible object.
+
+---
+
+21. O8d: Token Pruning
+
+Token pruning is now an active line of research. The objective is:
+
+\{D_1, \ldots, D_L\} \rightarrow \{D_{j_1}, \ldots, D_{j_m}\}, \quad m < L
+
+while maintaining acceptable retrieval quality.
+
+Published evidence [R]:
+
+· Heuristic pruning (position, IDF, special tokens) supports up to ~30% reduction on MS MARCO passages without significant performance loss.
+· Learned pruning via attention-based token selection supports up to ~70% reduction on the same benchmark under different experimental conditions.
+· Pruning learned indexes reports reductions of index size with limited quality loss.
+· Dynamic pruning of MaxSim computation at run-time has been reported.
+
+Implication. $O_{8d}$ must be represented with an explicit pruning method configuration $\theta_{\text{prune}}$, analogous to index configuration:
+
+\boxed{C(O_{8d} \mid \theta_{\text{prune}}, D)}
+
+rather than a universal pruning ratio.
+
+21.1 Query-Agnostic vs Query-Aware Pruning
+
+Offline pruning $D \rightarrow D'$ occurs before the query exists. Online pruning $(D, q) \rightarrow D'(q)$ depends on the query.
+
+\boxed{O_{8d}^{\text{offline}} \neq O_{8d}^{\text{online}}}
+
+at the cost and dependency level, even though both implement the broader function of token reduction.
+
+---
+
+22. The Meta-Taxonomy of Compression
+
+At first glance, $O_{8d}$ (token pruning) and $O_{14}$ (context compression) appear similar. Both transform $X \rightarrow X'$ such that $|X'| < |X|$ while attempting to preserve decision-relevant information: $Q(X') \approx Q(X)$.
+
+But their locations in the computational pipeline are different:
+
+· $O_{8d}$ acts on retrieval index representations — affects index memory, retrieval computation, retrieval latency.
+· $O_{14}$ acts on generator input context — affects context length, generation compute, generation latency, token usage.
+
+Therefore:
+
+\boxed{O_{8d} \neq O_{14}} \quad\text{while}\quad \boxed{O_{8d} \sim O_{14}}
+
+at the level of a higher-order functional pattern: information compression under a task-quality constraint. This is an L2 pattern, not an L0 primitive.
+
+This suggests a future meta-taxonomy of information-preserving compression operations, without merging their architectural identities.
+
+---
+
+23. Revised Retrieval Taxonomy
+
+Following the five architecture tests and the layered registry proposal, the retrieval portion of ITO can now be represented as:
+
+```
+L0 PRIMITIVES (measurable with §4.2 instruments)
+├── O5 Lexical Retrieval
+├── O7a Query Encoding
+├── O7b Document Encoding
+├── O7c Similarity Search
+├── O8a Token Encoding
+├── O8b Token Representation Storage
+├── O8c MaxSim Interaction
+├── O8d Token Pruning
+├── O10 Graph Retrieval
+├── O12 Reranking
+├── O15 Evidence Verification
+├── O24 Generation
+├── O27 Answer Verification
+├── O30 Retrieval Gate
+
+L1 FAMILIES
+├── O7 Dense Representation Retrieval = {O7a, O7b, O7c}
+├── O8 Late Interaction Retrieval = {O8a, O8b, O8c, O8d}
+
+L2 PATTERNS (no cost assigned)
+├── Compression
+├── Routing
+├── Verification
+
+PARAMETER SPACES (not operations)
+├── Θ_index (Index Configuration)
+├── Θ_prune (Pruning Method)
+
+HYPOTHESES (no ID)
+├── O31 Candidate Selection [H]
+```
+
+This taxonomy is explicitly provisional. Its purpose is not to declare that nature has exactly 32 operations. Its purpose is to establish a testable decomposition that can survive increasingly complex architectures.
+
+---
+
+24. The Sparse/Dense Boundary
+
+BM25, DPR, and ColBERT also demonstrate that retrieval paradigms should not be treated as mutually exclusive alternatives.
+
+· Lexical retrieval provides strong exact-match behaviour.
+· Dense retrieval provides semantic matching.
+· Late interaction retains finer-grained token-level matching while exploiting neural representations.
+· Learned sparse retrieval (e.g., SPLADE) further complicates the boundary.
+
+Therefore $O_5$, $O_7$, and $O_8$ should be treated as distinct retrieval primitives/families rather than mutually exclusive architectural categories.
+
+This has a direct consequence for $O_{30}$.
+
+---
+
+25. Retrieval Gate as a Routing Problem
+
+The retrieval gate should not merely answer "retrieve?" It may eventually need to answer:
+
+\boxed{\text{which retrieval mechanism should be invoked?}}
+
+```
+QUERY
+  │
+  ▼
+O30 Retrieval Gate
+  ├──────────┬──────────┐
+  ▼          ▼          ▼
+  O5         O7         O8
+lexical     dense      late interaction
+  │          │          │
+  └──────────┼──────────┘
+             ▼
+         candidates
+```
+
+This is currently a research hypothesis [H], not an established result. The matrix could eventually test whether query characteristics predict which retrieval mechanism provides the best quality–cost tradeoff. A classifier $f(q) \rightarrow \theta_{\text{retrieval}}$ could route queries to the optimal retrieval mechanism.
+
+---
+
+26. The Cost Surface
+
+The emerging framework suggests that ITO should not seek one scalar cost function initially. Instead define:
+
+\mathbf{C}(p) = \bigoplus_{o_i \in p} \mathbf{C}_i(\theta_i, D, H).
+
+A deployment may later define weights:
+
+C_w = w_c C_{\text{compute}} + w_l C_{\text{latency}} + w_t C_{\text{tokens}} + w_m C_{\text{memory}} + w_n C_{\text{network}} + w_a C_{\text{calls}}.
+
+Then:
+
+\eta_w = \frac{\Delta Q}{\Delta C_w}.
+
+But these weights must come from the deployment objective. There is no universal justification for $w_{\text{latency}} = w_{\text{memory}}$ or any other arbitrary equivalence.
+
+26.1 NR Policy Under Constraints
+
+If a cost dimension is NR for an operation, that operation cannot be selected for deployment in contexts where that dimension is constrained. NR is not imputed. This rule preserves the epistemic discipline of §4.1 in the optimization layer.
+
+---
+
+27. Quality Must Also Be Vector-Valued
+
+The same logic applies to quality. Define:
+
+\mathbf{Q} = (Q_{\text{retrieval}}, Q_{\text{answer}}, Q_{\text{factuality}}, Q_{\text{citation}}, Q_{\text{coverage}}, Q_{\text{task}}).
+
+An operation may improve one dimension while leaving another unchanged. For example:
+
+\Delta Q_{\text{retrieval}} > 0 \not\Rightarrow \Delta Q_{\text{answer}} > 0.
+
+Therefore ITO should avoid collapsing quality into a single number until the target task defines the relevant objective.
+
+27.1 Operational Definitions
+
+Each quality dimension requires an explicit measurement instrument:
+
+Dimension Operational definition Instrument
+$Q_{\text{retrieval}}$ Recall@k, nDCG@10 Standard IR metrics
+$Q_{\text{answer}}$ Exact Match (EM), F1 Standard QA metrics
+$Q_{\text{factuality}}$ Proportion of predicted subclaims attested in reference INFOF1
+$Q_{\text{citation}}$ Citation support (precision) and citation attribution (recall) at subclaim level CITEF1
+$Q_{\text{coverage}}$ Proportion of reference subclaims attested in prediction INFOF1
+$Q_{\text{task}}$ Task-specific (e.g., accuracy, F1) Task-dependent
+
+The quality vector is not fully specified until the task and measurement instruments are declared.
+
+---
+
+28. The Core Optimization Problem
+
+ITO can ultimately be formulated as a constrained multi-objective problem. The solution is a Pareto frontier rather than a single globally optimal trajectory.
+
+\boxed{\mathcal{P}^\star(q) = \left\{ p \in \mathcal{P}(q) \;\middle|\; \mathbf{Q}(p) \succeq \boldsymbol{\tau}, \;\nexists p' : \mathbf{C}(p') \preceq \mathbf{C}(p) \text{ with at least one strict inequality} \right\}}
+
+A trajectory $p_1$ dominates $p_2$ if it is no worse in every relevant cost dimension and strictly better in at least one, while satisfying the same quality constraints. Different deployments can legitimately choose different points on the frontier.
+
+Deployment selection. A specific $p^\star \in \mathcal{P}^\star(q)$ is selected by specifying a scalarization $\mathbf{w}$ over cost dimensions and a scalarization over quality dimensions, or by imposing additional constraints.
+
+Why not vector argmin. The expression $\arg\min_{p} \mathbf{C}(p)$ is not defined for vector-valued $\mathbf{C}$ without a scalarization or dominance criterion. ITO therefore adopts the Pareto formulation as the primary object, with scalarization as a deployment-specific post-processing step.
+
+---
+
+29. What We Know After Five Tests
+
+Finding 1 — Architecture decomposition is viable. The operation taxonomy survived five structurally different architectures, although it changed repeatedly.
+
+Finding 2 — Operations cannot be characterised independently of implementation. DPR and ColBERT both demonstrate strong configuration dependence.
+
+Finding 3 — Offline and online cost must be separated. Dense and token-level retrieval can shift substantial computational cost into preprocessing and indexing.
+
+Finding 4 — Retrieval is not a single primitive. Lexical, dense, and late-interaction retrieval operate at different representational granularities.
+
+Finding 5 — Late interaction is structurally distinct from conventional reranking. MaxSim is part of the retrieval mechanism itself.
+
+Finding 6 — Candidate selection and retrieval are not automatically separate execution operations. DPR integrates top-k selection into retrieval.
+
+Finding 7 — Compression is a recurring computational pattern. Token pruning and context compression share a functional objective but operate at different stages.
+
+Finding 8 — Retrieval gating may become a routing problem. The gate may eventually choose not only whether to retrieve but how to retrieve.
+
+Finding 9 — Sufficiency estimation and STOP are distinct primitives. TASR and S2G-RAG implement different mechanisms with different cost profiles.
+
+Finding 10 — Reduced retrieval does not imply reduced total compute. The judge itself consumes compute; net effect depends on relative magnitudes.
+
+---
+
+30. What We Do NOT Know Yet
+
+This section is essential. ITO currently does not establish that:
+
+· fewer operations always produce equivalent answers;
+· a particular operation has universally positive information gain;
+· $O_5$, $O_7$, or $O_8$ can be selected optimally from query features;
+· $O_{31}$ should always be an independent computational primitive;
+· MaxSim is universally cheaper than every reranking strategy;
+· token pruning preserves quality across all datasets and tasks;
+· a particular retrieval trajectory is globally optimal;
+· the DAG structure $D$ is stable across architectures;
+· the composition operator $\oplus$ is well-approximated by $\sum$ in realistic deployments;
+· the retrieval gate routing hypothesis (§25) holds empirically.
+
+These are hypotheses requiring experiments.
+
+---
+
+31. The Next Theoretical Layer
+
+The next architectures should be selected specifically because they attack unresolved portions of the taxonomy.
+
+31.1 GraphRAG / HippoRAG / LineageRAG
+
+Primary tests: $O_{10}$ Graph Retrieval, provenance.
+
+Questions:
+
+· Is graph construction an offline primitive?
+· Is graph traversal retrieval or reasoning?
+· Is provenance an independent operation or metadata attached to evidence?
+· Can graph retrieval be decomposed into node selection, edge traversal, subgraph extraction, and evidence aggregation?
+
+Literature anchor. LineageRAG constructs one evidence lineage for each query-derived evidence demand and completes it with a verbatim source span. The key architectural insight is that graph-based retrieval finds relevant candidates, but the final evidence set does not record the requirement behind each source; this missing connection can leave GraphRAG with an incomplete evidence chain. HippoRAG propagates relevance across an OpenIE graph using Personalized PageRank.
+
+Theoretical implication. Provenance may be an independent computational operation in LineageRAG. Graph construction is offline; traversal is online. Graph traversal may be retrieval, not reasoning. The DAG for GraphRAG-like systems therefore includes a directed edge from offline graph construction to online traversal, with provenance tracking as a separate online primitive.
+
+31.2 TASR / S2G-RAG
+
+Primary tests: $O_{20}$ Sufficiency, $O_{21}$ STOP.
+
+Questions:
+
+· Is sufficiency estimation independent from novelty detection?
+· Does sufficiency change the retrieval trajectory?
+· Can stopping be represented as an optimisation decision?
+· What measurable marginal information gain justifies another retrieval step?
+· Are training-free and trained stopping mechanisms distinct primitives?
+
+Literature anchor. TASR is a training-free stopping rule that fires when the model repeats its previous-round normalized answer and the isotonically calibrated logit margin exceeds a fixed threshold. S2G-RAG asks a structured judge to predict both sufficiency and the missing information needed for the next retrieval. On HotpotQA, a trained S2G-style structured judge reduces retrieval calls by 77 (3.70%) relative to a reference baseline, while Exact Match decreases by 0.625 percentage points.
+
+Theoretical implication. $O_{20}$ (Sufficiency Estimation) and $O_{21}$ (STOP) are distinct primitives. The 77-call reduction and the 0.625-point EM decrease together provide a concrete quality–cost data point. Critically, reduced retrieval does not automatically imply reduced total inference cost, because the judge itself consumes compute. This motivates the cost-of-reduced-retrieval theorem in §12.2.
+
+31.3 Missing Operations to Investigate
+
+The following operations are present in the literature but not yet instantiated in the ITO taxonomy:
+
+· Query Decomposition / Rewriting — present in agentic RAG planning mechanisms.
+· Relevance Filtering — distinct from $O_{12}$ reranking and $O_{31}$ selection.
+· Provenance Linking — may include verbatim span extraction cost.
+
+These should be tested against the layered registry in v0.5.
+
+---
+
+32. Proposed Experimental Protocol
+
+Before attempting a full POMDP formulation, ITO should perform controlled experiments.
+
+For a selected architecture, define:
+
+B = \text{minimal baseline}.
+
+Then progressively add operations:
+
+B + O_i, \qquad B + O_i + O_j, \qquad \ldots
+
+Measure:
+
+\Delta Q = Q_{\text{augmented}} - Q_{\text{baseline}}, \qquad \Delta \mathbf{C} = \mathbf{C}_{\text{augmented}} - \mathbf{C}_{\text{baseline}}.
+
+The resulting empirical quantity is:
+
+\boxed{\boldsymbol{\eta}_i = \frac{\Delta Q}{\Delta \mathbf{C}}}
+
+with the understanding that vector division is not mathematically defined in the ordinary scalar sense. It should instead be represented as a quality–cost response vector, or converted into a scalar only after deployment weights are explicitly specified.
+
+32.1 Protocol Specifications
+
+Element Specification
+Dataset NQ, MS MARCO, HotpotQA (selected per operation)
+Query set size ≥ 1,000 queries per configuration
+Query stratification Single-hop vs multi-hop; lexical vs semantic
+Retrieval metric Recall@k, nDCG@10
+Answer metric EM, F1, INFOF1, CITEF1
+Hardware Fixed GPU and CPU configuration per run
+Statistical test Paired bootstrap, α = 0.05
+Runs ≥ 3 seeds per configuration
+Cost measurement Hardware profiler + wall-clock + tokenizer + memory profiler
+
+32.2 First Controlled Retrieval Experiment
+
+For dense RAG:
+
+· Configuration A: $O_7 + O_{24}$
+· Configuration B: $O_7 + O_{31} + O_{24}$
+· Configuration C: $O_7 + O_{12} + O_{24}$
+· Configuration D: $O_7 + O_{30} + O_{24}$
+· Configuration E: $O_7 + O_{30} + O_{31} + O_{24}$
+
+The experiment tests whether candidate selection, reranking, and retrieval gating produce independently measurable marginal benefits. The key measurement is not "which system wins?" It is:
+
+\boxed{\text{What quality gain does each added operation buy, at what multidimensional cost?}}
+
+32.3 ITO-Bench Proposal
+
+A benchmark should be constructed with:
+
+· 3 datasets: NQ for $O_5$ vs $O_7$ boundary; HotpotQA for multi-step; MS MARCO for $O_{8d}$ pruning.
+· 3 hardware profiles: to demonstrate $H$-dependence of cost.
+· 6 cost dimensions: measured with fixed instruments.
+· NR table: published explicitly — this alone is a contribution.
+
+---
+
+33. A More General View of ITO
+
+The accumulated evidence suggests that ITO is becoming less like "a better RAG architecture" and more like a formal methodology for discovering computationally sufficient information trajectories.
+
+A conventional architecture asks:
+
+\text{How should we build the system?}
+
+ITO asks:
+
+\boxed{\text{What is the minimum sequence of information transformations required to satisfy the task under explicit constraints?}}
+
+The architecture is then treated as one possible trajectory through the space.
+
+---
+
+34. Current ITO Principle
+
+The emerging principle can be stated compactly:
+
+\boxed{\text{Do not optimise architectures as monoliths. Decompose them into measurable operations, measure conditional contribution and multidimensional cost, then optimise trajectories.}}
+
+Or formally:
+
+\boxed{\mathcal{P}^\star(q) = \left\{ p \in \mathcal{P}(q) \;\middle|\; \mathbf{Q}(p) \succeq \boldsymbol{\tau}, \;\nexists p' : \mathbf{C}(p') \preceq \mathbf{C}(p) \right\}}
+
+The critical object is therefore not the architecture $A$ itself, but the trajectory:
+
+p : S_0 \rightarrow S_1 \rightarrow \cdots \rightarrow S_n.
+
+---
+
+35. Current Taxonomy Snapshot
+
+L0 Primitives (measurable with §4.2 instruments)
+
+ID Operation Temporal locus Primary cost Epistemic label
+$O_5$ Lexical Retrieval Online CPU / latency [V]
+$O_{7a}$ Query Encoding Online Compute [V]
+$O_{7b}$ Document Encoding Offline Compute [V]
+$O_{7c}$ Similarity Search Online Compute / latency [V]
+$O_{8a}$ Token Encoding Offline Compute [V]
+$O_{8b}$ Token Storage Offline Memory [V]
+$O_{8c}$ MaxSim Interaction Online Compute [V]
+$O_{8d}$ Token Pruning Offline or online Memory / compute [R]
+$O_{10}$ Graph Retrieval Online Compute / latency [R]
+$O_{12}$ Reranking Online Latency / compute [V]
+$O_{14}$ Context Compression Online Tokens / compute [R]
+$O_{15}$ Evidence Verification Online Compute / tokens [R]
+$O_{24}$ Generation Online Compute / tokens / latency [V]
+$O_{27}$ Answer Verification Online Compute [R]
+$O_{30}$ Retrieval Gate Online Decision compute [R]
+
+L1 Families
+
+ID Family Members
+$O_7$ Dense Representation Retrieval $\{O_{7a}, O_{7b}, O_{7c}\}$
+$O_8$ Late Interaction Retrieval $\{O_{8a}, O_{8b}, O_{8c}, O_{8d}\}$
+
+L2 Patterns (no cost assigned)
+
+Pattern Description
+Compression Information reduction under task-quality constraint
+Routing Selection among retrieval mechanisms
+Verification Epistemic checking of evidence or answers
+
+Parameter Spaces (not operations)
+
+Symbol Description
+$\Theta_{\text{index}}$ Index configuration (Flat, HNSW, IVF, PQ, …)
+$\Theta_{\text{prune}}$ Pruning method configuration
+
+Hypotheses (no ID assigned)
+
+Label Description
+$O_{31}$ [H] Candidate Selection — functional existence unresolved
+
+---
+
+36. Epistemic Discipline
+
+The framework adopts four labels throughout all versions:
+
+· [V] Validated externally — A quantitative value directly reported by a cited source under specified experimental conditions.
+· [R] Reported — A qualitative or quantitative observation documented in the literature but requiring contextual interpretation.
+· [H] Hypothesis — A proposed mechanism not yet experimentally tested by ITO.
+· [N] Not reported — The relevant literature does not provide the required measurement.
+
+If a paper does not report $C_{\text{memory}}$, ITO writes:
+
+\boxed{\text{NR}}
+
+not $0$. Absence of measurement is not evidence of zero cost. NR is not imputed in the optimization layer.
+
+---
+
+37. Conclusion
+
+The first five architectural tests provide preliminary evidence that an operation-based representation can unify systems that differ substantially in retrieval mechanism and control structure.
+
+· BM25 establishes lexical retrieval as a minimal reference.
+· Naive RAG demonstrates the basic retrieval-to-generation trajectory.
+· Self-RAG introduces conditional retrieval, reflection, and adaptive control.
+· DPR reveals that dense retrieval must be decomposed into query encoding, document encoding, and similarity search, while demonstrating that index configuration can radically alter the temporal and multidimensional cost profile of the same retrieval family.
+· ColBERT provides the strongest refinement so far. It demonstrates that late interaction is not adequately represented as a single operation. Token-level representation, storage, MaxSim interaction, and token pruning have different computational roles and costs. MaxSim belongs to the retrieval mechanism rather than conventional post-retrieval reranking. Token pruning and context compression share a higher-level information-preservation principle while remaining architecturally distinct.
+
+The resulting framework is therefore not yet a finished optimisation theory. It is a measurement architecture for constructing one.
+
+The next stage is to challenge the current taxonomy with graph-based retrieval and adaptive multi-step systems. If GraphRAG / HippoRAG / LineageRAG and TASR / S2G-RAG reveal further stable primitives, the taxonomy can then be frozen temporarily and subjected to controlled ablation experiments.
+
+Only after those measurements should ITO move toward a trajectory-level decision model such as a constrained MDP or POMDP.
+
+The central scientific question remains:
+
+\boxed{\text{How little computation is sufficient to obtain the information required for a reliable decision?}}
+
+That is the real object ITO is trying to measure.
+
+---
+
+End of Version 0.4.
+
+This draft incorporates the validated proposals and critical advice from the final validated list: the layered operation registry L0/L1/L2 (§3.2, §23), $O_{32}$ as parameter space $\Theta_{\text{index}}$ (§17), per-dimension cost composition rules (§4.3), dependency DAG with edge types (§7.1), explicit state definition for $S$ (§2.1), ablation before Shapley (§7.2), INFOF1 and CITEF1 quality metrics (§27.1), Pareto frontier formulation (§28), $O_{8d}$ pruning method configuration (§21), NR ≠ 0 as non-negotiable rule (§4.1, §26.1), retrieval gate as routing hypothesis (§25), separation of sufficiency from STOP (§12.2), removal of universal claims (§20), and identification of missing operations (§31.3).
+
+The framework's core contributions — the functional-vs-primitive distinction, the vector-valued configuration-conditioned cost model, and the trajectory-level optimization formulation — remain intact. The corrections are refinements, not refutations. The next step is to execute the controlled ablation protocol (§32) with the measurement instruments now specified.
+
+
+Appendices
+
+Version 0.4 — Validated Theoretical Draft
+
+Epistemic status: Literature-anchored theoretical framework. No original experiments, training runs, benchmarks, or physical deployments have been conducted by the authors. All appendices are constructed from internet literature search and LLM analysis. Quantitative values are labelled according to the discipline defined in Appendix G.
+
+---
+
+Appendix A: Operation Registry (L0 / L1 / L2)
+
+This appendix provides the complete operation registry following the layered taxonomy introduced in §3.2. The registry is organised into three layers: L0 primitives, L1 families, and L2 patterns, with parameter spaces and hypotheses tracked separately.
+
+A.1 L0 Primitives
+
+An L0 primitive is an operation that can in principle be measured with at least one of the instruments defined in §4.2. If an operation cannot be profiled with a declared instrument, it does not receive an L0 ID.
+
+ID Operation Description Temporal locus Primary cost dimensions Dependencies Epistemic label
+ O_5  Lexical Retrieval Probabilistic relevance ranking over an inverted index Online  C_{\text{compute}} ,  C_{\text{latency}}  None [V]
+ O_{7a}  Query Encoding Transform query  q \rightarrow \mathbf{q}  via a learned encoder Online  C_{\text{compute}}  None [V]
+ O_{7b}  Document Encoding Transform document  d_i \rightarrow \mathbf{d}_i  via a learned encoder Offline  C_{\text{compute}}  None [V]
+ O_{7c}  Similarity Search Compute  s(q, d_i) = \mathbf{q}^\top \mathbf{d}_i  and return top- k  Online  C_{\text{compute}} ,  C_{\text{latency}}  Requires  O_{7a} ,  O_{7b} ; conditioned by  \Theta_{\text{index}}  [V]
+ O_{8a}  Token Encoding Transform each document token  d \rightarrow (D_1, \ldots, D_{L_D})  Offline  C_{\text{compute}}  None [V]
+ O_{8b}  Token Representation Storage Store  L_D  vectors per document; memory profile differs from  O_{7b}  Offline  C_{\text{memory}}  Requires  O_{8a} ; conditioned by  O_{8d}  [V]
+ O_{8c}  MaxSim Interaction Compute  S(Q, D) = \sum_{i=1}^{L_Q} \max_{j=1}^{L_D} \langle Q_i, D_j \rangle  Online  C_{\text{compute}}  Requires  O_{7a} ,  O_{8b} ; conditioned by  \Theta_{\text{index}}  [V]
+ O_{8d}  Token Pruning Reduce  \{D_1, \ldots, D_L\} \rightarrow \{D_{j_1}, \ldots, D_{j_m}\} ,  m < L  Offline or online  C_{\text{memory}} ,  C_{\text{compute}}  Conditioned by  \Theta_{\text{prune}}  [R]
+ O_{10}  Graph Retrieval Traverse a knowledge graph to gather context; includes node selection, edge traversal, subgraph extraction Online  C_{\text{compute}} ,  C_{\text{latency}}  Requires offline graph construction [R]
+ O_{12}  Reranking Apply a scoring mechanism to an existing candidate set to reorder it Online  C_{\text{latency}} ,  C_{\text{compute}}  Requires an existing candidate set [V]
+ O_{14}  Context Compression Reduce generator input context  X \rightarrow X' , \(  X' < X )
+ O_{15}  Evidence Verification Check whether retrieved evidence supports a claim or answer Online  C_{\text{compute}} ,  C_{\text{tokens}}  Requires retrieved evidence [R]
+ O_{24}  Generation Produce an answer from a context Online  C_{\text{compute}} ,  C_{\text{tokens}} ,  C_{\text{latency}}  Requires a context [V]
+ O_{27}  Answer Verification Check whether a generated answer is supported Online  C_{\text{compute}}  Requires  O_{24}  [R]
+ O_{30}  Retrieval Gate Decide whether retrieval should begin; may route to a specific mechanism Online  C_{\text{calls}} ,  C_{\text{compute}}  Conditions  O_5 ,  O_7 ,  O_8  [R]
+
+Source anchors for L0 primitives: The decomposition of dense retrieval into  O_{7a} ,  O_{7b} ,  O_{7c}  is validated by the DPR analysis. The ColBERT decomposition into  O_{8a} ,  O_{8b} ,  O_{8c} ,  O_{8d}  is validated by the ColBERT analysis. The distinction between  O_{30}  (Retrieval Gate) and  O_{21}  (STOP) is validated by Self-RAG. The distinction between  O_{20}  (Sufficiency) and  O_{21}  (STOP) is validated by TASR and S2G-RAG. The layered operation registry is consistent with the SoK's modular architectural decomposition and with existing three-tier RAG taxonomies that separate functionality, categorization, and implementation.
+
+A.2 L1 Families
+
+An L1 family is a composite operation that groups related L0 primitives under a single functional identity.
+
+ID Family Members Description
+ O_7  Dense Representation Retrieval  \{O_{7a}, O_{7b}, O_{7c}\}  Bi-encoder dense retrieval with query encoding, document encoding, and similarity search
+ O_8  Late Interaction Retrieval  \{O_{8a}, O_{8b}, O_{8c}, O_{8d}\}  Token-level late interaction with MaxSim and optional pruning
+
+A.3 L2 Patterns
+
+An L2 pattern is a meta-taxonomic category that captures a recurring functional objective across different pipeline stages. No cost is assigned at this layer.
+
+Pattern Description Example operations
+Compression Information reduction under a task-quality constraint:  Q(X') \approx Q(X) , \(  X'
+Routing Selection among retrieval mechanisms based on query characteristics  O_{30}  (retrieval gate as router)
+Verification Epistemic checking of evidence or answers  O_{15}  (evidence verification),  O_{27}  (answer verification)
+
+A.4 Parameter Spaces
+
+Parameter spaces are not operations and receive no cost. They condition the cost function of operations.
+
+Symbol Description Conditions
+ \Theta_{\text{index}}  Index configuration: Flat, HNSW, IVF, PQ, …  O_{7c} ,  O_{8c} 
+ \Theta_{\text{prune}}  Pruning method configuration: heuristic (position, IDF) vs. learned (attention-based)  O_{8d} 
+
+A.5 Hypotheses (No ID Assigned)
+
+The following operations are functional but their independence as execution primitives is unresolved. They are tracked as hypotheses without an L0 ID.
+
+Label Description Status Evidence
+ O_{31}  [H] Candidate Selection — explicit selection of a subset from an already-produced candidate set Functional existence confirmed; independence unresolved DPR integrates top- k  selection into  O_{7c} ; Self-RAG uses reflection tokens that may implement selection implicitly
+
+A.6 Reserved and Undefined IDs
+
+IDs  O_1 – O_4 ,  O_6 ,  O_9 ,  O_{11} ,  O_{13} ,  O_{16} ,  O_{18} – O_{23} ,  O_{25} – O_{26} ,  O_{28} – O_{29}  are either reserved for future operations or not yet instantiated in the current taxonomy. The following operations are present in the literature but not yet assigned L0 IDs:
+
+Candidate operation Literature anchor Proposed L0 ID
+Query Decomposition / Rewriting Agentic RAG planning mechanisms  O_1  (reserved)
+Relevance Filtering Distinct from  O_{12}  reranking and  O_{31}  selection  O_{13}  (reserved)
+Provenance Linking LineageRAG evidence lineage construction  O_{17}  (reserved)
+Novelty Estimation TASR and S2G-RAG gap analysis  O_{19}  (reserved)
+Sufficiency Estimation S2G-RAG structured judge  O_{20}  (reserved)
+STOP TASR training-free predicate  O_{21}  (reserved)
+
+These candidate operations should be tested against the layered registry in v0.5.
+
+---
+
+Appendix B: Cost Composition Rules
+
+This appendix specifies the per-dimension composition rules for the operator  \oplus  introduced in §4.3. The rules are constructed from validated literature on RAG cost accounting.
+
+B.1 Formal Definition
+
+Let a trajectory be  p = (o_1, \ldots, o_n) . The trajectory cost is:
+
+\mathbf{C}(p) = \bigoplus_{o_i \in p} \mathbf{C}_i(\theta_i, D, H)
+
+where the composition operator  \oplus  is instantiated per dimension as follows:
+
+B.2 Per-Dimension Composition
+
+Dimension Composition rule Rationale
+ C_{\text{latency}}   \max_i C_{\text{latency}}(o_i)  under pipelining;  \sum_i C_{\text{latency}}(o_i)  under sequential execution Parallelizable stages (e.g., embedding) achieve  3\times  cost reductions, whereas latency-sensitive inference remains constrained by network variability
+ C_{\text{memory}}   \max_i C_{\text{memory}}(o_i)  under shared pool;  \sum_i C_{\text{memory}}(o_i)  under isolated execution HNSW indexes must reside fully in memory to operate; shared memory pools are common in GPU deployments
+ C_{\text{tokens}}   \sum_i C_{\text{tokens}}(o_i)  Token consumption is additive by definition
+ C_{\text{calls}}   \sum_i C_{\text{calls}}(o_i)  Discrete invocation events accumulate
+ C_{\text{compute}}  Model-dependent (e.g., Roofline model) Compute cost depends on arithmetic intensity and memory bandwidth
+ C_{\text{network}}  Model-dependent Network cost depends on request size, protocol, and topology
+
+B.3 Offline/Online Amortization
+
+The effective cost of a trajectory with offline component  C_{\text{offline}}  and online component  C_{\text{online}}  over  Q  queries is:
+
+C_{\text{eff}}(Q) = \frac{C_{\text{offline}}}{Q} + C_{\text{online}}
+
+As  Q \to \infty , the amortized offline term decreases monotonically and the effective cost approaches the online retrieval cost. This formalizes the write-once, read-many behaviour of RAG systems.
+
+B.4 Non-Additivity Sources
+
+The additive form  \sum  is a first-order approximation valid when operations are resource-independent and sequentially executed. Non-additivity arises from:
+
+1. Shared memory: Multiple operations using the same GPU memory pool.
+2. Pipelined latency: Retrieval and generation can overlap.
+3. Caching: Repeated calls to the same operation may be cheaper.
+4. Fixed overhead: Per-call overhead does not scale linearly.
+5. Incremental updates: For dynamic knowledge bases, incremental maintenance scales as  O(\Delta N)  whereas full rebuilding scales as  O(N + \Delta N) .
+
+---
+
+Appendix C: Dependency DAG for ColBERT-Style Late Interaction
+
+This appendix provides the explicit dependency DAG  D = (V, E)  for ColBERT-style late interaction retrieval, following the edge types defined in §7.1.
+
+C.1 Vertices
+
+V = \{O_{7a}, O_{8a}, O_{8b}, O_{8c}, O_{8d}, O_{24}, O_{31}\} \cup \{\Theta_{\text{index}}, \Theta_{\text{prune}}\}
+
+C.2 Edges
+
+Source Edge type Target Rationale
+ O_{8a}  requires  O_{8b}  Token encoding must precede storage
+ O_{8b}  conditions  O_{8c}  Stored representations are required for MaxSim interaction
+ \Theta_{\text{index}}  conditions  O_{8c}  Index configuration determines retrieval latency and memory profile
+ \Theta_{\text{prune}}  conditions  O_{8b}  Pruning method determines storage requirements
+ O_{7a}  requires  O_{8c}  Query encoding is required for MaxSim
+ O_{8c}  requires  O_{31}  MaxSim produces candidates for selection
+ O_{31}  requires  O_{24}  Selected candidates feed generation
+ O_{8d}  conditions  O_{8b}  Pruning reduces storage before index configuration
+
+C.3 Mermaid Diagram
+
+```mermaid
+graph TD
+    subgraph OFFLINE
+        O8a[O8a Token Encoding]
+        O8b[O8b Token Storage]
+        O8d[O8d Token Pruning]
+        ThetaP[Θ_prune]
+        ThetaI[Θ_index]
+    end
+    
+    subgraph ONLINE
+        O7a[O7a Query Encoding]
+        O8c[O8c MaxSim Interaction]
+        O31[O31 Candidate Selection]
+        O24[O24 Generation]
+    end
+    
+    O8a -->|requires| O8b
+    O8d -->|conditions| O8b
+    ThetaP -->|conditions| O8d
+    O8b -->|conditions| O8c
+    ThetaI -->|conditions| O8c
+    O7a -->|requires| O8c
+    O8c -->|requires| O31
+    O31 -->|requires| O24
+```
+
+C.4 Feasible Trajectory Space
+
+The feasible trajectory space  \mathcal{P}(q)  is the set of topological orderings of  D  compatible with the query. For ColBERT-style late interaction, a feasible trajectory must satisfy:
+
+\mathcal{P}(q) = \{ p \in \text{Topo}(D) \mid O_{7a} \in p, O_{8c} \in p, O_{24} \in p \}
+
+Operations  O_{8d}  and  O_{31}  are optional; their inclusion defines different points in the trajectory space.
+
+---
+
+Appendix D: Quality Metrics — INFOF1 and CITEF1
+
+This appendix defines the subclaim-level metrics INFOF1 and CITEF1 adopted in §27.1, following the MiRAGE evaluation framework.
+
+D.1 INFOF1 — Information Coverage and Factuality
+
+Definition. INFOF1 is an F1 score over the information coverage of reference subclaims  R  by predicted subclaims  P :
+
+\text{INFOF1} = \frac{2 \cdot \text{INFO}_P \cdot \text{INFO}_R}{\text{INFO}_P + \text{INFO}_R}
+
+where:
+
+·  \text{INFO}_P  = proportion of predicted subclaims  P  that are attested in  R  (precision),
+·  \text{INFO}_R  = proportion of reference subclaims  R  that are attested in  P  (recall).
+
+Interpretation. INFOF1 assesses factuality and information coverage at the subclaim level. A high INFOF1 indicates that the prediction both covers the reference information and does not introduce unsupported claims.
+
+Recommendation. When reporting INFOF1, always report precision and recall separately, as the F1 is derived.
+
+D.2 CITEF1 — Citation Quality
+
+Definition. CITEF1 is an F1 score over citation support and citation attribution:
+
+\text{CITEF1} = \frac{2 \cdot \text{CITE}_P \cdot \text{CITE}_R}{\text{CITE}_P + \text{CITE}_R}
+
+where:
+
+·  \text{CITE}_P  = proportion of subclaims supported by their cited sources (citation precision),
+·  \text{CITE}_R  = proportion of subclaims that properly attribute their sources (citation recall).
+
+Interpretation. CITEF1 assesses citation support and completeness at the subclaim level. A high CITEF1 indicates that citations are both accurate (cited sources support their associated subclaims) and complete (recalled information is properly attributed).
+
+D.3 Comparison with Existing Metrics
+
+Metric Granularity Alignment with human judgments
+ROUGE Surface-level Low
+BERTScore Surface-level Low
+INFOF1 Subclaim-level High (validated)
+CITEF1 Subclaim-level High (validated)
+ALCE Citation Quality Sentence-level Low
+ARGUE Sentence Support Sentence-level Low
+
+The MiRAGE framework demonstrates that CITEF1 has the highest agreement with human judgments for both quality and grounding, validating the benefits of subclaim decomposition in support judgments.
+
+D.4 Recommended Reporting Protocol
+
+For quick diagnostics or compute-constrained settings, report ROUGE, BERTScore, INFOF1 (reference-based), and CITEF1 (reference-based). For comprehensive evaluation, report ROUGE, BERTScore, INFOF1 (source-based), CITEF1 (source-based), and RAGAS Faithfulness.
+
+---
+
+Appendix E: Proposed Experimental Protocol
+
+This appendix details the controlled ablation protocol proposed in §32. No experiments have been conducted. The protocol is specified for future execution.
+
+E.1 Baseline and Augmentation
+
+For a selected architecture, define  B =  minimal baseline. Progressively add operations:
+
+B + O_i, \qquad B + O_i + O_j, \qquad \ldots
+
+Measure:
+
+\Delta Q = Q_{\text{augmented}} - Q_{\text{baseline}}, \qquad \Delta \mathbf{C} = \mathbf{C}_{\text{augmented}} - \mathbf{C}_{\text{baseline}}.
+
+E.2 Quality–Cost Response Vector
+
+The resulting empirical quantity is:
+
+\boldsymbol{\eta}_i = \frac{\Delta Q}{\Delta \mathbf{C}}
+
+Vector division is not mathematically defined in the ordinary scalar sense.  \boldsymbol{\eta}_i  should be represented as a quality–cost response vector, or converted into a scalar only after deployment weights are explicitly specified.
+
+E.3 Query Stratification
+
+Queries should be stratified by:
+
+Stratum Dimension Rationale
+Single-hop vs. multi-hop Query complexity Adaptive retrieval literature shows that indiscriminate fixed retrieval is suboptimal
+Lexical vs. semantic Query type Different retrieval mechanisms excel on different query types
+Short vs. long Query length Token budget and retrieval behaviour differ
+
+E.4 Protocol Specifications
+
+Element Specification
+Dataset NQ, MS MARCO, HotpotQA
+Query set size ≥ 1,000 queries per configuration
+Retrieval metric Recall@ k , nDCG@10
+Answer metric EM, F1, INFOF1, CITEF1
+Hardware Fixed GPU and CPU configuration per run
+Statistical test Paired bootstrap,  \alpha = 0.05 
+Runs ≥ 3 seeds per configuration
+Cost measurement Hardware profiler + wall-clock + tokenizer + memory profiler
+
+E.5 First Controlled Retrieval Experiment
+
+For dense RAG:
+
+· Configuration A:  O_7 + O_{24} 
+· Configuration B:  O_7 + O_{31} + O_{24} 
+· Configuration C:  O_7 + O_{12} + O_{24} 
+· Configuration D:  O_7 + O_{30} + O_{24} 
+· Configuration E:  O_7 + O_{30} + O_{31} + O_{24} 
+
+The experiment tests whether candidate selection, reranking, and retrieval gating produce independently measurable marginal benefits. The key measurement is not "which system wins?" It is:
+
+\boxed{\text{What quality gain does each added operation buy, at what multidimensional cost?}}
+
+---
+
+Appendix F: ITO-Bench Proposal
+
+This appendix proposes a benchmark for measuring the quality–cost Pareto frontier of information trajectories. No benchmark has been constructed. The proposal is specified for future execution.
+
+F.1 Datasets
+
+Dataset Purpose Retrieval task Answer task
+NQ  O_5  vs.  O_7  boundary Open-domain QA EM, F1
+HotpotQA  O_{10}  graph retrieval, multi-step Multi-hop QA EM, F1, INFOF1
+MS MARCO  O_{8d}  token pruning Passage ranking MRR@10, nDCG@10
+
+These datasets are standard in RAG evaluation.
+
+F.2 Hardware Profiles
+
+To demonstrate  H -dependence of cost, three hardware profiles should be used:
+
+Profile GPU CPU RAM Storage
+A High-end GPU 16 cores 128 GB NVMe
+B Mid-range GPU 8 cores 64 GB SSD
+C CPU-only 8 cores 32 GB HDD
+
+F.3 Cost Dimensions
+
+All six cost dimensions should be measured with fixed instruments:
+
+Dimension Unit Instrument
+ C_{\text{compute}}  GPU-seconds Hardware profiler
+ C_{\text{latency}}  milliseconds Wall-clock timer
+ C_{\text{tokens}}  count Tokenizer
+ C_{\text{memory}}  GB Memory profiler
+ C_{\text{network}}  bytes Network monitor
+ C_{\text{calls}}  count Instrumentation
+
+F.4 NR Table
+
+A table of Not Reported (NR) values should be published explicitly. This alone is a contribution, as it exposes the gaps in current measurement practice.
+
+---
+
+Appendix G: Epistemic Labels
+
+The framework adopts four labels throughout all versions:
+
+Label Definition Example
+[V] Validated externally A quantitative value directly reported by a cited source under specified experimental conditions DPR index size = 64 GB on 21M documents
+[R] Reported A qualitative or quantitative observation documented in the literature but requiring contextual interpretation ColBERT token pruning up to ~30% on MS MARCO
+[H] Hypothesis A proposed mechanism not yet experimentally tested by ITO  O_{31}  Candidate Selection as an independent primitive
+[N] Not reported The relevant literature does not provide the required measurement  C_{\text{memory}}  for a specific operation
+
+G.1 NR ≠ 0 Convention
+
+If a publication does not report a specific cost dimension, ITO records:
+
+\boxed{\text{NR}}
+
+not  0 . Absence of measurement is not evidence of zero cost. NR is not imputed in the optimization layer.
+
+G.2 Application to Optimization
+
+If a cost dimension is NR for an operation, that operation cannot be selected for deployment in contexts where that dimension is constrained. NR is not imputed. This rule preserves epistemic discipline in the optimization layer.
+
+---
+
+Appendix H: Glossary
+
+Term Definition Section
+Architecture A complete system pipeline, treated as an indivisible object in conventional evaluation §1
+Conditional information gain  G_i(S) = \Delta Q(O_i \mid S) : the quality improvement contributed by an operation given the current state §6
+Configuration A parameter space  \Theta  that conditions the cost of an operation but has no direct cost itself §17
+Cost vector  \mathbf{C}_i(\theta, D, H) = (C_{\text{compute}}, C_{\text{latency}}, C_{\text{tokens}}, C_{\text{memory}}, C_{\text{network}}, C_{\text{calls}})  §4
+Dependency DAG A directed acyclic graph with typed edges (requires, conditions, mutually_excludes) §7.1
+Feasible trajectory space  \mathcal{P}(q) : the set of topological orderings of  D  compatible with query  q  §7.1
+Functional operation What the system accomplishes as a whole, whether or not it is a separately measurable node §3.1
+Independent execution primitive An operation that can be separately measured, ablated, and assigned a distinct cost §3.1
+Information trajectory A sequence  p = (o_1, \ldots, o_n)  of operations transforming state  S_0 \rightarrow S_n  §2
+L0 primitive An operation measurable with at least one declared instrument §3.2
+L1 family A composite operation grouping related L0 primitives §3.2
+L2 pattern A meta-taxonomic category capturing a functional objective across pipeline stages §3.2
+NR Not Reported: a cost dimension for which the literature provides no measurement §4.1
+Parameter space A configuration space  \Theta  that conditions cost but is not an operation §17
+Pareto frontier  \mathcal{P}^\star(q) : the set of non-dominated trajectories satisfying quality constraints §28
+Quality vector  \mathbf{Q} = (Q_{\text{retrieval}}, Q_{\text{answer}}, Q_{\text{factuality}}, Q_{\text{citation}}, Q_{\text{coverage}}, Q_{\text{task}})  §27
+State  S = (Q_{\text{retrieved}}, Q_{\text{compressed}}, \text{budget\_consumed}, \text{verification\_flags})  §2.1
+
+---
+
+Appendix I: References
+
+This appendix lists all sources cited or anchored in the appendices. No original experiments, training runs, benchmarks, or physical deployments have been conducted by the authors. All references are to published or preprint literature.
+
+ID Source Type Used in
+[SoK] Mishra et al., "SoK: Agentic Retrieval-Augmented Generation (RAG): Taxonomy, Architectures, Evaluation, and Research Directions," arXiv:2603.07379, 2026 Survey/SoK §1.1, §3.2, §7.1, §12.2
+[M-RAG] "M-RAG: Amortized Offline Cost for RAG," arXiv:2603.26667v2 Research paper §4.3, Appendix B
+[MiRAGE] "Seeing Through the MiRAGE: Evaluating Multimodal Retrieval Augmented Generation," arXiv:2510.24870, EMNLP Main Research paper §27.1, Appendix D
+[Shapley-RAG] Nematov et al., "Document Attribution in Retrieval-Augmented Generation," AIMLAI 2025 Research paper §7.2
+[Modular-RAG] "L2 Sub-module ( \mathcal{M}_s = \{Op\} )," ACM TOIS Research paper §3.2, Appendix A
+[TASR] "TASR: Training-Free Adaptive Stopping for Iterative Retrieval," arXiv, 2026 Research paper §12.2, §31.2, Appendix A
+[S2G-RAG] "S2G-RAG: Structured Sufficiency and Gap Judging for Iterative Retrieval-Augmented QA," ACL 2026 Research paper §12.2, §31.2, Appendix A
+[GraphRAG] "GraphRAG: Building the Map from Source Code," GitHub, 2026 Technical report §31.1
+[PipeRAG] "PipeRAG: Fast Retrieval-Augmented Generation via Pipeline Parallelism," arXiv Research paper §4.3
+[CAMI] "CAMI: Cost-Aware Multi-Objective Information Retrieval," arXiv Research paper §28
+[syftr] "syftr: Pareto-Optimal RAG Flow Discovery," arXiv Research paper §28
+[DPR] Karpukhin et al., "Dense Passage Retrieval for Open-Domain Question Answering," EMNLP 2020 Research paper §13, §14
+[ColBERT] Khattab & Zaharia, "ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over BERT," SIGIR 2020 Research paper §18, §19, §20
+[Self-RAG] Asai et al., "Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection," ICLR 2024 Research paper §12
+[BM25] Robertson & Zaragoza, "The Probabilistic Relevance Framework: BM25 and Beyond," 2009 Research paper §10
+[Lewis-RAG] Lewis et al., "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks," NeurIPS 2020 Research paper §11
+
+Appendix J: ASCII Diagrams
+
+Version 0.4 — Validated Theoretical Draft
+
+Epistemic status: Literature-anchored theoretical framework. No original experiments, training runs, benchmarks, or physical deployments have been conducted by the authors. All diagrams are conceptual, constructed from internet literature search and LLM analysis. Quantitative values are labelled according to the discipline defined in Appendix G.
+
+---
+
+J.1 The ITO Framework at a Glance
+
+```
+╔══════════════════════════════════════════════════════════════════════════╗
+║                                                                          ║
+║                    INFORMATION TRAJECTORY OPTIMIZATION                   ║
+║                                                                          ║
+║   ┌────────────────────────────────────────────────────────────────┐     ║
+║   │                                                                │     ║
+║   │   QUERY  q  ──►  TRAJECTORY  p  ──►  DECISION / ANSWER         │     ║
+║   │                                                                │     ║
+║   │   p = (o₁, o₂, ..., oₙ)   with   oᵢ ∈ O = {O₁, ..., Oₘ}       │     ║
+║   │                                                                │     ║
+║   └────────────────────────────────────────────────────────────────┘     ║
+║                                                                          ║
+║   DECOMPOSE           MEASURE              OPTIMIZE                      ║
+║   ─────────           ───────              ────────                      ║
+║                                                                          ║
+║   Architecture        Cost vector C         Pareto frontier P*(q)        ║
+║   ──► Operations      Quality vector Q      s.t. Q(p) ⪰ τ                ║
+║                       Gain G(S)                                          ║
+║                       Dependencies D                                     ║
+║                                                                          ║
+╚══════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+J.2 Architecture × Operation Matrix
+
+```
+                    O₅  O₇a O₇b O₇c O₈a O₈b O₈c O₈d O₁₂ O₁₅ O₂₄ O₂₇ O₃₀ O₃₁
+                    ──  ─── ─── ─── ─── ─── ─── ─── ─── ─── ─── ─── ─── ───
+  BM25              ██  ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·
+  Naive RAG         ·   ██  ██  ██  ·   ·   ·   ·   ·   ·   ██  ·   ·   ·
+  Self-RAG          ·   ██  ██  ██  ·   ·   ·   ·   ·   ██  ██  ██  ██  ·
+  DPR               ·   ██  ██  ██  ·   ·   ·   ·   ·   ·   ██  ·   ·   ·
+  ColBERT           ·   ██  ·   ·   ██  ██  ██  ██  ·   ·   ██  ·   ·   ·
+
+  Legend:  ██ = present    · = absent
+```
+
+---
+
+J.3 Information Trajectory as State Transitions
+
+```
+     S₀ ──o₁──► S₁ ──o₂──► S₂ ──o₃──► S₃ ──o₄──► S₄ ──o₅──► S₅
+     │          │          │          │          │          │
+     Q=∅        Q={d₁}     Q={d₁,d₂}  Q'={c₁}    flags=∅    ANSWER
+     C=0        C=c₁       C=c₁+c₂    C=c₁+c₂   ...        C_total
+     flags=∅    flags=∅    flags=∅    flags=∅    flags={v}  
+
+     State S = (Q_retrieved, Q_compressed, budget_consumed, verification_flags)
+```
+
+---
+
+J.4 Cost Vector Dimensions
+
+```
+                          ┌─────────────────────────────┐
+                          │    COST VECTOR  C_i(θ,D,H)  │
+                          └──────────────┬──────────────┘
+                                         │
+        ┌────────────┬────────────┬──────┴──────┬────────────┬────────────┐
+        │            │            │             │            │            │
+        ▼            ▼            ▼             ▼            ▼            ▼
+   ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐
+   │ Compute │  │ Latency │  │ Tokens  │  │ Memory  │  │ Network │  │  Calls  │
+   │ FLOPs / │  │   ms    │  │  count  │  │   GB    │  │  bytes  │  │  count  │
+   │ GPU-s   │  │         │  │         │  │         │  │         │  │         │
+   └─────────┘  └─────────┘  └─────────┘  └─────────┘  └─────────┘  └─────────┘
+        │            │            │             │            │            │
+        ▼            ▼            ▼             ▼            ▼            ▼
+   ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐
+   │ Profiler│  │ Wall-   │  │ Token-  │  │ Memory  │  │ Network │  │ Instr-  │
+   │         │  │ clock   │  │ izer    │  │ profiler│  │ monitor │  │ ment.   │
+   └─────────┘  └─────────┘  └─────────┘  └─────────┘  └─────────┘  └─────────┘
+
+   Conditioned by:   θ = configuration    D = dataset    H = hardware
+```
+
+---
+
+J.5 Offline vs Online Cost Separation
+
+```
+   OFFLINE (one-time, amortized over Q queries)          ONLINE (per query)
+   ─────────────────────────────────────────────         ──────────────────────
+                                                        
+   ┌──────────────────────┐                              ┌──────────────────┐
+   │  O₇b Doc Encoding    │                              │  O₇a Query Enc.  │
+   │  O₈a Token Encoding  │                              │  O₇c Sim. Search │
+   │  O₈b Token Storage   │                              │  O₈c MaxSim      │
+   │  O₈d Token Pruning   │                              │  O₁₂ Reranking   │
+   │  Graph Construction  │                              │  O₂₄ Generation  │
+   └──────────┬───────────┘                              └────────┬─────────┘
+              │                                                   │
+              ▼                                                   ▼
+   ┌──────────────────────┐                              ┌──────────────────┐
+   │   Θ_index (config)   │──────conditions────────────► │  Retrieval       │
+   │   Θ_prune (config)   │                              │  Execution       │
+   └──────────────────────┘                              └──────────────────┘
+
+   Effective cost over Q queries:
+
+        C_eff(Q) = C_offline / Q  +  C_online
+
+              │
+              │  C_eff
+              │
+              │●
+              │ ●
+              │  ●
+              │    ●●
+              │       ●●●●●●●●●●●●●●●●●●●●●●●●
+              └──────────────────────────────────► Q
+                 As Q → ∞, C_eff → C_online
+```
+
+---
+
+J.6 Cost Composition Operator ⊕ Per Dimension
+
+```
+   Trajectory p = (o₁, o₂, ..., oₙ)
+
+   ┌────────────────────────────────────────────────────────────────────┐
+   │  C_latency(p)  =  MAX under pipelining                             │
+   │                   SUM under sequential                             │
+   │                                                                    │
+   │      Sequential:   o₁ ──► o₂ ──► o₃     SUM(o₁,o₂,o₃)             │
+   │                                                                    │
+   │      Pipelined:    o₁ ══════════                                   │
+   │                         o₂ ══════════                              │
+   │                              o₃ ══════════      MAX(o₁,o₂,o₃)      │
+   └────────────────────────────────────────────────────────────────────┘
+
+   ┌────────────────────────────────────────────────────────────────────┐
+   │  C_memory(p)   =  MAX under shared pool                            │
+   │                   SUM under isolated execution                     │
+   └────────────────────────────────────────────────────────────────────┘
+
+   ┌────────────────────────────────────────────────────────────────────┐
+   │  C_tokens(p)   =  SUM always                                       │
+   │  C_calls(p)    =  SUM always                                       │
+   └────────────────────────────────────────────────────────────────────┘
+
+   ┌────────────────────────────────────────────────────────────────────┐
+   │  C_compute(p)  =  Model-dependent (Roofline)                       │
+   │  C_network(p)  =  Model-dependent                                  │
+   └────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+J.7 Dependency DAG — ColBERT Style Late Interaction
+
+```
+   ┌───────────────────────── OFFLINE ──────────────────────────┐
+   │                                                            │
+   │   ┌──────────────┐    requires    ┌──────────────┐         │
+   │   │ O₈a Token    │───────────────►│ O₈b Token    │         │
+   │   │   Encoding   │                │   Storage    │         │
+   │   └──────────────┘                └──────┬───────┘         │
+   │                                          │                 │
+   │                            ┌─────────────┼─────────────┐   │
+   │                            │             │             │   │
+   │                            ▼             ▼             │   │
+   │                    ┌──────────────┐  ┌──────────────┐   │   │
+   │                    │ Θ_prune      │  │ Θ_index      │   │   │
+   │                    │ (config)     │  │ (config)     │   │   │
+   │                    └──────┬───────┘  └──────┬───────┘   │   │
+   │                           │                 │           │   │
+   │                           │   conditions    │           │   │
+   │                           ▼                 ▼           │   │
+   │                    ┌──────────────┐  ┌──────────────┐   │   │
+   │                    │ O₈d Token    │  │  (conditions │   │   │
+   │                    │   Pruning    │  │   retrieval) │   │   │
+   │                    └──────────────┘  └──────────────┘   │   │
+   │                                                            │   │
+   └────────────────────────────────────────────────────────────┘   │
+                                                                      │
+   ┌───────────────────────── ONLINE ───────────────────────────┐   │
+   │                                                            │   │
+   │   ┌──────────────┐                                         │   │
+   │   │  Query q     │                                         │   │
+   │   └──────┬───────┘                                         │   │
+   │          │                                                 │   │
+   │          ▼                                                 │   │
+   │   ┌──────────────┐                                         │   │
+   │   │ O₇a Query    │                                         │   │
+   │   │   Encoding   │                                         │   │
+   │   └──────┬───────┘                                         │   │
+   │          │                                                 │   │
+   │          │  requires                                       │   │
+   │          ▼                                                 │   │
+   │   ┌──────────────┐ ◄─────────────────────────────────────┘   │
+   │   │ O₈c MaxSim   │ ◄────── conditions (Θ_index)              │
+   │   │   Interaction│                                            │
+   │   └──────┬───────┘                                            │
+   │          │                                                    │
+   │          │  requires                                          │
+   │          ▼                                                    │
+   │   ┌──────────────┐                                            │
+   │   │ O₃₁ Candidate│  [H]  (independence unresolved)            │
+   │   │   Selection  │                                            │
+   │   └──────┬───────┘                                            │
+   │          │                                                    │
+   │          │  requires                                          │
+   │          ▼                                                    │
+   │   ┌──────────────┐                                            │
+   │   │ O₂₄ Generation│                                           │
+   │   └──────────────┘                                            │
+   │                                                                │
+   └────────────────────────────────────────────────────────────────┘
+
+   Edge types:   ───requires───►   prerequisite
+                 ───conditions──►  modifies cost/behavior
+                 ───mutually_excludes──►  not shown (no conflicts here)
+```
+
+---
+
+J.8 Dependency DAG — Self-RAG Style Adaptive Retrieval
+
+```
+   ┌───────────────────────── ONLINE ────────────────────────────┐
+   │                                                             │
+   │   ┌──────────────┐                                          │
+   │   │  Query q     │                                          │
+   │   └──────┬───────┘                                          │
+   │          │                                                  │
+   │          ▼                                                  │
+   │   ┌──────────────┐                                          │
+   │   │ O₃₀ Retrieval│                                          │
+   │   │     Gate     │                                          │
+   │   └──┬───────┬───┘                                          │
+   │      │       │                                              │
+   │   NO │       │ YES                                          │
+   │      │       │                                              │
+   │      │       ▼                                              │
+   │      │  ┌──────────────┐                                    │
+   │      │  │ O₇ Retrieval │                                    │
+   │      │  └──────┬───────┘                                    │
+   │      │         │                                            │
+   │      │         ▼                                            │
+   │      │  ┌──────────────┐                                    │
+   │      │  │ O₁₅ Evidence │                                    │
+   │      │  │ Verification │                                    │
+   │      │  └──────┬───────┘                                    │
+   │      │         │                                            │
+   │      └────┬────┘                                            │
+   │           │                                                 │
+   │           ▼                                                 │
+   │    ┌──────────────┐                                         │
+   │    │ O₂₄ Generation│                                        │
+   │    └──────┬───────┘                                         │
+   │           │                                                 │
+   │           ▼                                                 │
+   │    ┌──────────────┐                                         │
+   │    │ O₂₇ Answer   │                                         │
+   │    │ Verification │                                         │
+   │    └──┬───────┬───┘                                         │
+   │       │       │                                             │
+   │  suff │       │ insuff                                      │
+   │       │       │                                             │
+   │       │       └──────► (loop back to O₇ or O₃₀)             │
+   │       │                                                     │
+   │       ▼                                                     │
+   │    ┌──────────────┐                                         │
+   │    │ O₂₁ STOP    │                                         │
+   │    └──────────────┘                                         │
+   │                                                             │
+   └─────────────────────────────────────────────────────────────┘
+
+   Note:  O₃₀ ≠ O₂₁.  The gate decides whether to retrieve.
+          STOP terminates the trajectory.
+          O₂₀ (Sufficiency) may be the trigger for O₂₁.
+```
+
+---
+
+J.9 Dependency DAG — DPR Style Dense Retrieval
+
+```
+   ┌───────────────────────── OFFLINE ──────────────────────────┐
+   │                                                            │
+   │   ┌──────────────┐                                         │
+   │   │    Corpus    │                                         │
+   │   └──────┬───────┘                                         │
+   │          │                                                 │
+   │          ▼                                                 │
+   │   ┌──────────────┐                                         │
+   │   │ O₇b Document │                                         │
+   │   │   Encoding   │                                         │
+   │   └──────┬───────┘                                         │
+   │          │                                                 │
+   │          ▼                                                 │
+   │   ┌──────────────┐                                         │
+   │   │ Document     │                                         │
+   │   │ Representations                                         │
+   │   └──────┬───────┘                                         │
+   │          │                                                 │
+   │          ▼                                                 │
+   │   ┌──────────────┐                                         │
+   │   │ Θ_index      │  (parameter space)                      │
+   │   │ Flat / HNSW  │                                         │
+   │   └──────┬───────┘                                         │
+   │          │                                                 │
+   │          ▼                                                 │
+   │   ┌──────────────┐                                         │
+   │   │ Search Index │                                         │
+   │   └──────────────┘                                         │
+   │                                                            │
+   └────────────────────────────────────────────────────────────┘
+
+   ┌───────────────────────── ONLINE ───────────────────────────┐
+   │                                                            │
+   │   ┌──────────────┐                                         │
+   │   │   Query q    │                                         │
+   │   └──────┬───────┘                                         │
+   │          │                                                 │
+   │          ▼                                                 │
+   │   ┌──────────────┐                                         │
+   │   │ O₇a Query    │                                         │
+   │   │   Encoding   │                                         │
+   │   └──────┬───────┘                                         │
+   │          │                                                 │
+   │          ▼                                                 │
+   │   ┌──────────────┐                                         │
+   │   │ O₇c Similarity│  ◄─── top-k integrated here           │
+   │   │    Search    │                                         │
+   │   └──────┬───────┘                                         │
+   │          │                                                 │
+   │          ▼                                                 │
+   │   ┌──────────────┐                                         │
+   │   │ Top-k        │                                         │
+   │   │ passages     │                                         │
+   │   └──────────────┘                                         │
+   │                                                            │
+   └────────────────────────────────────────────────────────────┘
+
+   Note:  O₃₁ (Candidate Selection) is functionally present but
+          integrated into O₇c.  It does not appear as a separate node.
+```
+
+---
+
+J.10 Dependency DAG — Naive RAG (Minimal Trajectory)
+
+```
+   ┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+   │   Query q    │─────►│ O₇ Dense     │─────►│ O₂₄ Generation│
+   │              │      │   Retrieval  │      │              │
+   └──────────────┘      └──────────────┘      └──────┬───────┘
+                                                       │
+                                                       ▼
+                                                ┌──────────────┐
+                                                │    ANSWER    │
+                                                └──────────────┘
+
+   Minimal trajectory:  p = (O₇, O₂₄)
+
+   Online cost:  C_RAG = C_embed + C_retrieve + C_LLM
+```
+
+---
+
+J.11 Dependency DAG — BM25 (Minimal Primitive)
+
+```
+   ┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+   │   Query q    │─────►│ O₅ Lexical   │─────►│  Ranked      │
+   │              │      │   Retrieval  │      │  Documents   │
+   └──────────────┘      └──────────────┘      └──────────────┘
+
+   Minimal trajectory:  p = (O₅)
+
+   No neural encoding.  No generation.  No adaptive control.
+```
+
+---
+
+J.12 Layered Taxonomy L0 / L1 / L2
+
+```
+   ┌─────────────────────────────────────────────────────────────────┐
+   │                                                                 │
+   │   L2 PATTERNS  (meta-taxonomic, no cost)                        │
+   │   ┌─────────────┬─────────────┬─────────────┐                   │
+   │   │ Compression │  Routing    │ Verification│                   │
+   │   └──────┬──────┴──────┬──────┴──────┬──────┘                   │
+   │          │             │             │                          │
+   │          ▼             ▼             ▼                          │
+   │   ┌──────────────────────────────────────────────────────┐      │
+   │   │                                                      │      │
+   │   │   L1 FAMILIES  (composite operations)                │      │
+   │   │   ┌──────────────────┬──────────────────┐            │      │
+   │   │   │ O₇ Dense Retrieval│ O₈ Late Interaction│         │      │
+   │   │   │ {O₇a,O₇b,O₇c}    │ {O₈a,O₈b,O₈c,O₈d} │          │      │
+   │   │   └────────┬─────────┴─────────┬────────┘            │      │
+   │   │            │                   │                     │      │
+   │   │            ▼                   ▼                     │      │
+   │   │   ┌──────────────────────────────────────────┐       │      │
+   │   │   │                                          │       │      │
+   │   │   │   L0 PRIMITIVES  (measurable)            │       │      │
+   │   │   │   O₅  O₇a O₇b O₇c O₈a O₈b O₈c O₈d       │       │      │
+   │   │   │   O₁₀ O₁₂ O₁₄ O₁₅ O₂₄ O₂₇ O₃₀           │       │      │
+   │   │   │                                          │       │      │
+   │   │   └──────────────────────────────────────────┘       │      │
+   │   │                                                      │      │
+   │   └──────────────────────────────────────────────────────┘      │
+   │                                                                 │
+   │   PARAMETER SPACES  (no cost, conditions cost)                  │
+   │   ┌──────────────────┬──────────────────┐                       │
+   │   │  Θ_index         │  Θ_prune         │                       │
+   │   └──────────────────┴──────────────────┘                       │
+   │                                                                 │
+   │   HYPOTHESES  (no ID assigned)                                  │
+   │   ┌──────────────────────────────────────┐                      │
+   │   │  O₃₁ [H]  Candidate Selection         │                      │
+   │   └──────────────────────────────────────┘                      │
+   │                                                                 │
+   └─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+J.13 Pareto Frontier in Quality–Cost Space
+
+```
+   Quality  Q
+      ▲
+      │
+      │                                          ● p_full (reference)
+      │                                       ╱
+      │                                    ╱
+      │                                 ╱
+      │                              ╱
+      │                           ╱
+      │                        ╱   ← Pareto frontier
+      │                     ╱        (non-dominated trajectories)
+      │                  ╱
+      │               ╱
+      │            ╱
+      │         ╱
+      │      ╱  ← feasible region
+      │   ╱
+      │╱
+      └──────────────────────────────────────────────────────► Cost  C
+
+   Definition:
+
+      P*(q) = { p ∈ P(q) | Q(p) ⪰ τ,
+                ∄ p' : C(p') ⪯ C(p) with at least one strict inequality }
+
+   A deployment selects p* ∈ P*(q) by scalarizing:
+
+      C_w = w_c C_compute + w_l C_latency + w_t C_tokens
+          + w_m C_memory + w_n C_network + w_a C_calls
+
+   No universal justification for  w_latency = w_memory  or any equivalence.
+```
+
+---
+
+J.14 Retrieval Gate as Routing
+
+```
+   ┌─────────────────────────────────────────────────────────────────┐
+   │                                                                 │
+   │                      ┌──────────────┐                           │
+   │                      │  Query q     │                           │
+   │                      └──────┬───────┘                           │
+   │                             │                                   │
+   │                             ▼                                   │
+   │                      ┌──────────────┐                           │
+   │                      │  O₃₀         │                           │
+   │                      │  Retrieval   │                           │
+   │                      │    Gate      │                           │
+   │                      └──┬───┬───┬───┘                           │
+   │                         │   │   │                               │
+   │              ┌──────────┘   │   └──────────┐                    │
+   │              │              │              │                    │
+   │              ▼              ▼              ▼                    │
+   │       ┌──────────┐   ┌──────────┐   ┌──────────┐                │
+   │       │ O₅       │   │ O₇       │   │ O₈       │                │
+   │       │ Lexical  │   │ Dense    │   │ Late     │                │
+   │       │ Retrieval│   │ Retrieval│   │ Interact.│                │
+   │       └────┬─────┘   └────┬─────┘   └────┬─────┘                │
+   │            │              │              │                      │
+   │            └──────────────┼──────────────┘                      │
+   │                           │                                     │
+   │                           ▼                                     │
+   │                    ┌──────────────┐                             │
+   │                    │  Candidates  │                             │
+   │                    └──────────────┘                             │
+   │                                                                 │
+   │   Status:  [H]  —  routing hypothesis, not established result   │
+   │                                                                 │
+   │   Classifier:   f(q) → θ_retrieval  (which mechanism?)          │
+   │                                                                 │
+   │   Cost check:   C(O₃₀) + C(O_selected)  vs.  C(O_default)        │
+   │                 Routing is beneficial only if the gate's own    │
+   │                 cost is less than the saved retrieval cost.     │
+   │                                                                 │
+   └─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+J.15 Compression Meta-Taxonomy (L2 Pattern)
+
+```
+   ┌─────────────────────────────────────────────────────────────────┐
+   │                                                                 │
+   │   Higher-order functional pattern:                              │
+   │                                                                 │
+   │      X  ──►  X'    such that   |X'| < |X|                       │
+   │                    and         Q(X') ≈ Q(X)                     │
+   │                                                                 │
+   │   Two instantiations at different pipeline stages:              │
+   │                                                                 │
+   │      O₈d  (Token Pruning)          O₁₄  (Context Compression)   │
+   │      ────────────────────          ─────────────────────────    │
+   │      Acts on:                      Acts on:                     │
+   │      Retrieval index               Generator input context      │
+   │      representations               (post-retrieval)             │
+   │                                                                 │
+   │      Affects:                      Affects:                     │
+   │      • Index memory                • Context length             │
+   │      • Retrieval compute           • Generation compute         │
+   │      • Retrieval latency           • Generation latency         │
+   │                                    • Token usage                │
+   │                                                                 │
+   │              O₈d  ≠  O₁₄                                        │
+   │              O₈d  ∼  O₁₄   (at L2 pattern level)                │
+   │                                                                 │
+   │   No merging of architectural identities.                       │
+   │                                                                 │
+   └─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+J.16 NR (Not Reported) Policy
+
+```
+   ┌─────────────────────────────────────────────────────────────────┐
+   │                                                                 │
+   │   Publication reports:                                          │
+   │      C_compute   = 10 GPU-s                                     │
+   │      C_latency   = 45 ms                                        │
+   │      C_tokens    = 1024                                         │
+   │      C_memory    = [not measured]   ◄──── NR                    │
+   │      C_network   = [not measured]   ◄──── NR                    │
+   │      C_calls     = 3                                            │
+   │                                                                 │
+   │   ITO records:                                                  │
+   │      C_memory  = NR       NOT     C_memory = 0                  │
+   │      C_network = NR       NOT     C_network = 0                 │
+   │                                                                 │
+   │   Optimization consequence:                                     │
+   │                                                                 │
+   │      If memory is constrained in deployment:                    │
+   │         → operation with NR memory  CANNOT be selected          │
+   │         → NR is NOT imputed                                     │
+   │                                                                 │
+   │   Epistemic principle:                                          │
+   │      Absence of measurement  ≠  evidence of zero cost           │
+   │                                                                 │
+   └─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+J.17 Controlled Ablation Protocol
+
+```
+   ┌─────────────────────────────────────────────────────────────────┐
+   │                                                                 │
+   │   Baseline B                                                    │
+   │      │                                                          │
+   │      ├──► B + O_i            ──►  ΔQ_i, ΔC_i                    │
+   │      │                                                          │
+   │      ├──► B + O_i + O_j      ──►  ΔQ_{ij}, ΔC_{ij}              │
+   │      │                                                          │
+   │      ├──► B + O_i + O_j + O_k                                   │
+   │      │                                                          │
+   │      └──► ...                                                   │
+   │                                                                 │
+   │   Measure:                                                      │
+   │                                                                 │
+   │      ΔQ = Q_augmented − Q_baseline                              │
+   │      ΔC = C_augmented − C_baseline                              │
+   │                                                                 │
+   │   Result:                                                       │
+   │                                                                 │
+   │              ΔQ                                                 │
+   │      η_i  = ────    (vector division is not scalar;             │
+   │              ΔC          represent as response vector,          │
+   │                          or scalarize with deployment weights)  │
+   │                                                                 │
+   │   Query stratification:                                         │
+   │      • single-hop   vs.  multi-hop                              │
+   │      • lexical      vs.  semantic                               │
+   │      • short        vs.  long                                   │
+   │                                                                 │
+   └─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+J.18 Quality Vector Dimensions
+
+```
+                          ┌────────────────────────────────┐
+                          │   QUALITY VECTOR  Q(p)         │
+                          └───────────────┬────────────────┘
+                                          │
+   ┌──────────────┬──────────────┬────────┴───────┬──────────────┬──────────────┐
+   │              │              │                │              │              │
+   ▼              ▼              ▼                ▼              ▼              ▼
+┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐
+│ Retrieval│  │ Answer  │  │Factuality│  │Citation │  │Coverage │  │  Task   │
+│ Recall@k │  │  EM, F1 │  │ INFOF1  │  │ CITEF1  │  │ INFOF1  │  │ Task-   │
+│ nDCG@10  │  │         │  │         │  │         │  │         │  │ specific│
+└─────────┘  └─────────┘  └─────────┘  └─────────┘  └─────────┘  └─────────┘
+
+   Note:   ΔQ_retrieval > 0  ⇏  ΔQ_answer > 0
+
+   Do not collapse Q into a single number until the target task
+   defines the relevant objective and the measurement instruments
+   are declared.
+```
+
+---
+
+J.19 Experimental Protocol — Configuration Ladder
+
+```
+   ┌─────────────────────────────────────────────────────────────────┐
+   │                                                                 │
+   │   Configuration A:   O₇  ──►  O₂₄                               │
+   │                                                                 │
+   │   Configuration B:   O₇  ──►  O₃₁  ──►  O₂₄                     │
+   │                                                                 │
+   │   Configuration C:   O₇  ──►  O₁₂  ──►  O₂₄                     │
+   │                                                                 │
+   │   Configuration D:   O₇  ──►  O₃₀  ──►  O₂₄                     │
+   │                                                                 │
+   │   Configuration E:   O₇  ──►  O₃₀  ──►  O₃₁  ──►  O₂₄           │
+   │                                                                 │
+   │   Key measurement:                                              │
+   │                                                                 │
+   │      What quality gain does each added operation buy,           │
+   │      at what multidimensional cost?                             │
+   │                                                                 │
+   │   Not:  "Which system wins?"                                    │
+   │                                                                 │
+   └─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+J.20 ITO-Bench Structure
+
+```
+   ┌─────────────────────────────────────────────────────────────────┐
+   │                                                                 │
+   │                       ITO-BENCH                                 │
+   │                                                                 │
+   │   ┌─────────────────┬─────────────────┬─────────────────┐       │
+   │   │      NQ         │    HotpotQA     │    MS MARCO     │       │
+   │   │                 │                 │                 │       │
+   │   │  O₅ vs O₇       │   O₁₀ graph     │   O₈d pruning   │       │
+   │   │  boundary       │   multi-step    │   30% / 70%     │       │
+   │   └────────┬────────┴────────┬────────┴────────┬────────┘       │
+   │            │                 │                 │               │
+   │            └─────────────────┼─────────────────┘               │
+   │                              │                                 │
+   │                              ▼                                 │
+   │            ┌─────────────────────────────────────┐             │
+   │            │   3 HARDWARE PROFILES                │             │
+   │            │   A: High-end GPU                    │             │
+   │            │   B: Mid-range GPU                   │             │
+   │            │   C: CPU-only                        │             │
+   │            └────────────────┬────────────────────┘             │
+   │                             │                                 │
+   │                             ▼                                 │
+   │            ┌─────────────────────────────────────┐             │
+   │            │   6 COST DIMENSIONS                 │             │
+   │            │   compute, latency, tokens,          │             │
+   │            │   memory, network, calls             │             │
+   │            └────────────────┬────────────────────┘             │
+   │                             │                                 │
+   │                             ▼                                 │
+   │            ┌─────────────────────────────────────┐             │
+   │            │   NR TABLE                          │             │
+   │            │   (published explicitly —           │             │
+   │            │    this alone is a contribution)    │             │
+   │            └─────────────────────────────────────┘             │
+   │                                                                 │
+   └─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+J.21 Epistemic Labels Flow
+
+```
+   ┌─────────────────────────────────────────────────────────────────┐
+   │                                                                 │
+   │   Literature source                                             │
+   │        │                                                        │
+   │        ├──►  Quantitative value directly reported  ──►  [V]     │
+   │        │                                                        │
+   │        ├──►  Qualitative or contextual observation ──►  [R]     │
+   │        │                                                        │
+   │        └──►  Measurement not provided  ──►  NR (not 0)          │
+   │                                                                 │
+   │   ITO internal proposal                                         │
+   │        │                                                        │
+   │        └──►  Not yet experimentally tested  ──►  [H]            │
+   │                                                                 │
+   │   Rules:                                                        │
+   │        • [V] and [R] require a citable source                   │
+   │        • [H] requires a proposed mechanism                      │
+   │        • NR is never imputed                                    │
+   │        • No universal claims from [R] or [H]                    │
+   │                                                                 │
+   └─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+J.22 The Central Scientific Question
+
+```
+   ┌─────────────────────────────────────────────────────────────────┐
+   │                                                                 │
+   │                                                                 │
+   │             How little computation is sufficient                │
+   │                                                                 │
+   │             to obtain the information required                  │
+   │                                                                 │
+   │             for a reliable decision?                            │
+   │                                                                 │
+   │                                                                 │
+   │   ┌───────────────────────────────────────────────────────┐     │
+   │   │                                                       │     │
+   │   │   This is the real object ITO is trying to measure.   │     │
+   │   │                                                       │     │
+   │   │   Not:  "Which architecture is best?"                 │     │
+   │   │                                                       │     │
+   │   │   But:  "What is the smallest sufficient trajectory   │     │
+   │   │          for this query under these constraints?"     │     │
+   │   │                                                       │     │
+   │   └───────────────────────────────────────────────────────┘     │
+   │                                                                 │
+   └─────────────────────────────────────────────────────────────────┘
+```
+
