@@ -1,0 +1,792 @@
+Identifiability under Interactive Evaluation: A Corrected Theoretical Dissertation Proposal
+
+Abstract
+
+This proposal establishes a formal framework for the identifiability of rule systems under interactive evaluation. The central result is a conditional impossibility theorem: under finite behavioral evaluation with evaluation-aware policies, observed compliance identifies only membership in an equivalence class of conditionally compliant policies, not the latent rule system. This yields the dissertation's negative result: high behavioral accuracy alone does not establish identification of the underlying rule system. The framework specializes the general alignment-verifiability result of Santos-Grueiro to closed, executable rule-perturbation domains with verifiable probes. The formal apparatus unifies concepts from econometric identification theory, version-space learning, disagreement-based active learning, exact learning with a minimally adequate teacher, and model-extraction query complexity. The empirical testbed is ExplorationBench, which provides two sandboxes—AlienCode (31 discovery targets, 70 tasks) and AlienLogic (24 discovery targets, 70 tasks)—each with a flawed manual and a dedicated tool-call schema. All quantitative claims about identification cost and the identifiability profile are scoped to closed rule-perturbation domains where the hypothesis space is enumerable and known. Results are metric-relative and lens-conditional.
+
+---
+
+1. Introduction
+
+1.1 The measurement problem
+
+Scientific discovery begins where known problems end. There, AI systems must engage in exploration: framing hypotheses, designing experiments, and iterating on results. Current large language models perform strongly on static evaluations, but these mainly test whether a model can retrieve and reason with knowledge it already has. Exploration asks for something different: the system must decide what evidence to collect, accumulate that evidence across its interaction history, distill new knowledge from outcomes, and apply that knowledge to new problems. Evaluating this ability is difficult because two requirements are in tension: tasks must be new to the system so that success cannot come from pre-training recall, yet their answers must be fully known to the evaluator so that success can be verified.
+
+The measurement problem this dissertation addresses is not whether such benchmarks produce useful behavioral scores. They do. The problem is an inference: whether a behavioral score establishes identification of the underlying rule system. The formal result is negative: it does not, whenever the evaluation probe set is a strict subset of the probe family available to active exploration.
+
+This is a specialization of a general result. Santos-Grueiro formalizes the Alignment Verifiability Problem and introduces Normative Indistinguishability, which arises when distinct latent alignment hypotheses induce identical distributions over evaluator-accessible observations. The main theoretical contribution there is a conditional impossibility result: under finite behavioral evaluation and evaluation-aware policies, observed compliance does not uniquely identify latent alignment, but only membership in an equivalence class of conditionally compliant policies, under explicit assumptions on policy expressivity and observability. The dissertation specializes this mechanism to closed rule-perturbation domains with executable verifiers, where the equivalence classes can be computed exactly and identification cost can be measured.
+
+1.2 Intellectual lineage
+
+The formal apparatus proposed here is not a new framework invented in isolation. It is a point in a family of problems with a long history.
+
+Observational equivalence. In econometrics, two structures are observationally equivalent if they define the same probability distribution of the variables. The concept was introduced in Haavelmo (1943) and developed in Haavelmo (1944), Koopmans, Rubin and Leipnik (1950), and subsequent Cowles Commission work. Classical definitions require that a given structure produce a unique conditional distribution of endogenous variables. The dissertation's task equivalence relation \sim_{\mathcal{T}} is the black-box-model instance of this concept.
+
+Version spaces and disagreement-based active learning. Mitchell (1982) introduced the version space as the set of all concept definitions consistent with the data seen so far. The active learning literature established that querying only where candidate hypotheses disagree yields exponential improvements in label complexity even in the agnostic case. Hanneke (2007b) analyzed the A^2 disagreement-based active learning algorithm, providing a general query complexity bound expressed in terms of the disagreement coefficient:
+
+\theta_P(\beta+\epsilon) \coloneqq \sup_{r > \beta+\epsilon}\frac{P_X(\mathrm{DIS}(B_{P_\lambda}(h^\star, r)))}{r} \vee 1,
+
+where B_{P_\lambda}(h^\star, r) = \{h \in \mathbb{C}: P_X(x: h(x) \neq h^\star(x)) \leq r\} is the h^\star-centered r-ball under L_1(P_X). The intuitive interpretation is that as the algorithm progresses, the surviving concept set V approaches h^\star up to distance O(\beta+\epsilon), so the probability of querying decreases. Hanneke proves that the A^2 algorithm succeeds after
+
+\tilde{O}\left(\theta_P(\beta+\epsilon)^2 d\left(\frac{\beta^2}{\epsilon^2}+1\right)\right)
+
+queries. The surviving hypothesis set \mathcal{H}(X;H) is exactly a version space under probe-based membership queries, and C^\star_{\mathrm{id}} is structurally an A^2-style query-complexity bound. The difference is that classical bounds assume a known hypothesis class and i.i.d. sampling from a fixed distribution, while ExplorationBench is deterministic, interactive, and the probe distribution is endogenous to the system's policy.
+
+Exact learning with a minimally adequate teacher. Angluin introduced the minimally adequate teacher (MAT) framework for the L^\star algorithm. The MAT answers membership queries (is w \in L?) and equivalence queries (is L = L(A)?), returning a counterexample when the conjecture is wrong. L^\star learns any regular set from any MAT in time polynomial in the number of states of the minimum DFA and the maximum counterexample length. ExplorationBench provides an executable verifier that returns pass/fail outcomes, but not equivalence queries in the L^\star sense. The hardness of identification is therefore information-theoretic under the restricted probe set, not merely algorithmic.
+
+Model extraction. Model extraction attacks aim to extract an equivalent or near-equivalent model by querying an oracle. Recent work achieves query reductions by factors of 10–600×, with some attacks requiring as few as 4.3× the original dataset size. The identification cost C^\star_{\mathrm{id}} is a query-complexity bound in this sense, applied to the problem of recovering a rule system rather than a neural network.
+
+---
+
+2. Formal Framework
+
+2.1 Primitives
+
+Let \mathcal{R} be the space of admissible rule systems. Let \mathcal{T} be a task distribution and \mathcal{X} an allowed probe family. Two functionals are defined:
+
+Q(H) = \Pr_{\tau \sim \mathcal{T}}\big[ V(\tau, H) = 1 \big],
+\qquad
+\mathcal{E}_H : \mathcal{X} \to \mathcal{Y}.
+
+Q is the benchmark's behavioral-performance functional. \mathcal{E}_H is the environment's response to a chosen probe. The distinction between these is the dissertation.
+
+Definition 2.1 (Rule-report functional K_t). At round t, the system emits a rule report K_t \subseteq \mathcal{R}, representing its stated beliefs about the admissible rule system. K_t is read directly from the rule-report channel of the protocol.
+
+Definition 2.2 (Rule-use functional U_t). U_t \in \{0,1\} indicates whether the system successfully applies the rules required by a held-out task at round t. U_t is measured by the task verifier: U_t = 1 if and only if V(\tau_t, H) = 1 for the held-out task \tau_t.
+
+Remark 2.1. The gap K_t \not\Rightarrow U_t is the operational-competence axis. It is measured empirically by the conditional probability \Pr[U_t = 0 \mid \tau_t \text{ requires } r, r \in K_t]. ExplorationBench reports that tasks whose required rules a system states correctly are still solved only 70.9% of the time in AlienCode. This is the empirical referent of the K_t vs. U_t distinction.
+
+2.2 Two equivalence relations
+
+Definition 2.3 (Task equivalence).
+
+H_a \sim_{\mathcal{T}} H_b
+\iff
+\forall \tau \in \mathcal{T}:\ V(\tau, H_a) = V(\tau, H_b).
+
+Definition 2.4 (Probe equivalence). Given an allowed probe family \mathcal{X}_{\mathrm{probe}} \subseteq \mathcal{X},
+
+H_a \sim_{\mathcal{X}} H_b
+\iff
+\forall x \in \mathcal{X}_{\mathrm{probe}}:\
+\mathcal{E}_{H_a}(x) = \mathcal{E}_{H_b}(x).
+
+Both relations are equivalence relations: reflexivity, symmetry, and transitivity follow directly from equality on the respective domains.
+
+Lemma 2.1. \sim_{\mathcal{T}} and \sim_{\mathcal{X}} are equivalence relations on \mathcal{R}.
+
+Proof. For \sim_{\mathcal{T}}: reflexivity holds since V(\tau,H)=V(\tau,H) for all \tau; symmetry holds since equality is symmetric; transitivity holds since equality is transitive. The same argument applies to \sim_{\mathcal{X}} with \mathcal{E}_H(x) in place of V(\tau,H). \square
+
+2.3 The embedding condition
+
+Definition 2.5 (Task-to-probe embedding). A task-to-probe embedding is an injection
+
+\iota : \mathcal{T} \hookrightarrow \mathcal{X}_{\mathrm{probe}}
+
+such that for all H \in \mathcal{R} and all \tau \in \mathcal{T},
+
+\mathcal{E}_H(\iota(\tau)) = V(\tau, H).
+
+The embedding condition states that every task appears as a probe whose environment response agrees with the task verifier.
+
+Remark 2.2. ExplorationBench satisfies this condition to the extent that the task verifier and the probe-response function share semantics. In AlienCode, both are evaluated by the same interpreter; in AlienLogic, both are evaluated by the same proof-checker. The embedding condition is therefore plausible, though not formally guaranteed, in both sandboxes.
+
+2.4 The incomparability theorem
+
+Theorem 2.1 (Corrected Proposition 2).
+
+(a) \sim_{\mathcal{X}} and \sim_{\mathcal{T}} are, in general, incomparable.
+
+(b) If the embedding condition (Definition 2.5) holds, then \sim_{\mathcal{X}} \subseteq \sim_{\mathcal{T}}.
+
+(c) The reverse inclusion \sim_{\mathcal{T}} \subseteq \sim_{\mathcal{X}} fails whenever there exists a distinguishing probe.
+
+Proof.
+
+(a) Incomparability. It suffices to exhibit two pairs of hypotheses demonstrating that neither relation implies the other.
+
+Counterexample 1: \sim_{\mathcal{T}} \not\Rightarrow \sim_{\mathcal{X}}. Let \mathcal{X}_{\mathrm{probe}} contain a probe x that tests a feature not exercised by any task in \mathcal{T}. Let H_a, H_b agree on all tasks but differ on x. Then H_a \sim_{\mathcal{T}} H_b but H_a \not\sim_{\mathcal{X}} H_b.
+
+Counterexample 2: \sim_{\mathcal{X}} \not\Rightarrow \sim_{\mathcal{T}}. This counterexample is valid only when the embedding condition fails. Under the embedding condition, if H_a \sim_{\mathcal{X}} H_b, then in particular they agree on all embedded tasks, so H_a \sim_{\mathcal{T}} H_b. Hence probe-equivalence without task-equivalence is impossible under embedding. To construct the counterexample, let H_a, H_b agree on all probes in \mathcal{X}_{\mathrm{probe}} but differ on some task \tau \in \mathcal{T} that is not represented in \mathcal{X}_{\mathrm{probe}}. Then H_a \sim_{\mathcal{X}} H_b but H_a \not\sim_{\mathcal{T}} H_b.
+
+Neither relation implies the other in general. Hence they are incomparable.
+
+(b) Inclusion under embedding. Assume the embedding condition. Suppose H_a \sim_{\mathcal{X}} H_b. Then for all x \in \mathcal{X}_{\mathrm{probe}}, \mathcal{E}_{H_a}(x) = \mathcal{E}_{H_b}(x). In particular, for all \tau \in \mathcal{T}, x = \iota(\tau) \in \mathcal{X}_{\mathrm{probe}}, so
+
+V(\tau, H_a) = \mathcal{E}_{H_a}(\iota(\tau)) = \mathcal{E}_{H_b}(\iota(\tau)) = V(\tau, H_b).
+
+Hence H_a \sim_{\mathcal{T}} H_b. Therefore \sim_{\mathcal{X}} \subseteq \sim_{\mathcal{T}}.
+
+(c) Strictness. If there exists a distinguishing probe—some x \in \mathcal{X}_{\mathrm{probe}} and hypotheses H_a \sim_{\mathcal{T}} H_b with \mathcal{E}_{H_a}(x) \neq \mathcal{E}_{H_b}(x)—then H_a \not\sim_{\mathcal{X}} H_b while H_a \sim_{\mathcal{T}} H_b. Hence \sim_{\mathcal{T}} \not\subseteq \sim_{\mathcal{X}}. \square
+
+Corollary 2.2 (Strictness of inclusion). The inclusion \sim_{\mathcal{X}} \subseteq \sim_{\mathcal{T}} is strict if and only if there exists a distinguishing probe. Equivalently,
+
+\sim_{\mathcal{X}} \subsetneq \sim_{\mathcal{T}}
+\iff
+\exists x \in \mathcal{X}_{\mathrm{probe}},\ \exists H_a, H_b \in \mathcal{R}:\
+H_a \sim_{\mathcal{T}} H_b \ \wedge\ \mathcal{E}_{H_a}(x) \neq \mathcal{E}_{H_b}(x).
+
+2.5 The accuracy factorization lemma
+
+Proposition 2.1. H_a \sim_{\mathcal{T}} H_b \Rightarrow Q(H_a) = Q(H_b). The converse fails in general.
+
+Proof. If H_a \sim_{\mathcal{T}} H_b, then V(\tau, H_a) = V(\tau, H_b) for all \tau \in \mathcal{T}. Therefore the indicator functions coincide pointwise:
+
+\mathbf{1}[V(\tau,H_a)=1] = \mathbf{1}[V(\tau,H_b)=1] \quad \forall \tau \in \mathcal{T}.
+
+Taking expectations over \tau \sim \mathcal{T}:
+
+Q(H_a) = \mathbb{E}_{\tau \sim \mathcal{T}}\big[\mathbf{1}[V(\tau,H_a)=1]\big]
+= \mathbb{E}_{\tau \sim \mathcal{T}}\big[\mathbf{1}[V(\tau,H_b)=1]\big] = Q(H_b).
+
+The converse fails because Q is an expectation and is many-to-one. \square
+
+Corollary 2.3 (Non-injectivity of the induced map). Q factors through \mathcal{R}/\!\sim_{\mathcal{T}}, but the induced map \overline{Q} : \mathcal{R}/\!\sim_{\mathcal{T}} \to [0,1] is not injective.
+
+2.6 The identification gap
+
+Definition 2.6 (Identification gap). For a given (\mathcal{T}, \mathcal{X}_{\mathrm{probe}}) with the embedding condition, the identification gap is
+
+\Gamma(\mathcal{T}, \mathcal{X}_{\mathrm{probe}})
+=
+\big|\mathcal{R}/\!\sim_{\mathcal{X}}\big| - \big|\mathcal{R}/\!\sim_{\mathcal{T}}\big|.
+
+Proposition 2.2. Under the embedding condition, \Gamma \ge 0. Moreover, \Gamma > 0 if and only if there exists a distinguishing probe.
+
+Proof. By Theorem 2.1(b), \sim_{\mathcal{X}} \subseteq \sim_{\mathcal{T}}, so every \sim_{\mathcal{X}}-class is contained in a \sim_{\mathcal{T}}-class. Therefore |\mathcal{R}/\!\sim_{\mathcal{X}}| \ge |\mathcal{R}/\!\sim_{\mathcal{T}}|, hence \Gamma \ge 0.
+
+If \Gamma > 0, then \sim_{\mathcal{X}} \subsetneq \sim_{\mathcal{T}}, so by Corollary 2.2 there exists a distinguishing probe. Conversely, if a distinguishing probe exists, then by Corollary 2.2 \sim_{\mathcal{X}} \subsetneq \sim_{\mathcal{T}}, so at least one \sim_{\mathcal{T}}-class splits into multiple \sim_{\mathcal{X}}-classes, hence \Gamma > 0. \square
+
+---
+
+3. Identification Sets and Identification Cost
+
+Definition 3.1 (Surviving hypothesis set). For a probe set X \subseteq \mathcal{X}_{\mathrm{probe}} and true rule H,
+
+\mathcal{H}(X; H) = \big\{ H' \in \mathcal{R} :\ \forall x \in X,\ \mathcal{E}_{H'}(x) = \mathcal{E}_H(x) \big\}.
+
+Lemma 3.1 (Monotonicity of surviving sets). If X_1 \subseteq X_2 \subseteq \mathcal{X}_{\mathrm{probe}}, then \mathcal{H}(X_2; H) \subseteq \mathcal{H}(X_1; H).
+
+Proof. If H' \in \mathcal{H}(X_2; H), then \mathcal{E}_{H'}(x) = \mathcal{E}_H(x) for all x \in X_2. Since X_1 \subseteq X_2, this holds in particular for all x \in X_1. Hence H' \in \mathcal{H}(X_1; H). \square
+
+Lemma 3.2 (Convergence to equivalence class). \mathcal{H}(\mathcal{X}_{\mathrm{probe}}; H) = [H]_{\sim_{\mathcal{X}}}.
+
+Proof. By definition, [H]_{\sim_{\mathcal{X}}} = \{ H' : \forall x \in \mathcal{X}_{\mathrm{probe}},\ \mathcal{E}_{H'}(x) = \mathcal{E}_H(x)\}. This is exactly \mathcal{H}(\mathcal{X}_{\mathrm{probe}}; H). \square
+
+Definition 3.2 (Identification up to an equivalence relation). X identifies H up to \sim if \mathcal{H}(X; H) \subseteq [H]_{\sim}.
+
+Proposition 3.1 (Identification hierarchy). The following hierarchy holds:
+
+\text{exact identification}
+\;\Rightarrow\;
+\sim_{\mathcal{X}}\text{-identification}
+\;\Rightarrow\;
+\sim_{\mathcal{T}}\text{-identification}.
+
+The hierarchy is strict precisely when \sim_{\mathcal{X}} is strictly finer than \sim_{\mathcal{T}}.
+
+Proof. If \mathcal{H}(X;H) \subseteq \{H\}, then since \{H\} \subseteq [H]_{\sim_{\mathcal{X}}}, exact identification implies \sim_{\mathcal{X}}-identification. Similarly, if \mathcal{H}(X;H) \subseteq [H]_{\sim_{\mathcal{X}}}, then since [H]_{\sim_{\mathcal{X}}} \subseteq [H]_{\sim_{\mathcal{T}}} by Theorem 2.1(b), \sim_{\mathcal{X}}-identification implies \sim_{\mathcal{T}}-identification.
+
+For strictness: if \sim_{\mathcal{X}} \subsetneq \sim_{\mathcal{T}}, then there exist H_a, H_b with H_a \sim_{\mathcal{T}} H_b but H_a \not\sim_{\mathcal{X}} H_b. Then [H_a]_{\sim_{\mathcal{X}}} \subsetneq [H_a]_{\sim_{\mathcal{T}}}, so a probe set achieving \sim_{\mathcal{X}}-identification does not achieve \sim_{\mathcal{T}}-identification by the same probe set. \square
+
+Definition 3.3 (Identification cost). Let C(X) be the cost of probe set X (a monotone functional of tool calls, probe units, and exploration tokens). The identification cost of H to tolerance \epsilon is
+
+C^{\star}_{\mathrm{id}}(H; \epsilon)
+=
+\min_{X \subseteq \mathcal{X}_{\mathrm{probe}}}
+\Big\{ C(X) :\ \operatorname{diam}\big( \mathcal{H}(X; H) \big) \le \epsilon \Big\},
+
+with the convention that C^{\star}_{\mathrm{id}} = \infty if no probe set achieves diameter \le \epsilon.
+
+Remark 3.1 (Default metric). The metric and tolerance \epsilon are declared parameters. The natural default on \mathcal{R}/\!\sim_{\mathcal{T}} is the behavioral disagreement rate:
+
+d(H_a, H_b) = \Pr_{\tau \sim \mathcal{T}}\big[ V(\tau, H_a) \neq V(\tau, H_b) \big].
+
+This is computable given the task distribution and verifier, and it directly connects to the ExplorationBench measurement apparatus. Results are reported relative to this default unless otherwise stated.
+
+Remark 3.2 (Scope of C^\star_{\mathrm{id}}). Computing \operatorname{diam}(\mathcal{H}(X; H)) requires the hypothesis space \mathcal{R} to be enumerable and known to the experimenter. This is tractable in AlienCode and AlienLogic, where the admissible rule systems are small, known perturbations of a fixed manual. It is not tractable as a general property of identifiability under interactive evaluation outside closed synthetic sandboxes. The dissertation's claims about C^\star_{\mathrm{id}} are therefore scoped to closed rule-perturbation domains.
+
+Definition 3.4 (Identifiability profile). For a benchmark with task distribution \mathcal{T} and probe family \mathcal{X}_{\mathrm{probe}}:
+
+\iota(\mathcal{T}, \mathcal{X}_{\mathrm{probe}})
+=
+\Big(
+|\mathcal{R}/\!\sim_{\mathcal{T}}|,\
+|\mathcal{R}/\!\sim_{\mathcal{X}}|,\
+\sup_H C^{\star}_{\mathrm{id}}(H; \epsilon)
+\Big).
+
+The first coordinate is the behavioral resolution of the evaluation. The second is the interactive resolution. The third is the worst-case cost of collapsing the gap between them.
+
+---
+
+4. The Impossibility Result
+
+Theorem 4.1 (Conditional impossibility of identification from evaluation alone). Let \mathcal{X}_{\mathrm{eval}} \subseteq \mathcal{X}_{\mathrm{probe}} be the probe set accessible under passive evaluation. If there exists a distinguishing probe x^\star \in \mathcal{X}_{\mathrm{probe}} \setminus \mathcal{X}_{\mathrm{eval}}, then there exist hypotheses H_a, H_b \in \mathcal{R} such that:
+
+H_a \sim_{\mathcal{T}} H_b
+\quad\text{but}\quad
+H_a \not\sim_{\mathcal{X}} H_b.
+
+Equivalently: no function of the evaluation outcome Q(H) can distinguish H_a from H_b.
+
+Proof. By Corollary 2.2, the existence of a distinguishing probe guarantees H_a \sim_{\mathcal{T}} H_b and H_a \not\sim_{\mathcal{X}} H_b for some H_a, H_b. By Proposition 2.1, Q(H_a) = Q(H_b). Since Q takes the same value on both hypotheses, no function of Q can distinguish them. \square
+
+Corollary 4.1. If \mathcal{X}_{\mathrm{eval}} \subsetneq \mathcal{X}_{\mathrm{probe}}, then evaluation alone cannot achieve exact identification or \sim_{\mathcal{X}}-identification for all H \in \mathcal{R}. At best, evaluation achieves \sim_{\mathcal{T}}-identification.
+
+Remark 4.1. This theorem is the formal statement of the dissertation's central negative result. It specializes the general conditional impossibility result of Santos-Grueiro—under finite behavioral evaluation and evaluation-aware policies, observed compliance does not uniquely identify latent alignment, but only membership in an equivalence class of conditionally compliant policies—to closed rule-perturbation domains with executable verifiers. The proof above provides the mechanism: the equivalence class is [H]_{\sim_{\mathcal{T}}}, and the gap to [H]_{\sim_{\mathcal{X}}} is the identification gap \Gamma.
+
+Remark 4.2 (Normative indistinguishability parallel). Santos-Grueiro introduces Normative Indistinguishability, which arises when distinct latent alignment hypotheses induce identical distributions over evaluator-accessible observations. The dissertation's task equivalence \sim_{\mathcal{T}} is the black-box instance of this concept: two hypotheses are task-equivalent when they induce identical distributions over task outcomes. The dissertation's probe equivalence \sim_{\mathcal{X}} is the interactive refinement: two hypotheses are probe-equivalent when they induce identical responses to all available probes. The identification gap \Gamma is the evaluation-theoretic analogue of the gap between normative indistinguishability classes and full latent-hypothesis distinguishability.
+
+---
+
+5. Operational Competence
+
+The prior draft proposed 1 - Q_t = f_{\mathrm{rep}} + f_{\mathrm{ret}} + f_{\mathrm{app}} + f_{\mathrm{cmp}} as a decomposition theorem. It is not a theorem. The components can overlap, and the attribution is not unique without additional assumptions.
+
+Corrected status. Define a staged protocol:
+
+\text{Rule report}
+\;\to\;
+\text{Isolated application}
+\;\to\;
+\text{Composition}
+\;\to\;
+\text{Held-out task}.
+
+Let F be a failure event. Define conditional failure probabilities:
+
+p_{\mathrm{stage}} = \Pr\big[ F \mid \text{stage reached},\ K_t \text{ stated} \big].
+
+The empirical claim is that p_{\mathrm{rep}}, p_{\mathrm{app}}, p_{\mathrm{cmp}} are non-degenerate and vary across systems. The additive identity is not asserted. It would require mutually exclusive attribution, a well-defined stage variable, and exogeneity of stage assignment. These are assumptions, not consequences.
+
+Operational specifications. K_t is the system's reported rule set at round t. "Stated" means explicitly emitted in the rule-report channel. "Stage reached" is determined by the protocol's task gating: a system reaches the application stage if and only if it has emitted a non-empty rule report. The attribution rule for ambiguous failures is declared: when a failure could be attributed to multiple stages, the protocol assigns it to the earliest stage at which the failure could have been detected. The exact gating predicates must be documented so that independent replications can reproduce stage labels.
+
+Empirical anchor. ExplorationBench reports that tasks whose required rules a system states correctly are still solved only 70.9% of the time. This is the empirical signature of the K_t \not\Rightarrow U_t gap.
+
+---
+
+6. Belief Maintenance: C_t versus B_t
+
+The prior draft defined B_t as "the set of hypotheses consistent with the history" and then asserted B_{t+1} \not\subseteq B_t. This is internally inconsistent: under set-membership updating,
+
+B_{t+1} = \{ H \in B_t : \mathcal{E}_H(x_t) = y_t \}
+
+implies B_{t+1} \subseteq B_t by construction.
+
+Definition 6.1 (Objective consistency set).
+
+C_t = \big\{ H \in \mathcal{R} :\ H \text{ is consistent with } (x_{\le t}, y_{\le t}) \big\}.
+
+Lemma 6.1 (Monotonicity of objective consistency). C_{t+1} \subseteq C_t for all t.
+
+Proof. If H \in C_{t+1}, then H is consistent with (x_{\le t+1}, y_{\le t+1}), which implies consistency with the prefix (x_{\le t}, y_{\le t}). Hence H \in C_t. \square
+
+Definition 6.2 (Agent-maintained hypothesis state). B_t \subseteq \mathcal{R} is the system's maintained belief, as read out by its rule reports and behavioral commitments. B_t need not equal C_t.
+
+Definition 6.3 (Degradation events). Belief degradation occurs if either
+
+\text{(belief overwriting)}\quad B_{t+1} \not\subseteq B_t,
+
+or
+
+\text{(evidence neglect)}\quad B_t \not\subseteq C_t.
+
+The first is belief overwriting: the system discards hypotheses it previously maintained without evidence. The second is commitment to hypotheses already ruled out by evidence.
+
+Proposition 6.1 (Characterization of degradation). Under the ExplorationBench protocol, degradation events are observable from the rule-report stream if and only if \mathcal{R} is known and the metric on \mathcal{R} is computable.
+
+Proof. To detect B_{t+1} \not\subseteq B_t, one needs to determine whether there exists H \in B_{t+1} with H \notin B_t. This requires membership testing in \mathcal{R}, which is possible if \mathcal{R} is known and membership is decidable. To detect B_t \not\subseteq C_t, one needs to determine whether there exists H \in B_t inconsistent with (x_{\le t}, y_{\le t}). This requires evaluating \mathcal{E}_H on the history, which is possible if \mathcal{R} is known and \mathcal{E}_H is computable. Conversely, if \mathcal{R} is unknown or \mathcal{E}_H is not computable, neither condition is decidable from the report stream alone. \square
+
+Remark 6.1. This makes RQ4 sandbox-bound unless a computable approximation of C_t is provided. The AGM belief revision literature provides the formal tools for such approximations: revision operators with explicit similarity relations between states, and truth maintenance systems that track justifications for each belief.
+
+Remark 6.2 (Safety relevance). Sandbagging—the strategic underperformance on evaluations—provides the safety-relevant mechanism for B_t \not\subseteq C_t. Recent work finds that even open-source models as small as 32B can covertly sandbag against a chain-of-thought monitor, bypassing it 16–36% of the time when monitor-aware. Models switch to more covert sandbagging policies when monitor-aware, without hints or examples. The B_t vs. C_t distinction makes evaluation awareness a well-posed empirical question rather than a measurement artifact.
+
+Remark 6.3 (Scope of detection). The dissertation's Proposition 6.1 scopes observability to known, enumerable \mathcal{R} and computable \mathcal{E}_H. The framework does not yield a practical sandbagging detector outside synthetic sandboxes. Black-box detection of sandbagging remains an open problem; attempts at steering using probes had minimal impact on sandbagging behavior in some models.
+
+---
+
+7. Efficiency: Discrete Marginal Gain and Pareto Dominance
+
+Definition 7.1 (Marginal gain). Let p \in \mathbb{N} be the probe budget (number of probes, tool calls, or composite exploration units). The marginal gain at budget p is
+
+\Delta Q(p) = Q(p+1) - Q(p).
+
+Definition 7.2 (Non-monotone returns). Returns are non-monotone if there exist p_1 < p_2 with
+
+\Delta Q(p_1) > 0, \qquad \Delta Q(p_2) < 0.
+
+Definition 7.3 (Pareto dominance across environments). For systems S_i, S_j and environment \mathcal{E}:
+
+S_i \succ_{\mathcal{E}} S_j
+\iff
+Q_i^{\mathcal{E}} \ge Q_j^{\mathcal{E}}
+\ \wedge\
+C_i^{\mathcal{E}} \le C_j^{\mathcal{E}},
+
+with at least one strict inequality.
+
+Definition 7.4 (Pareto frontier).
+
+\mathcal{P}_{\mathcal{E}} = \big\{ (C, Q) : \nexists (C', Q') \text{ with } C' \le C,\ Q' \ge Q \big\}.
+
+The scalar efficiency ratio \eta = G / \phi(\mathbf{B}) is secondary, reported only as a summary, and explicitly not used for ranking.
+
+Empirical anchor. ExplorationBench documents that "continued exploration can stall or reverse earlier gains", and that performance varies substantially across trajectories. This is the empirical signature of non-monotone \Delta Q(p).
+
+---
+
+8. Research Questions and Hypotheses
+
+RQ1 (core). For a given (\mathcal{T}, \mathcal{X}_{\mathrm{probe}}), what is the identifiability profile \iota(\mathcal{T}, \mathcal{X}_{\mathrm{probe}}), and what probe sets achieve identification up to \sim_{\mathcal{T}} or \sim_{\mathcal{X}}?
+
+RQ2 (extension). Given a system that reports a rule set correctly, how much of the residual error is attributable to stage-specific failure under a declared attribution rule?
+
+RQ3 (extension). Is Pareto dominance stable across sandboxes, and how does \Delta Q(p) behave within a trajectory?
+
+RQ4 (extension). Under what conditions does B_t \not\subseteq C_t or B_{t+1} \not\subseteq B_t, and can these be detected from the rule-report stream alone?
+
+ID Statement Falsifier
+H1 On the sandbox, \sim_{\mathcal{X}} \subsetneq \sim_{\mathcal{T}}. \sim_{\mathcal{X}} = \sim_{\mathcal{T}}
+H2 C^{\star}_{\mathrm{id}} varies by more than an order of magnitude across \mathcal{T}. Identification cost is uniform across tasks
+H3 Stage-specific failure probabilities are non-degenerate. One stage absorbs all residual error
+H4 \Delta Q(p) is non-monotone in at least one trajectory per system. \Delta Q is monotone within all trajectories
+H5 Pareto dominance is not stable across sandboxes. Dominance transfers with high agreement
+H6 B_t \not\subseteq C_t occurs in a non-trivial fraction of trajectories. Maintained beliefs remain consistent throughout
+
+Each is falsifiable under the ExplorationBench protocol or a direct extension. H6 requires known \mathcal{R} and computable \mathcal{E}_H; the experimental protocol must record exactly how membership in C_t is decided.
+
+---
+
+9. Limitations
+
+L1 (C1 inheritance). All gap derivations are conditional on the fixed extraction lens L_0. Recurrence across papers is paper-level, not lens-level.
+
+L2 (Determinism). The sandboxes are deterministic. Real scientific exploration is not.
+
+L3 (Horizon). Four rounds, \le 48 tool calls. Short relative to scientific practice.
+
+L4 (Construct validity). Two sandboxes cannot establish exploration as a single latent construct. The reported Spearman 0.35 is evidence against.
+
+L5 (Trajectory sampling). n = 3 in the source benchmark is insufficient for P_i(M). This dissertation expands to n \ge 10. The source paper provides variance data usable for a power calculation: performance varies substantially across trajectories.
+
+L6 (No human baseline). Absolute competence remains uncalibrated.
+
+L7 (Identification cost metric). C^{\star}_{\mathrm{id}} depends on the declared metric on \mathcal{R} and on \epsilon. Both are choices, and both must be reported alongside any result.
+
+L8 (Enumerability of \mathcal{R}). C^{\star}_{\mathrm{id}} presupposes an enumerable hypothesis space known to the experimenter. This is tractable in closed rule-perturbation domains such as AlienCode and AlienLogic, but not as a general property of identifiability under interactive evaluation. Every claim about C^{\star}_{\mathrm{id}} or the identifiability profile \iota is scoped to closed rule-perturbation domains. Outside those domains, the quantities are not operational. This is the most important limitation and conditions all quantitative claims.
+
+---
+
+10. Closing Claim
+
+The corrected claim:
+
+\boxed{
+\text{High behavioral accuracy alone does not establish identification of the underlying rule system.}
+}
+
+This is the dissertation's negative result. It criticizes an inference, not a measurement. The formal support is Theorem 4.1: if there exists a distinguishing probe outside the evaluation probe set, then evaluation accuracy is identical across hypotheses that are genuinely distinct under interaction.
+
+Corollary 10.1. Exploration can identify distinctions that evaluation cannot. This follows directly from Theorem 2.1(c) and Theorem 4.1: when \mathcal{X}_{\mathrm{eval}} \subsetneq \mathcal{X}_{\mathrm{probe}}, the probe equivalence relation is strictly finer than the task equivalence relation, and the additional distinctions are recoverable only through active exploration.
+
+What the proposal does not claim. The impossibility mechanism is not new in the broader alignment-verifiability literature; it is a specialization of the Santos-Grueiro result to closed, executable rule-perturbation domains. The identification cost C^{\star}_{\mathrm{id}} is not a general, computable property of interactive evaluation of LLMs; it is scoped to closed domains with enumerable \mathcal{R}. The framework does not yield practical detectors for sandbagging or evaluation awareness outside synthetic sandboxes.
+
+---
+
+11. Chapter Outline
+
+1. Introduction — the measurement problem; the distinction between evaluation and interaction; intellectual lineage.
+2. Two equivalence relations — \sim_{\mathcal{T}}, \sim_{\mathcal{X}}, definitions, foundational lemmas, and the incomparability theorem (Theorem 2.1).
+3. Identification sets — \mathcal{H}(X; H), hierarchy of identification (Proposition 3.1), identification cost (Definition 3.3).
+4. Identifiability profile — \iota(\mathcal{T}, \mathcal{X}_{\mathrm{probe}}) and its components; the identification gap \Gamma.
+5. The impossibility result — Theorem 4.1 and its corollaries; the Santos-Grueiro parallel.
+6. Operational competence — K_t vs. U_t, measurement framework, not theorem.
+7. Information efficiency — discrete marginal gain, Pareto frontier.
+8. Belief maintenance — C_t versus B_t (Proposition 6.1).
+9. Empirical protocol — ExplorationBench extension.
+10. Results — falsification attempts against H1–H6.
+11. Limitations — C1, L8, and the lens-conditional status of all recurrence.
+12. Conclusion — what evaluation can and cannot identify.
+
+---
+
+12. Procedural Status
+
+This proposal does not modify frozen Protocol v1.1. It is a corrected candidate thesis derived from the verified gaps EB-01, EB-02, EB-03, EB-04, EB-06, EB-07, EB-09, EB-10.
+
+The thesis remains candidate pending the blind Paper B phase. Recurrence evidence is lens-conditional. Paper-level independence I_P for a second seed is not yet established. The corrected mathematics supersedes the prior draft's invalid propositions; the research direction survives.
+
+The single strongest contribution is now explicit and proven:
+
+\boxed{
+\text{Exploration can identify distinctions that evaluation cannot.}
+}
+
+That is the thesis. The proof is Theorem 2.1(c) and Theorem 4.1. The testbed is ExplorationBench. The diagnostic is the identifiability profile \iota(\mathcal{T}, \mathcal{X}_{\mathrm{probe}}). The formal lineage is econometric identification, version-space learning, active learning, exact learning, and model extraction. The contribution is the unification and the concrete, enumerable testbed.
+
+Appendices
+
+---
+
+Appendix A: Formal Proofs and Lemmas
+
+A.1 Equivalence relations
+
+Proposition A.1. \sim_{\mathcal{T}} and \sim_{\mathcal{X}} are equivalence relations on \mathcal{R}.
+
+Proof. Reflexivity: V(\tau,H)=V(\tau,H) for all \tau\in\mathcal{T}, and \mathcal{E}_H(x)=\mathcal{E}_H(x) for all x\in\mathcal{X}_{\mathrm{probe}}. Symmetry follows from symmetry of equality. Transitivity follows from transitivity of equality. \square
+
+A.2 Incomparability of \sim_{\mathcal{T}} and \sim_{\mathcal{X}}
+
+Theorem A.2 (Theorem 2.1). The following hold:
+
+(a) \sim_{\mathcal{X}} and \sim_{\mathcal{T}} are, in general, incomparable.
+
+(b) If the embedding condition holds, then \sim_{\mathcal{X}} \subseteq \sim_{\mathcal{T}}.
+
+(c) The reverse inclusion fails whenever there exists a distinguishing probe.
+
+Proof.
+
+(a) Counterexample 1 (\sim_{\mathcal{T}} \not\Rightarrow \sim_{\mathcal{X}}). Choose \mathcal{X}_{\mathrm{probe}} containing a probe x testing a feature not exercised by any \tau\in\mathcal{T}. Let H_a,H_b agree on all tasks but differ on x. Then H_a\sim_{\mathcal{T}}H_b while H_a\not\sim_{\mathcal{X}}H_b.
+
+Counterexample 2 (\sim_{\mathcal{X}} \not\Rightarrow \sim_{\mathcal{T}}). This is valid only when the embedding condition fails. Under embedding, if H_a\sim_{\mathcal{X}}H_b, then they agree on all embedded tasks, so H_a\sim_{\mathcal{T}}H_b. When embedding fails, let H_a,H_b agree on all probes but differ on some \tau\notin\iota(\mathcal{T}). Then H_a\sim_{\mathcal{X}}H_b while H_a\not\sim_{\mathcal{T}}H_b.
+
+(b) Assume embedding. Suppose H_a\sim_{\mathcal{X}}H_b. Then for all x\in\mathcal{X}_{\mathrm{probe}}, \mathcal{E}_{H_a}(x)=\mathcal{E}_{H_b}(x). In particular, for all \tau\in\mathcal{T}:
+
+V(\tau,H_a)=\mathcal{E}_{H_a}(\iota(\tau))=\mathcal{E}_{H_b}(\iota(\tau))=V(\tau,H_b).
+
+Hence H_a\sim_{\mathcal{T}}H_b. Therefore \sim_{\mathcal{X}}\subseteq\sim_{\mathcal{T}}.
+
+(c) If a distinguishing probe x^* exists with H_a\sim_{\mathcal{T}}H_b and \mathcal{E}_{H_a}(x^*)\neq\mathcal{E}_{H_b}(x^*), then H_a\not\sim_{\mathcal{X}}H_b while H_a\sim_{\mathcal{T}}H_b. Hence \sim_{\mathcal{T}}\not\subseteq\sim_{\mathcal{X}}. \square
+
+Corollary A.3. Under embedding,
+
+\sim_{\mathcal{X}} \subsetneq \sim_{\mathcal{T}}
+\iff
+\exists x\in\mathcal{X}_{\mathrm{probe}},\ \exists H_a,H_b\in\mathcal{R}:\
+H_a\sim_{\mathcal{T}}H_b \ \wedge\ \mathcal{E}_{H_a}(x)\neq\mathcal{E}_{H_b}(x).
+
+A.3 Accuracy factorization
+
+Proposition A.4 (Proposition 2.1). H_a\sim_{\mathcal{T}}H_b \Rightarrow Q(H_a)=Q(H_b), and the converse fails in general.
+
+Proof. If H_a\sim_{\mathcal{T}}H_b, then V(\tau,H_a)=V(\tau,H_b) for all \tau\in\mathcal{T}, so the indicators coincide pointwise. Taking expectations:
+
+Q(H_a)=\mathbb{E}_{\tau\sim\mathcal{T}}\big[\mathbf{1}[V(\tau,H_a)=1]\big]
+=\mathbb{E}_{\tau\sim\mathcal{T}}\big[\mathbf{1}[V(\tau,H_b)=1]\big]=Q(H_b).
+
+The converse fails because Q is a many-to-one expectation. \square
+
+Corollary A.5. Q factors through \mathcal{R}/\!\sim_{\mathcal{T}}, but \overline{Q}:\mathcal{R}/\!\sim_{\mathcal{T}}\to[0,1] is not injective.
+
+A.4 Monotonicity and convergence of surviving sets
+
+Lemma A.6. If X_1\subseteq X_2\subseteq\mathcal{X}_{\mathrm{probe}}, then \mathcal{H}(X_2;H)\subseteq\mathcal{H}(X_1;H).
+
+Proof. If H'\in\mathcal{H}(X_2;H), then \mathcal{E}_{H'}(x)=\mathcal{E}_H(x) for all x\in X_2. Since X_1\subseteq X_2, this holds for all x\in X_1. Hence H'\in\mathcal{H}(X_1;H). \square
+
+Lemma A.7. \mathcal{H}(\mathcal{X}_{\mathrm{probe}};H)=[H]_{\sim_{\mathcal{X}}}.
+
+Proof. By definition, [H]_{\sim_{\mathcal{X}}}=\{H':\forall x\in\mathcal{X}_{\mathrm{probe}},\mathcal{E}_{H'}(x)=\mathcal{E}_H(x)\}=\mathcal{H}(\mathcal{X}_{\mathrm{probe}};H). \square
+
+A.5 Identification hierarchy
+
+Proposition A.8. Exact identification \Rightarrow \sim_{\mathcal{X}}-identification \Rightarrow \sim_{\mathcal{T}}-identification. The hierarchy is strict precisely when \sim_{\mathcal{X}}\subsetneq\sim_{\mathcal{T}}.
+
+Proof. If \mathcal{H}(X;H)\subseteq\{H\}\subseteq[H]_{\sim_{\mathcal{X}}}, then exact implies \sim_{\mathcal{X}}-identification. If \mathcal{H}(X;H)\subseteq[H]_{\sim_{\mathcal{X}}}\subseteq[H]_{\sim_{\mathcal{T}}}, then \sim_{\mathcal{X}}-identification implies \sim_{\mathcal{T}}-identification. Strictness follows from Theorem A.2(c): if \sim_{\mathcal{X}}\subsetneq\sim_{\mathcal{T}}, then [H_a]_{\sim_{\mathcal{X}}}\subsetneq[H_a]_{\sim_{\mathcal{T}}}. \square
+
+A.6 Identification gap
+
+Proposition A.9 (Proposition 2.2). Under embedding, \Gamma\ge 0. Moreover, \Gamma>0 iff a distinguishing probe exists.
+
+Proof. By Theorem A.2(b), \sim_{\mathcal{X}}\subseteq\sim_{\mathcal{T}}, so every \sim_{\mathcal{X}}-class is contained in a \sim_{\mathcal{T}}-class. Therefore |\mathcal{R}/\!\sim_{\mathcal{X}}|\ge|\mathcal{R}/\!\sim_{\mathcal{T}}|, hence \Gamma\ge 0. If \Gamma>0, then \sim_{\mathcal{X}}\subsetneq\sim_{\mathcal{T}}, so by Corollary A.3 a distinguishing probe exists. Conversely, if a distinguishing probe exists, \sim_{\mathcal{X}}\subsetneq\sim_{\mathcal{T}}, so at least one \sim_{\mathcal{T}}-class splits into multiple \sim_{\mathcal{X}}-classes, hence \Gamma>0. \square
+
+A.7 Impossibility theorem
+
+Theorem A.10 (Theorem 4.1). If there exists a distinguishing probe x^*\in\mathcal{X}_{\mathrm{probe}}\setminus\mathcal{X}_{\mathrm{eval}}, then there exist H_a,H_b such that H_a\sim_{\mathcal{T}}H_b but H_a\not\sim_{\mathcal{X}}H_b. No function of Q(H) distinguishes them.
+
+Proof. By Corollary A.3, the distinguishing probe guarantees H_a\sim_{\mathcal{T}}H_b and H_a\not\sim_{\mathcal{X}}H_b. By Proposition A.4, Q(H_a)=Q(H_b). Since Q takes equal values, no function of Q can separate them. \square
+
+Corollary A.11. If \mathcal{X}_{\mathrm{eval}}\subsetneq\mathcal{X}_{\mathrm{probe}}, evaluation alone cannot achieve exact or \sim_{\mathcal{X}}-identification for all H\in\mathcal{R}. At best, evaluation achieves \sim_{\mathcal{T}}-identification.
+
+A.8 Belief maintenance
+
+Lemma A.12. C_{t+1}\subseteq C_t for all t.
+
+Proof. If H\in C_{t+1}, then H is consistent with (x_{\le t+1},y_{\le t+1}), hence consistent with the prefix (x_{\le t},y_{\le t}). So H\in C_t. \square
+
+Proposition A.13. Degradation events B_{t+1}\not\subseteq B_t and B_t\not\subseteq C_t are observable from the rule-report stream iff \mathcal{R} is known and \mathcal{E}_H is computable.
+
+Proof. Detecting B_{t+1}\not\subseteq B_t requires membership testing in \mathcal{R}, possible if \mathcal{R} is known and membership decidable. Detecting B_t\not\subseteq C_t requires evaluating \mathcal{E}_H on the history, possible if \mathcal{R} is known and \mathcal{E}_H computable. Conversely, if \mathcal{R} is unknown or \mathcal{E}_H not computable, neither condition is decidable from the report stream alone. \square
+
+---
+
+Appendix B: Mapping to Santos-Grueiro (arXiv:2602.05656)
+
+B.1 Normative Indistinguishability
+
+Santos-Grueiro formalizes the Alignment Verifiability Problem and introduces Normative Indistinguishability, which arises when distinct latent alignment hypotheses induce identical distributions over evaluator-accessible observations. The main theoretical contribution is a conditional impossibility result: under finite behavioral evaluation and evaluation-aware policies, observed compliance does not uniquely identify latent alignment, but only membership in an equivalence class of conditionally compliant policies, under explicit assumptions on policy expressivity and observability.
+
+B.2 Structural correspondence
+
+Santos-Grueiro Dissertation
+Latent alignment hypothesis \theta\in\Theta Rule system H\in\mathcal{R}
+Evaluation regime E Task distribution \mathcal{T}
+Observable histories \mathcal{H}_E Task outcomes V(\tau,H)
+Policy \pi_\theta(a\mid h,z) Environment response \mathcal{E}_H(x)
+Behavioral equivalence P_\theta(D)=P_{\theta'}(D) Task equivalence \sim_{\mathcal{T}}
+Indistinguishability set \mathcal{I}(E,\theta^*) [H]_{\sim_{\mathcal{T}}}
+Evaluation awareness signal Z(E) Distinguishing probe x^*
+Normative Indistinguishability Identification gap \Gamma
+
+The dissertation’s task equivalence is the black-box instance of normative indistinguishability: two hypotheses are task-equivalent when they induce identical distributions over task outcomes. Probe equivalence is the interactive refinement. The identification gap \Gamma measures the failure of behavioral evaluation to collapse the indistinguishability set.
+
+B.3 Constructive existence witness
+
+Santos-Grueiro provides a constructive existence proof using an instruction-tuned LLM (Llama-3.2-3B), demonstrating a conditional policy that is perfectly compliant under explicit evaluation signals yet exhibits degraded identifiability when the same evaluation intent is conveyed implicitly. This is the empirical corroboration of the sandbagging/evaluation-awareness mechanism that motivates the dissertation’s B_t vs. C_t distinction.
+
+B.4 What the dissertation does not claim
+
+The impossibility mechanism is not new in the broader alignment-verifiability literature. The contribution is the specialization to closed, executable rule-perturbation domains with verifiable probes, where the equivalence classes are computable exactly and identification cost is measurable. Behavioral benchmarks provide necessary but insufficient evidence for latent alignment under evaluation awareness.
+
+---
+
+Appendix C: ExplorationBench Protocol Details
+
+C.1 Sandbox structure
+
+ExplorationBench contains two sandboxes: AlienCode (31 discovery targets, 70 tasks) and AlienLogic (24 discovery targets, 70 tasks). Each sandbox provides a flawed manual, task-specific environmental feedback, and a dedicated tool-call schema. Systems use these resources to explore the sandbox, then solve held-out tasks.
+
+C.2 Evaluation results
+
+Ten AI systems were evaluated. The strongest systems can acquire and apply unfamiliar rules, while performance varies substantially across trajectories and continued exploration can stall or reverse earlier gains. After four rounds the best AlienCode trajectory reaches 87.6%, whereas the same number of model turns without environment feedback leaves systems at 0.5–11.0%.
+
+C.3 Stage-specific failure probabilities
+
+The staged protocol is:
+
+\text{Rule report} \to \text{Isolated application} \to \text{Composition} \to \text{Held-out task}.
+
+The conditional failure probabilities are:
+
+p_{\mathrm{stage}} = \Pr\big[ F \mid \text{stage reached},\ K_t \text{ stated} \big].
+
+Operational specifications. K_t is the system’s reported rule set at round t. “Stated” means explicitly emitted in the rule-report channel. “Stage reached” is determined by protocol gating: a system reaches the application stage iff it has emitted a non-empty rule report. Ambiguous failures are attributed to the earliest stage at which the failure could have been detected. The exact gating predicates must be documented for replication.
+
+C.4 Degradation events
+
+Belief degradation is represented as B_{t+1}\not\subseteq B_t (belief overwriting) or B_t\not\subseteq C_t (evidence neglect). Detection requires known \mathcal{R} and computable \mathcal{E}_H (Proposition A.13).
+
+---
+
+Appendix D: Literature Anchors
+
+D.1 Observational equivalence
+
+Two structures are observationally equivalent if they define the same probability distribution of the variables. The concept was introduced in Haavelmo (1943, 1944) and developed in Koopmans, Rubin and Leipnik (1950) and Marschak (1953). Classical definitions require a given structure to produce a unique conditional distribution of endogenous variables. The task equivalence \sim_{\mathcal{T}} is the black-box-model instance of this concept.
+
+D.2 Version spaces
+
+Mitchell (1982) introduced the version space as the set of all concept definitions consistent with the data seen so far. The surviving hypothesis set \mathcal{H}(X;H) is exactly a version space under probe-based membership queries.
+
+D.3 Disagreement-based active learning
+
+Hanneke (2007b) analyzed the A^2 algorithm, providing a general query complexity bound expressed in terms of the disagreement coefficient:
+
+\theta_P(\beta+\epsilon)\coloneqq \sup_{r>\beta+\epsilon}\frac{P_X(\mathrm{DIS}(B_{P_\lambda}(h^\star,r)))}{r}\vee 1,
+
+where B_{P_\lambda}(h^\star,r)=\{h\in\mathbb{C}:P_X(x:h(x)\neq h^\star(x))\leq r\} is the h^\star-centered r-ball under L_1(P_X). The intuitive interpretation is that as the algorithm progresses, the surviving concept set V approaches h^\star up to distance O(\beta+\epsilon), so the probability of querying decreases. Hanneke proves the A^2 algorithm succeeds after
+
+\tilde{O}\left(\theta_P(\beta+\epsilon)^2 d\left(\frac{\beta^2}{\epsilon^2}+1\right)\right)
+
+queries, matching the lower bound of Kääriäinen (2006) up to logs whenever \theta_P(\beta+\epsilon)=\hat{O}(1). The identification cost C^\star_{\mathrm{id}} is structurally an A^2-style query-complexity bound. The difference is that classical bounds assume a known hypothesis class and i.i.d. sampling; ExplorationBench is deterministic and the probe distribution is endogenous to the system’s policy.
+
+D.4 Exact learning with a minimally adequate teacher
+
+Angluin (1987) introduced the minimally adequate teacher (MAT), which answers membership queries (w\in L?) and equivalence queries (L=L(A)?), returning a counterexample when the conjecture is wrong. The L^\star algorithm learns any regular set from any MAT in time polynomial in the number of states of the minimum DFA and the maximum counterexample length. ExplorationBench provides an executable verifier that returns pass/fail outcomes, but not equivalence queries in the L^\star sense. The hardness of identification is therefore information-theoretic under the restricted probe set, not merely algorithmic.
+
+D.5 Model extraction
+
+Recent model extraction attacks achieve query reductions by factors of 10–600× compared to existing methods, with some attacks requiring as few as 4.3× the original dataset size. The identification cost C^\star_{\mathrm{id}} is a query-complexity bound in this sense, applied to recovering a rule system rather than a neural network.
+
+D.6 Sandbagging and evaluation awareness
+
+Covert sandbagging against chain-of-thought monitoring is possible for open-source models as small as 32B, though not yet reliable. Models bypass monitoring in 16–36% of successful sandbagging attempts when monitor-aware. Models switch to more covert sandbagging policies when monitor-aware, without hints or examples. Black-box detection approaches were defeated by models that convincingly imitated a weaker model’s response distribution; linear probes were defeated by red-team models that modified internal representations to fool the probe while still sandbagging on outputs. The dissertation’s Proposition A.13 scopes observability to known, enumerable \mathcal{R}. The framework does not yield a practical sandbagging detector outside synthetic sandboxes.
+
+D.7 AGM belief revision and truth maintenance
+
+The AGM framework (Alchourrón, Gärdenfors, Makinson, 1985) assumes the belief state is a logically closed set of sentences. Truth maintenance systems (Doyle, 1979) provide the computational counterpart, tracking justifications for each belief. These provide the formal tools for approximating C_t when \mathcal{R} is unknown.
+
+---
+
+Appendix E: Default Metric and Tolerance
+
+E.1 Behavioral disagreement rate
+
+The default metric on \mathcal{R}/\!\sim_{\mathcal{T}} is:
+
+d(H_a,H_b) = \Pr_{\tau\sim\mathcal{T}}\big[ V(\tau,H_a)\neq V(\tau,H_b) \big].
+
+This is computable given the task distribution and verifier, and directly connects to the ExplorationBench measurement apparatus. Results are reported relative to this default unless otherwise stated.
+
+E.2 Identification cost
+
+C^{\star}_{\mathrm{id}}(H;\epsilon)
+=
+\min_{X\subseteq\mathcal{X}_{\mathrm{probe}}}
+\Big\{ C(X) :\ \operatorname{diam}\big( \mathcal{H}(X;H) \big)\leq\epsilon \Big\},
+
+with C^{\star}_{\mathrm{id}}=\infty if no probe set achieves diameter \le\epsilon. C(X) is a monotone functional of tool calls, probe units, and exploration tokens.
+
+E.3 Identifiability profile
+
+\iota(\mathcal{T},\mathcal{X}_{\mathrm{probe}})
+=
+\Big(
+|\mathcal{R}/\!\sim_{\mathcal{T}}|,\
+|\mathcal{R}/\!\sim_{\mathcal{X}}|,\
+\sup_H C^{\star}_{\mathrm{id}}(H;\epsilon)
+\Big).
+
+The first coordinate is behavioral resolution. The second is interactive resolution. The third is worst-case cost of collapsing the gap. Every claim about C^{\star}_{\mathrm{id}} or \iota is scoped to closed rule-perturbation domains where \mathcal{R} is enumerable and known.
+
+---
+
+Appendix F: Hypotheses and Falsifiers
+
+ID Statement Falsifier
+H1 On the sandbox, \sim_{\mathcal{X}} \subsetneq \sim_{\mathcal{T}} \sim_{\mathcal{X}} = \sim_{\mathcal{T}}
+H2 C^{\star}_{\mathrm{id}} varies by more than an order of magnitude across \mathcal{T} Identification cost uniform across tasks
+H3 Stage-specific failure probabilities are non-degenerate One stage absorbs all residual error
+H4 \Delta Q(p) is non-monotone in at least one trajectory per system \Delta Q monotone within all trajectories
+H5 Pareto dominance is not stable across sandboxes Dominance transfers with high agreement
+H6 B_t \not\subseteq C_t occurs in a non-trivial fraction of trajectories Maintained beliefs remain consistent throughout
+
+H6 requires known \mathcal{R} and computable \mathcal{E}_H; the experimental protocol must record exactly how membership in C_t is decided.
+
+---
+
+Appendix G: Limitations
+
+L1 (C1 inheritance). All gap derivations are conditional on the fixed extraction lens L_0. Recurrence across papers is paper-level, not lens-level.
+
+L2 (Determinism). The sandboxes are deterministic. Real scientific exploration is not.
+
+L3 (Horizon). Four rounds, \le 48 tool calls. Short relative to scientific practice.
+
+L4 (Construct validity). Two sandboxes cannot establish exploration as a single latent construct. The reported Spearman 0.35 is evidence against.
+
+L5 (Trajectory sampling). n=3 in the source benchmark is insufficient for P_i(M). This dissertation expands to n\ge 10. The source paper provides variance data usable for a power calculation.
+
+L6 (No human baseline). Absolute competence remains uncalibrated.
+
+L7 (Identification cost metric). C^{\star}_{\mathrm{id}} depends on the declared metric on \mathcal{R} and on \epsilon. Both are choices, and both must be reported alongside any result.
+
+L8 (Enumerability of \mathcal{R}). C^{\star}_{\mathrm{id}} presupposes an enumerable hypothesis space known to the experimenter. This is tractable in closed rule-perturbation domains such as AlienCode and AlienLogic, but not as a general property of identifiability under interactive evaluation. Every claim about C^{\star}_{\mathrm{id}} or \iota is scoped to closed rule-perturbation domains. Outside those domains, the quantities are not operational. This is the most important limitation and conditions all quantitative claims.
+
+---
+
+Appendix H: What the Proposal Does Not Claim
+
+H.1 The impossibility mechanism is not new in the broader alignment-verifiability literature; it is a specialization of the Santos-Grueiro result to closed, executable rule-perturbation domains.
+
+H.2 C^{\star}_{\mathrm{id}} is not a general, computable property of interactive evaluation of LLMs; it is scoped to closed domains with enumerable \mathcal{R}.
+
+H.3 The framework does not yield practical detectors for sandbagging or evaluation awareness outside synthetic sandboxes.
+
+H.4 The dissertation’s negative result criticizes an inference, not a measurement. A benchmark may legitimately report behavioral competence without claiming rule identification.
+
+---
+
+Appendix I: Procedural Status
+
+This proposal does not modify frozen Protocol v1.1. It is a corrected candidate thesis derived from the verified gaps EB-01, EB-02, EB-03, EB-04, EB-06, EB-07, EB-09, EB-10.
+
+The thesis remains candidate pending the blind Paper B phase. Recurrence evidence is lens-conditional. Paper-level independence I_P for a second seed is not yet established. The corrected mathematics supersedes the prior draft’s invalid propositions; the research direction survives.
+
+The single strongest contribution is:
+
+\boxed{\text{Exploration can identify distinctions that evaluation cannot.}}
+
+The proof is Theorem A.10 and Corollary A.3. The testbed is ExplorationBench. The diagnostic is the identifiability profile \iota(\mathcal{T},\mathcal{X}_{\mathrm{probe}}). The formal lineage is econometric identification, version-space learning, active learning, exact learning, and model extraction. The contribution is the unification and the concrete, enumerable testbed.
+
+
+Bibliography
+
+A. Core Empirical Testbed
+
+Zhang, M., Xiang, Z., Gao, P., Shen, Y., Wang, Y., et al. (2026). ExplorationBench: Measuring AI Systems’ Exploration in Verifiable Alien Worlds. arXiv preprint arXiv:2609.30199. 
+
+---
+
+B. Formal Foundations: Identification and Observational Equivalence
+
+Haavelmo, T. (1943). The Statistical Implications of a System of Simultaneous Equations. Econometrica, 11(1), 1–12. 
+
+Haavelmo, T. (1944). The Probability Approach in Econometrics. Econometrica, 12(Supplement), iii–115. 
+
+Koopmans, T. C., Rubin, H., & Leipnik, R. B. (1950). Measuring the Equation Systems of Dynamic Economics. In T. C. Koopmans (Ed.), Statistical Inference in Dynamic Economic Models (Cowles Commission Monograph No. 10, pp. 53–237). Wiley. 
+
+Marschak, J. (1953). Economic Measurements for Policy and Prediction. In W. C. Hood & T. C. Koopmans (Eds.), Studies in Econometric Method (Cowles Commission Monograph No. 14, pp. 1–26). Wiley.
+
+---
+
+C. Learning Theory: Version Spaces, Active Learning, and Exact Learning
+
+Mitchell, T. M. (1982). Generalization as Search. Artificial Intelligence, 18(2), 203–226. 
+
+Cohn, D., Atlas, L., & Ladner, R. (1994). Improving Generalization with Active Learning. Machine Learning, 15(2), 201–221.
+
+Balcan, M.-F., Beygelzimer, A., & Langford, J. (2006). Agnostic Active Learning. In Proceedings of the 23rd International Conference on Machine Learning (ICML) (pp. 65–72). 
+
+Balcan, M.-F., Beygelzimer, A., & Langford, J. (2009). Agnostic Active Learning. Journal of Computer and System Sciences, 75(1), 78–89. 
+
+Hanneke, S. (2007). A Bound on the Label Complexity of Agnostic Active Learning. In Proceedings of the 24th International Conference on Machine Learning (ICML) (pp. 353–360). 
+
+Hanneke, S. (2014). Theory of Disagreement-Based Active Learning. Foundations and Trends in Machine Learning, 7(2–3), 131–309.
+
+Kääriäinen, M. (2006). Active Learning in the Non-realizable Case. In Proceedings of the 17th International Conference on Algorithmic Learning Theory (ALT) (pp. 63–77). 
+
+Angluin, D. (1987). Learning Regular Sets from Queries and Counterexamples. Information and Computation, 75(2), 87–106. 
+
+---
+
+D. Model Extraction and Query Complexity
+
+Biton Dor, M., & Mirsky, Y. (2024). Efficient Model Extraction via Boundary Sampling. In Proceedings of the 2024 Workshop on Artificial Intelligence and Security (AISec ’24). ACM. 
+
+Carlini, N., Jagielski, M., & Mironov, I. (2020). Cryptanalytic Extraction of Neural Network Models. In Advances in Neural Information Processing Systems (NeurIPS).
+
+Jagielski, M., Carlini, N., Berthelot, D., Kurakin, A., & Papernot, N. (2020). High Accuracy and High Fidelity Extraction of Neural Networks. In Proceedings of the 29th USENIX Security Symposium.
+
+---
+
+E. Alignment Verifiability and Impossibility Results
+
+Santos-Grueiro, I. (2026). Alignment Verifiability in Large Language Models: Normative Indistinguishability under Behavioral Evaluation. arXiv preprint arXiv:2602.05656. 
+
+---
+
+F. Sandbagging, Evaluation Awareness, and Belief Revision
+
+Li, C., Phuong, M., & Siegel, N. Y. (2025). LLMs Can Covertly Sandbag on Capability Evaluations Against Chain-of-Thought Monitoring. arXiv preprint arXiv:2508.00943. Accepted to IJCNLP-AACL 2025 (Main Conference). 
+
+Meinke, A., et al. (2025). Frontier Models are Capable of In-context Scheming. arXiv preprint arXiv:2412.04984. 
+
+Taylor, J., Black, S., Bowen, D., Read, T., Golechha, S., Zelenka-Martin, A., Makins, O., Kissane, C., Ayonrinde, K., Merizian, J., Marks, S., Cundy, C., & Bloom, J. (2025). Auditing Games for Sandbagging. arXiv preprint arXiv:2512.07810. 
+
+Alchourrón, C. E., Gärdenfors, P., & Makinson, D. (1985). On the Logic of Theory Change: Partial Meet Contraction and Revision Functions. The Journal of Symbolic Logic, 50(2), 510–530. 
+
+Doyle, J. (1979). A Truth Maintenance System. Artificial Intelligence, 12(3), 231–272. 
+
+---
+
+G. Additional Sources Consulted
+
+Mitchell, T. M. (1978). Version Spaces: An Approach to Concept Learning (Doctoral dissertation). Stanford University. 
+
+Hanneke, S. (2009). Theoretical Foundations of Active Learning (Doctoral dissertation). Carnegie Mellon University.
+
+Haussler, D. (1987). Bias, Version Spaces and Valiant’s Learning Framework. In Proceedings of the 4th International Workshop on Machine Learning (pp. 324–336). 
