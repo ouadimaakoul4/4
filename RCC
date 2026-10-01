@@ -1,0 +1,2218 @@
+A Theory of Workload-Aware Robustness for Direct-to-Chip Cooling of AI Computing Systems
+
+Revised Theoretical PhD Proposal (Version 2)
+
+Epistemic status note. This document distinguishes four levels of claim: (i) working hypotheses, which are modeling choices subject to validation; (ii) conditional propositions, provable under explicit hypotheses; (iii) expected results, to be produced by the experimental protocol; (iv) conjectures, which structure the research but are not yet demonstrated. No physical experiment, no bench test, and no code training has been performed at this stage. This is a theoretical and methodological framework, explicitly falsifiable. The protocol described in Chapter 10 has not been executed.
+
+---
+
+Chapter 1. Problem Formulation
+
+1.1 General setting
+
+Consider a direct-to-chip (D2C) cooling system for an AI computing cluster. Let:
+
+· $x_t \in \mathbb{R}^n$ denote the thermo-hydraulic state at time $t$;
+· $u_t \in \mathbb{R}^m$ denote the control vector (flow rates, inlet temperatures, valve positions, pump speeds, CDU and tower setpoints);
+· $w_t \in \mathbb{R}^N$ denote the heat loads dissipated by the $N$ computing zones (GPU/HBM), treated as an exogenous disturbance;
+· $y_t \in \mathbb{R}^p$ denote the measured outputs.
+
+The dynamics are assumed to take the form:
+
+x_{t+1} = f(x_t, u_t, w_t; \theta), \qquad y_t = h(x_t) + v_t
+
+where $\theta \in \Theta \subset \mathbb{R}^q$ is the vector of physical parameters and $v_t$ is a stationary, zero-mean measurement noise with covariance $R_y$.
+
+1.2 Doctoral objective
+
+We seek to characterize the set of experimental regimes:
+
+z = (\eta_W, \mathcal{U}_\theta, H, \Lambda, \rho, Y_{\mathrm{sensors}})
+
+where:
+
+· $\eta_W$ is the relative workload forecasting error;
+· $\mathcal{U}_\theta$ is the parametric uncertainty set (not a scalar reduction $\eta_\theta$);
+· $H$ is the prediction horizon;
+· $\Lambda = \tau_{\mathrm{workload}} / \tau_{\mathrm{thermal,dominant}}$ is the time-scale ratio, computed from identified values rather than imposed a priori;
+· $\rho$ is the topological complexity of the system;
+· $Y_{\mathrm{sensors}}$ is the sensor configuration, treated as a discrete experimental decision variable.
+
+Modeling decision (retained from Version 1). We replace the scalar $\eta_\theta$ by the set $\mathcal{U}_\theta$, because parametric uncertainty is naturally a subset of $\mathbb{R}^q$, and its reduction to a scalar norm masks the anisotropy of uncertainty directions. This distinction is essential for Chapter 8.
+
+Structural decision (new in Version 2). Dimensional analysis of the regime space reveals that a full grid over six dimensions is statistically under-powered: with a Latin Hypercube of $N_s = 500$–$1000$ points, the average inter-point spacing in $\mathbb{R}^6$ scales as $N_s^{-1/6} \approx 0.35$–$0.42$ in normalized coordinates, which is too coarse to estimate the boundary $\Gamma_3$ with useful precision. We therefore adopt a 2+2 stratified design:
+
+· Primary axes (2): workload uncertainty width $\eta_W$ and the geometry of $\mathcal{U}_\theta$ (parameterized by the eigen-spectrum of $\Sigma_\theta$);
+· Secondary slices (2): prediction horizon $H$ and sensor configuration $Y_{\mathrm{sensors}}$;
+· Covariate (measured, not controlled): the time-scale ratio $\Lambda$;
+· Blocking factor (≤ 2 levels): topological complexity $\rho$.
+
+This design is supported by empirical evidence from large-scale cooling plant studies: operational strategy dominates design topology by two orders of magnitude in energy savings (35.48% versus at most 0.18% for topology change). The implication is that $\rho$ should be blocked, not explored.
+
+1.3 Central question (revised)
+
+The Version 1 question was:
+
+In which regions $z$ does the workload-aware robust MPC remain non-dominated and operationally acceptable under the identified uncertainty?
+
+Version 2 elevates a second, co-primary question that was implicit in Version 1:
+
+\boxed{\text{When must uncertainty be covered before the decision (explicit robustness), and when can it be estimated during the decision (online adaptation)?}}
+
+This co-primary status is motivated by the appearance of adaptive robust MPC (ARMPC) as a genuine methodological competitor. Published ARMPC results report 88.4% compensation of model error and 5.58% cooling energy reduction versus baseline, while achieving 47× speedup relative to an MIQP benchmark. A thesis that treats such methods as a secondary benchmark would understate the scientific question.
+
+1.4 Epistemic status of the thesis
+
+The thesis does not seek to prove that $C_3$ (robust MPC) is "better" than $C_2$ (deterministic MPC). It seeks to:
+
+1. Construct the robust feasibility set $\mathcal{F}$;
+2. Construct the performance set $\mathcal{R}_3$ where $C_3$ satisfies a performance criterion;
+3. Characterize the boundary $\Gamma_3 = \partial \mathcal{R}_3$;
+4. Analyze the stability of $\Gamma_3$ under $\mathcal{U}_\theta$;
+5. Resolve the co-primary question of explicit robustness versus online adaptation;
+6. Establish a falsifiable protocol that can conclude positively, negatively, or conditionally.
+
+A negative conclusion (formal robustness is not cost-effective for D2C in certain regimes) is a valid and publishable scientific result.
+
+---
+
+Chapter 2. Multi-Scale Thermo-Hydraulic Modeling
+
+2.1 Structural hypotheses
+
+Hypothesis 2.1 (Nodal structure). The D2C system is represented by a network of $N$ thermal nodes coupled by localized resistances and capacitances.
+
+Hypothesis 2.2 (Piecewise local linearity). Around an operating point $(x^\star, u^\star, w^\star)$, the dynamics admit a piecewise linear approximation. This hypothesis is acceptable for small amplitudes of $\Delta w_t$, but its validity bounds must be established numerically (see Chapter 10). Linear Parameter-Varying (LPV) models are retained as a credible alternative (Section 2.7).
+
+Hypothesis 2.3 (Transport delays). Fluid transport delays in the loop are represented by pure delays $e^{-\tau s}$, or by a cascade of first-order systems when the distributed structure is significant.
+
+Hypothesis 2.4 (Empirical scale separation). The relevant time constants will be estimated experimentally and ranked after identification:
+
+\hat\tau_1 \leq \hat\tau_2 \leq \cdots \leq \hat\tau_r
+
+The ratio $\Lambda$ will be computed from these identified values, not imposed a priori.
+
+Justification for the revision of Hypothesis 2.4. Recent literature on liquid-cooled systems reports widely different delays depending on the actuator: approximately 38–41 s for a valve, 44–73 s for a pump, and 684–826 s for tower temperature control. These values support the existence of multiple scales, but validate neither a universal hierarchy nor a factor of 10 between each stage. Scale separation must be measured, not postulated.
+
+2.2 Multi-zone RC model
+
+For each zone $i \in \{1, \dots, N\}$, we define three thermal nodes: die ($T_{d,i}$), coldplate ($T_{cp,i}$), and local coolant ($T_{c,i}$). The dynamics are:
+
+C_{d,i} \dot{T}_{d,i} = P_i(t) - \frac{T_{d,i} - T_{cp,i}}{R_{d,i}}
+
+C_{cp,i} \dot{T}_{cp,i} = \frac{T_{d,i} - T_{cp,i}}{R_{d,i}} - \frac{T_{cp,i} - T_{c,i}}{R_{cp,i}}
+
+C_{c,i} \dot{T}_{c,i} = \frac{T_{cp,i} - T_{c,i}}{R_{cp,i}} - \dot{m}_i c_p (T_{c,i} - T_{\mathrm{in},i})
+
+The hydraulic mixing at the manifold is described by:
+
+T_{\mathrm{loop,out}} = \sum_{i=1}^N \frac{\dot{m}_i}{\dot{m}_{\mathrm{total}}} T_{c,i}
+
+then, with transport delay:
+
+T_{\mathrm{CDU,in}}(t) = T_{\mathrm{loop,out}}(t - \tau_{\mathrm{transport}})
+
+Secondary loop dynamics:
+
+C_{\mathrm{loop}} \dot{T}_{\mathrm{loop}} = Q_{\mathrm{IT}} - Q_{\mathrm{HX}}, \qquad Q_{\mathrm{HX}} = UA_{\mathrm{HX}} (T_{\mathrm{loop}} - T_{\mathrm{sec}})
+
+2.3 Heat rejection and the water-energy-carbon coupling (extended)
+
+Critical extension in Version 2. In Version 1, the facility-side heat rejection was modeled only as an algebraic term $Q_{\mathrm{rej}} = f(T_{\mathrm{amb}}, T_{\mathrm{supply}}, \dot{m}_{\mathrm{air}})$. This is insufficient, because the metric vector $\mathbf{J}$ includes water consumption $W_{\mathrm{net}}$ and carbon $C_{\mathrm{carbon}}$, yet the model as written cannot predict them. We therefore extend the facility model to expose the control degree of freedom that drives the water-energy tradeoff: the chilled-water supply temperature setpoint $T_{\mathrm{supply}}$.
+
+The heat rejection subsystem is modeled as:
+
+C_{\mathrm{fac}} \dot{T}_{\mathrm{fac}} = Q_{\mathrm{HX}} - Q_{\mathrm{rej}}, \qquad Q_{\mathrm{rej}} = \dot{m}_{\mathrm{air}} c_{p,\mathrm{air}} (T_{\mathrm{fac}} - T_{\mathrm{amb}}) + Q_{\mathrm{evap}}
+
+where $Q_{\mathrm{evap}}$ is the evaporative heat rejection, active only when the cooling mode is evaporative. The water consumption rate is:
+
+\dot{W}_{\mathrm{net}} = \begin{cases} \alpha_{\mathrm{evap}} \dfrac{Q_{\mathrm{evap}}}{L_v}, & \text{evaporative mode} \\ 0, & \text{dry mode} \end{cases}
+
+where $L_v$ is the latent heat of vaporization and $\alpha_{\mathrm{evap}}$ accounts for blowdown and drift losses.
+
+Empirical anchor (expected result, not yet measured). Reported field data indicate that raising the chilled-water supply temperature from 32°C to 45°C reduces water usage effectiveness by 66% in Dallas and 82% in Paris, with climate-dependent sensitivity. This establishes $T_{\mathrm{supply}}$ as a first-class control variable of the MPC, not a fixed parameter. The trade-off between $E_{\mathrm{cool}}$ and $W_{\mathrm{net}}$ is therefore exposed by construction.
+
+Upstream water-carbon coupling (conjecture). Recent multi-scale analysis shows that optimizing for zero on-site water via air chillers "inadvertently shifts the resource burden upstream to the regional electrical grid." We therefore introduce a two-tier carbon metric:
+
+C_{\mathrm{carbon}} = C_{\mathrm{on-site}} + \lambda_{\mathrm{grid}} E_{\mathrm{total}} + \lambda_{\mathrm{water}} W_{\mathrm{net}}
+
+where $\lambda_{\mathrm{grid}}$ is the grid carbon intensity (kgCO$_2$/kWh) and $\lambda_{\mathrm{water}}$ is the virtual water intensity of grid electricity (L/kWh). The inclusion of $\lambda_{\mathrm{water}}$ is a conjecture: whether it materially affects the Pareto front must be tested.
+
+2.4 Parameter vector
+
+\theta = \left[ R_{d,i}, R_{cp,i}, C_{d,i}, C_{cp,i}, C_{c,i}, UA_{\mathrm{HX}}, \tau_{\mathrm{transport}}, \tau_{\mathrm{sensor}}, \tau_{\mathrm{actuator}}, \alpha_{\mathrm{evap}} \right]_{i=1}^N
+
+The parameter $\alpha_{\mathrm{evap}}$ is new in Version 2.
+
+2.5 Two-node reduced model
+
+Definition 2.1. The minimal two-node model is the system:
+
+C_d \dot{T}_d = P(t) - \frac{T_d - T_c}{R_d}
+
+C_c \dot{T}_c = \frac{T_d - T_c}{R_d} - \frac{T_c - T_{\mathrm{in}}}{R_c}
+
+with $\theta_2 = [R_d, R_c, C_d, C_c]^T$.
+
+Proposition 2.1 (Transfer function). For $T_{\mathrm{in}} = 0$, the transfer function $P \to T_d$ is:
+
+G(s) = \frac{C_c R_d R_c \, s + (R_d + R_c)}{C_d C_c R_d R_c \, s^2 + \left[ C_d(R_d + R_c) + C_c R_d \right] s + 1}
+
+Proof. Apply the Laplace transform to the system of equations and eliminate $T_c$. $\square$
+
+Corollary 2.1 (Parameterization by time constants). Setting:
+
+K = R_d + R_c, \quad \tau_z = \frac{C_c R_d R_c}{R_d + R_c}, \quad \tau_1 \tau_2 = C_d C_c R_d R_c, \quad \tau_1 + \tau_2 = C_d(R_d + R_c) + C_c R_d
+
+yields the normalized form:
+
+G(s) = K \frac{\tau_z s + 1}{(\tau_1 s + 1)(\tau_2 s + 1)}
+
+Key observation. At steady state, $G(0) = R_d + R_c$, so the steady-state gain only reveals the sum $R_d + R_c$. The individual values of $R_d$ and $R_c$ are not separable from the static gain alone.
+
+2.6 Two-node versus three-node model: an explicit distinction
+
+Definition 2.2. The three-node model is defined by the first three equations of Section 2.2, with $\theta_3 = [R_d, R_{cp}, R_c, C_d, C_{cp}, C_c]^T$.
+
+The output sets are:
+
+· two-node model: $Y_2 = \{T_d, T_c\}$;
+· three-node model: $Y_3 = \{T_d, T_{cp}, T_c\}$.
+
+Open question. What is the minimal model order and minimal instrumentation that render $\theta$ identifiable? This is a scientific question to be answered by the identifiability analysis of Chapter 3, not assumed by construction.
+
+2.7 Linear Parameter-Varying models as an alternative (retained and strengthened)
+
+Recent work on liquid-cooled data centers uses LPV state-space models for rack-level cooling control, and adaptive robust MPC uses online Jacobian linearization to convert the problem into a convex QP. Version 1 treated LPV as "future work." Version 2 retains the piecewise linear formulation for the main analysis but commits to an LPV formulation for the C₄ controller (Section 5.6), because C₄ cannot be implemented consistently with a purely piecewise-linear plant model.
+
+The LPV form is:
+
+\dot{x}(t) = A(\rho(t)) x(t) + B(\rho(t)) u(t) + E(\rho(t)) w(t)
+
+where $\rho(t)$ is the scheduling variable (e.g., mass flow rate, inlet temperature). The piecewise linear model of Hypothesis 2.2 is then recovered as a local approximation of this LPV form around $\rho = \rho^\star$.
+
+---
+
+Chapter 3. Identifiability: Trajectory Sensitivities and Fisher Analysis
+
+3.1 Methodological promotion of trajectory sensitivities
+
+Critical revision in Version 2. Version 1 used the Fisher Information Matrix (FIM) as the primary identifiability tool, with trajectory sensitivities as a "complement" (Section 3.7). Recent work on data center thermal model identifiability demonstrates that attempting to estimate unidentifiable parameters leads to sensitivity to initial conditions and unreliable outcomes, and that trajectory sensitivity analysis captures nonlinear effects over long horizons better than a static FIM. We therefore promote trajectory sensitivities to primary status and demote the static FIM to a supporting diagnostic.
+
+3.2 Fisher information and local identifiability
+
+Definition 3.1. Let $\mathcal{I}(\theta) \in \mathbb{R}^{q \times q}$ be the Fisher Information Matrix associated with the identification experiment:
+
+\mathcal{I}(\theta) = \sum_{e} \sum_{k} S_{k,e}^T R_y^{-1} S_{k,e}
+
+where $S_{k,e} = \partial y_k^{(e)} / \partial \theta$ is the sensitivity matrix. More explicitly, the FIM is a function of the full experimental triplet:
+
+\boxed{\mathcal{I} = \mathcal{I}(\theta^\star; u, Y, \Delta t, R_y, H)}
+
+That is, identifiability is not a property of the model alone, but of the triplet (plant, experiment, instrumentation).
+
+Theorem 3.1 (Cramér-Rao). Under regularity conditions, any unbiased estimator $\hat\theta$ satisfies:
+
+\mathrm{Cov}(\hat\theta) \succeq \mathcal{I}(\theta)^{-1}
+
+Corollary 3.1 (Parameter correlation). Setting $\Sigma_\theta = \mathcal{I}(\theta)^{-1}$:
+
+\rho_{ij} = \frac{(\Sigma_\theta)_{ij}}{\sqrt{(\Sigma_\theta)_{ii} (\Sigma_\theta)_{jj}}}
+
+Remark 3.1. The FIM describes information; its inverse describes the local uncertainty of estimators. Any formula using $\mathcal{I}_{ij}$ directly as a correlation is incorrect.
+
+3.3 Trajectory sensitivity analysis (primary method)
+
+Definition 3.2 (Trajectory sensitivity). For the nonlinear state-space model $\dot{x} = f(x, u, w; \theta)$, the trajectory sensitivity with respect to parameter $\theta_i$ is:
+
+\mathcal{S}_i(t) = \frac{\partial x(t)}{\partial \theta_i}, \qquad \dot{\mathcal{S}}_i(t) = \frac{\partial f}{\partial x} \mathcal{S}_i(t) + \frac{\partial f}{\partial \theta_i}
+
+with $\mathcal{S}_i(0) = 0$ for initial-condition-independent parameters.
+
+Definition 3.3 (Empirical trajectory FIM). The trajectory-based information matrix over an identification horizon $[0, T_{\mathrm{id}}]$ with sampling $\{t_k\}$ is:
+
+\mathcal{I}_{\mathrm{traj}} = \sum_k \mathcal{S}_{\mathrm{traj}}(t_k)^T R_y^{-1} \mathcal{S}_{\mathrm{traj}}(t_k)
+
+Proposition 3.1 (Practical identifiability condition, conditional). A parameter $\theta_i$ is practically identifiable from a given experiment if and only if the trajectory sensitivity $\mathcal{S}_i(t)$ rises above the noise floor over the identification horizon:
+
+\exists t \in [0, T_{\mathrm{id}}] : \| \mathcal{S}_i(t) \|_{R_y^{-1}} \geq \kappa_{\mathrm{noise}} \sqrt{q}
+
+where $\kappa_{\mathrm{noise}}$ is a user-specified signal-to-noise threshold.
+
+Status. This is a conditional proposition: it is provable under the stated noise model and horizon, but the threshold $\kappa_{\mathrm{noise}}$ is a modeling choice to be validated numerically.
+
+3.4 Logarithmic reparameterization
+
+Definition 3.4. Let $\phi_i = \ln \theta_i$, hence $\theta_i = e^{\phi_i}$. The logarithmic Jacobian is:
+
+\frac{\partial y}{\partial \phi_i} = \theta_i \frac{\partial y}{\partial \theta_i}
+
+Justification. Parameters have heterogeneous units (K/W, J/K, s). A FIM built directly on $\theta$ is artificially ill-conditioned. The logarithmic reparameterization normalizes scales.
+
+3.5 Conditional proposition on structural degeneracy
+
+Proposition 3.2 (Conditional degeneracy). Consider the two-node model of Definition 2.1, with $y = T_d$ as the sole output. For a given set of nominal parameter values and a given excitation, there exists a parametric direction $v$ along which the logarithmic Jacobian is weakly observable:
+
+\| J v \|^2 \ll \| J \|^2 \cdot \| v \|^2
+
+Numerical illustration (not a general theorem). For a specific nominal point used only as illustration, the logarithmic Jacobian associated with columns $(\ln R_d, \ln R_c, \ln C_d, \ln C_c)$ takes the form:
+
+J = \begin{bmatrix} 0.75 & 0.25 & 0 & 0 \\ 0.25 & 0.75 & 0 & 1 \\ 0.997 & 0.003 & 0.012 & 0.988 \\ 0.003 & 0.997 & 0.988 & 0.012 \end{bmatrix}
+
+For $v = (0, 1, -1, 0)$: $Jv = (0.25, -0.25, -0.009, 0.009)$, so $\|Jv\|^2 \approx 0.125$, while $\|J e_1\|^2 \approx 1.62$. The direction is weakly observable at this operating point.
+
+Critical correction. These numerical values depend entirely on the nominal values of $R_d, R_c, C_d, C_c$. Without specifying these values, the Jacobian is not a general property of the model. The proposition is therefore conditional on the operating point and the excitation, not universal.
+
+Physical interpretation. The product $C_d R_c$ determines $\tau_2$. An increase in $R_c$ compensated by a decrease in $C_d$ leaves $\tau_2$ invariant and barely affects $K$, $\tau_z$, $\tau_1$. Thus $R_d$ and $C_d$ are anti-correlated in estimation at this operating point.
+
+3.6 Band-dependent identifiability
+
+Proposition 3.3 (Band-dependent identifiability). For a given experiment, the information on a parameter $\theta_i$ depends on the frequency band actually excited and observed. Parameters associated with modes outside this band are practically non-identifiable.
+
+Formulation. The band-limited FIM is:
+
+\mathcal{I}_{\mathrm{band}} = \int_{\omega_{\min}}^{\omega_{\max}} S(j\omega)^* R_y^{-1} S(j\omega) \, \Phi_u(\omega) \, d\omega
+
+where $\Phi_u(\omega)$ is the input power spectral density.
+
+Critical correction (new in Version 2). Version 1 used a rectangular band $[\omega_{\min}, \omega_{\max}]$. This is incorrect: the band-limited FIM must be weighted by the actual input spectrum $\Phi_u(\omega)$. Without this weighting, E-optimal designs will over-invest in band edges where the plant is excited but the input spectrum is low.
+
+Corollary 3.1 (Cautious first-order reduction). If the sampling interval satisfies $\Delta t = 10$ s, the Nyquist frequency is $f_N = 0.05$ Hz. Fast dynamics are filtered or aggregated. Whether the reduced model is first-order:
+
+G_{\mathrm{red}}(s) = \frac{R_d + R_c}{1 + \tau_1 s}
+
+is a hypothesis to be validated, not a universal mathematical corollary.
+
+Critical correction (retained). The earlier formulation "the number of identifiable parameters is a monotonically increasing function of $\omega_H$" is not a general theorem. The correct distinction is between the excitation bandwidth and the controller bandwidth; identifiability depends primarily on the former.
+
+3.7 Sensor configuration and observability
+
+Proposition 3.4 (Qualitative improvement by additional sensor). Adding a second output $T_{cp}$ (in the three-node model) increases the information matrix:
+
+\mathcal{I}_{\mathrm{new}} = \mathcal{I}_{\mathrm{old}} + S_{cp}^T R_y^{-1} S_{cp}
+
+Since the second term is positive semi-definite:
+
+\boxed{\lambda_{\min}(\mathcal{I}_{\mathrm{new}}) \geq \lambda_{\min}(\mathcal{I}_{\mathrm{old}})}
+
+Moreover, if $S_{cp} v \neq 0$ for the weakly observable direction $v$, then the information in that direction strictly increases:
+
+v^T \mathcal{I}_{\mathrm{new}} v = v^T \mathcal{I}_{\mathrm{old}} v + \|S_{cp} v\|^2_{R_y^{-1}} > v^T \mathcal{I}_{\mathrm{old}} v
+
+Critical correction. The earlier quantitative factor $1 + \|S_{T_{cp}}v\|^2 / \|S_{T_d}v\|^2$ does not follow from the proof. The Rayleigh quotient in a particular direction $v$ is not automatically the smallest eigenvalue. Only the qualitative bound is provable.
+
+3.8 Optimal experimental design for sensor placement (new in Version 2)
+
+Critical addition. Version 1 treated $Y_{\mathrm{sensors}}$ as a discrete choice among $Y_1, Y_2, Y_3$. Version 2 promotes it to an optimal experimental design (OED) problem: the sensor configuration is designed to maximize the identifiable region $\mathcal{R}_3$, not merely selected from a menu.
+
+Definition 3.5 (A-optimal sensor placement). Given a candidate set of sensor locations $\mathcal{L}$ and a budget $b$, the A-optimal configuration is:
+
+Y^\star = \arg\min_{Y \subseteq \mathcal{L}, |Y| \leq b} \mathrm{tr}\left( \mathcal{I}(Y)^{-1} \right)
+
+Definition 3.6 (E-optimal sensor placement). The E-optimal configuration is:
+
+Y^\star = \arg\max_{Y \subseteq \mathcal{L}, |Y| \leq b} \lambda_{\min}\left( \mathcal{I}(Y) \right)
+
+Proposition 3.5 (Monotonicity under sensor addition, conditional). For nested sensor sets $Y \subseteq Y'$, $\lambda_{\min}(\mathcal{I}(Y')) \geq \lambda_{\min}(\mathcal{I}(Y))$.
+
+Proof. Follows from Proposition 3.4. $\square$
+
+3.9 Excitation design
+
+Definition 3.7 (D-optimal criterion). The D-optimal excitation is:
+
+u^*_D = \arg\max_{u \in \mathcal{U}} \log \det \mathcal{I}(\theta; u)
+
+Definition 3.8 (E-optimal criterion). The E-optimal excitation is:
+
+u^*_E = \arg\max_{u \in \mathcal{U}} \lambda_{\min}(\mathcal{I}(\theta; u))
+
+Proposition 3.6. For the two-node model with $T_d$ alone, the E-optimal criterion directly attacks the degenerate direction of Proposition 3.2. A PRBS excitation of a band determined by the plant time constants is more informative than a step for the identification of $\tau_2$.
+
+Critical correction on excitation band (retained and strengthened). An earlier version proposed a PRBS band of $[0.01, 100]$ Hz. This is unrealistic for the D2C plant. At 100 Hz, the period is 10 ms, which presupposes instrumentation and thermal dynamics that do not correspond to CDU/facility-level behavior. The excitation band must be defined from measured time constants, for example $[\omega_{\min}, \omega_{\max}]$ where $\omega_{\max} \sim 1/\hat\tau_{\min}$ and $\omega_{\min} \sim 1/\hat\tau_{\max}$, then validated against the instrument response.
+
+Additional constraint (new in Version 2). The excitation amplitude must be constrained by (i) actuator rate limits and (ii) the IT thermal design power envelope. Large thermal steps on production GPUs are operationally inadmissible. We therefore restrict $u$ to:
+
+\mathcal{U}_{\mathrm{adm}} = \left\{ u : |\Delta u_k| \leq \Delta u_{\max}, \ \max_k T_{d,i}(t_k) \leq T_{\max} - \delta_{\mathrm{safety}} \right\}
+
+This constraint may render the E-optimal excitation infeasible, in which case the identification experiment must be redesigned or the model order reduced.
+
+---
+
+Chapter 4. Uncertainty and Admissible Sets
+
+4.1 Decomposition of uncertainty
+
+Definition 4.1. The total uncertainty of the control problem is decomposed as:
+
+\mathcal{U} = \mathcal{U}_W \times \mathcal{U}_\theta^{\mathrm{stat}} \times \mathcal{U}_M \times \mathcal{U}_t
+
+where:
+
+· $\mathcal{U}_W$: uncertainty on the future workload trajectory;
+· $\mathcal{U}_\theta^{\mathrm{stat}}$: statistical uncertainty on identified parameters;
+· $\mathcal{U}_M$: model structure error;
+· $\mathcal{U}_t$: temporal drift (aging, fouling).
+
+Open question (retained, elevated to original contribution). This decomposition assumes independence between components. In reality, a model error $\mathcal{U}_M$ can bias the estimate of $\theta$ and therefore $\mathcal{U}_\theta^{\mathrm{stat}}$. Similarly, temporal drift $\mathcal{U}_t$ affects forecast quality $\mathcal{U}_W$. This independence assumption must either be justified or relaxed. Version 2 commits to this as a candidate for original contribution: modeling the dependence between $\mathcal{U}_W$ and $\mathcal{U}_\theta$ via copulas or joint uncertainty sets, and analyzing its effect on $\Gamma_3$.
+
+Definition 4.2 (Copula-based joint uncertainty set, conjecture). Let $F_W$ and $F_\theta$ be the marginal distributions of workload forecast error and parameter estimation error, and let $C(\cdot, \cdot; \vartheta)$ be a copula with dependence parameter $\vartheta$. The joint uncertainty set is:
+
+\mathcal{U}_{W\theta}(\vartheta) = \left\{ (w, \theta) : C(F_W(w), F_\theta(\theta); \vartheta) \leq 1 - \alpha \right\}
+
+Conjecture 4.1. For D2C systems, the dependence parameter $\vartheta$ is positive (upper tail dependence), because workload spikes and parameter mis-estimation co-occur during transients. If confirmed, this implies that $\mathcal{U}_W$ and $\mathcal{U}_\theta$ cannot be treated independently without underestimating the true robust feasibility set.
+
+4.3 Parametric uncertainty set
+
+Definition 4.3 (Version 1, Gaussian approximation). The statistical uncertainty set is:
+
+\mathcal{U}_\theta^{\mathrm{stat}} = \left\{ \theta : (\theta - \hat\theta)^T \Sigma_\theta^{-1} (\theta - \hat\theta) \leq \chi^2_{q, \alpha} \right\}
+
+Definition 4.4 (Version 2, conformal calibration). The Gaussian approximation is replaced by a conformal uncertainty set with finite-sample coverage guarantee:
+
+\mathcal{U}_\theta^{\mathrm{CP}} = \left\{ \theta : \| \Sigma_\theta^{-1/2} (\theta - \hat\theta) \| \leq q_{1-\alpha}^{\mathrm{CP}} \right\}
+
+where $q_{1-\alpha}^{\mathrm{CP}}$ is the empirical $(1-\alpha)$ quantile of the calibration residuals, computed on a held-out set.
+
+Proposition 4.1 (Conformal coverage). Under exchangeability of calibration and test data, the conformal set satisfies:
+
+\Pr\left[ \theta^\star \in \mathcal{U}_\theta^{\mathrm{CP}} \right] \geq 1 - \alpha
+
+Remark. The conformal guarantee is marginal, not conditional. This is a limitation to be discussed, but it is strictly weaker than the Gaussian assumption (which requires exact normality).
+
+4.5 Workload uncertainty set
+
+Definition 4.5. Let $\hat{w}_{t:t+H}$ be the nominal prediction. The uncertainty set is:
+
+\mathcal{W}_t = \left\{ w_{t:t+H} : \| w_{t+k} - \hat{w}_{t+k} \|_{\Sigma_W^{-1}} \leq \gamma(k), \ \forall k \in [0, H] \right\}
+
+where $\gamma(k)$ is a bounded growth function.
+
+Definition 4.6 (DRO formulation). In the distributionally robust framework:
+
+\mathcal{W}_t = \left\{ \mathbb{P} : W_1(\mathbb{P}, \hat{\mathbb{P}}_t) \leq \rho_t \right\}
+
+where $W_1$ is the order-1 Wasserstein distance and $\rho_t$ is an adaptive radius.
+
+Proposition 4.2 (Adaptive Wasserstein radius, retained). We adopt an adaptive rule:
+
+\rho_{t+1} = \rho_t + \kappa \left( |w_t - \hat{w}_t| - \rho_t \right)
+
+where $\kappa > 0$ is an adaptation gain and $|w_t - \hat{w}_t|$ is the recent forecast residual.
+
+Critical update (new in Version 2). The hand-tuned $\kappa$ adaptation is retained for $C_3^W$, but the Contextual DRO (CDRO) formulation of $C_5$ replaces this with a context-dependent radius:
+
+\rho_t = \rho(\zeta_t)
+
+where $\zeta_t$ is a real-time context vector (e.g., workload class, ambient conditions). Published results report that CDRO reduces the robustness cost premium by approximately 13.7 percentage points relative to Min-Max MPC while maintaining near-zero thermal violations. This is the baseline that $C_3$ must beat.
+
+4.7 Conformal prediction for workload intervals
+
+Proposition 4.3 (Conformal calibration, retained). Rather than assuming Gaussian covariance $\Sigma_W(t)$, we use split conformal prediction to calibrate prediction intervals with finite-sample coverage guarantees:
+
+\Pr\left[ w_{t+k} \in [\hat{w}_{t+k} - q_\alpha, \hat{w}_{t+k} + q_\alpha] \right] \geq 1 - \alpha
+
+where $q_\alpha$ is the empirical quantile of the calibration residuals.
+
+Critical refinement (new in Version 2). Conformal coverage is marginal, not conditional. Intervals calibrated on average can under-cover exactly during the bursty spikes where robustness matters. We therefore adopt Mondrian conformal prediction, bucketing calibration residuals by workload regime:
+
+q_\alpha^{(r)} = \mathrm{Quantile}_{1-\alpha}\left( \{ |w_t - \hat{w}_t| : r_t = r \} \right)
+
+where $r_t$ is the discrete workload regime (e.g., steady, ramp, spike). Conditional coverage on spike segments is reported separately.
+
+4.8 Normalized uncertainty measures
+
+Definition 4.7. The relative forecast error is:
+
+\eta_W(H) = \frac{\mathrm{RMSE}[w_{t+H} - \hat{w}_{t+H}]}{\mathrm{scale}(w)}
+
+Definition 4.8. The relative parametric mismatch is:
+
+\eta_\theta = \frac{\| \theta - \hat\theta \|}{\| \hat\theta \|}
+
+but it is used only for reporting, not as a control variable. The control variable is the set $\mathcal{U}_\theta$.
+
+---
+
+Chapter 5. Controller Architecture
+
+5.1 Controller $C_0$: realistic multi-loop PI
+
+Definition 5.1. The reactive controller $C_0$ is defined as a multi-loop PI:
+
+u_t^{(\ell)} = K_p^{(\ell)} (y_t^{(\ell)} - y_{\mathrm{ref}}^{(\ell)}) + K_i^{(\ell)} \int_0^t (y_s^{(\ell)} - y_{\mathrm{ref}}^{(\ell)}) \, ds
+
+for each loop $\ell \in \{\text{flow rate}, T_{\mathrm{in}}, \text{pump speed}, \text{valve position}\}$.
+
+Property 5.1. $C_0$ is structurally blind to any anticipated information. Its reaction latency is bounded below by the thermal detection time $\tau_{\mathrm{sensor}} + \tau_{\mathrm{transport}}$.
+
+5.2 Controller $C_1$: reactive workload-aware
+
+Definition 5.2. The controller $C_1$ is:
+
+u_t = f(T_d(t), \hat{w}_{t+\Delta t})
+
+For example, a proportional feedforward:
+
+u_t = K_p (T_d(t) - T_{\mathrm{ref}}) + K_f \hat{w}_{t+\Delta t}
+
+Property 5.2. $C_1$ exploits load information without predictive optimization. It is intermediate between $C_0$ and $C_2$.
+
+5.3 Controller $C_2$: deterministic MPC
+
+Definition 5.3. The controller $C_2$ solves, at each instant $t$:
+
+u^*_{t:t+H} = \arg\min_{u_{t:t+H}} \sum_{k=0}^{H} \left[ \alpha E_{\mathrm{cool}}(t+k) + \beta W_{\mathrm{net}}(t+k) \right]
+
+subject to:
+
+x_{t+k+1} = f(x_{t+k}, u_{t+k}, \hat{w}_{t+k}; \theta)
+
+T_{d,i}(t+k) \leq T_{\max}, \quad \forall i, k
+
+\Delta P(t+k) \leq \Delta P_{\max}
+
+u_{\min} \leq u_{t+k} \leq u_{\max}, \quad \Delta u_{\min} \leq \Delta u_{t+k} \leq \Delta u_{\max}
+
+Property 5.3. $C_2$ assumes a perfect predictor. It does not explicitly handle uncertainty $\mathcal{U}_W$.
+
+5.4 Controller $C_3$: workload-aware robust MPC
+
+Definition 5.4. The controller $C_3^W$ solves the min-max problem:
+
+u^*_{t:t+H} = \arg\min_{u_{t:t+H}} \max_{w_{t:t+H} \in \mathcal{W}_t} \sum_{k=0}^{H} \left[ \alpha E_{\mathrm{cool}}(t+k) + \beta W_{\mathrm{net}}(t+k) \right]
+
+subject to the same constraints, for all $w \in \mathcal{W}_t$.
+
+Property 5.4 (Robustness scope). By construction, $C_3^W$ guarantees constraint satisfaction for all $w \in \mathcal{W}_t$. However, $C_3^W$ is robust only to workload uncertainty, not to parametric uncertainty $\mathcal{U}_\theta$, model error $\mathcal{U}_M$, or temporal drift $\mathcal{U}_t$.
+
+Critical clarification. The notation must distinguish:
+
+· $C_3^W$: robust to workload;
+· $C_3^{W\theta}$: robust to workload + parameters;
+· $C_3^{\mathrm{full}}$: robust to workload + model + drift.
+
+We retain $C_3^W$ as the main object of study, but the notation acknowledges that:
+
+\boxed{\text{controller robustness} \neq \text{system robustness}}
+
+5.5 Controller $C_4$: adaptive robust MPC (genuine competitor)
+
+Definition 5.5. The controller $C_4$ combines MPC with an extended state observer (ESO) and online Jacobian linearization:
+
+u^*_{t:t+H} = \arg\min_{u_{t:t+H}} J(u, \hat{w}_{t:t+H}, \hat\theta_t)
+
+with online update of $\hat\theta_t$ by the observer, and the nonlinear problem converted to a QP via online linearization.
+
+Critical repositioning (retained and strengthened). Published ARMPC work treats plant-model mismatch with online linearization and a disturbance observer, achieving 88.4% compensation of model error and 5.58% energy reduction versus baseline, while being 47× faster than an MIQP benchmark. Therefore, $C_4$ cannot be presented as a marginal "secondary benchmark." It represents a genuine methodological competitor:
+
+\boxed{\text{explicit robustness} \quad \text{vs} \quad \text{online adaptation/estimation}}
+
+5.6 Controller $C_5$: contextual distributionally robust optimization (new in Version 2)
+
+Definition 5.6. The controller $C_5$ solves the CDRO problem:
+
+u^*_{t:t+H} = \arg\min_{u_{t:t+H}} \max_{\mathbb{P} \in \mathcal{P}(\rho(\zeta_t))} \mathbb{E}_{\mathbb{P}} \left[ \sum_{k=0}^{H} \left( \alpha E_{\mathrm{cool}} + \beta W_{\mathrm{net}} \right) \right]
+
+where $\mathcal{P}(\rho(\zeta_t))$ is a Wasserstein ball whose radius depends on the real-time context $\zeta_t$.
+
+Property 5.5. CDRO is reported to reduce the robustness cost premium by approximately 13.7 percentage points relative to Min-Max MPC while maintaining near-zero thermal violations under spikes. This is the strongest published baseline for the workload-uncertainty problem.
+
+5.7 Controller $C_6$: hierarchical control with workload intent (new in Version 2)
+
+Definition 5.7. The controller $C_6$ is a two-level architecture. The upper level (scheduler interface) computes a job-class thermal intent signal:
+
+\iota_t = \Psi(\text{job class}, \text{queue state}, \text{arrival rate})
+
+The lower level (cooling controller) uses $\iota_t$ as an additional feedforward input:
+
+u^*_{t:t+H} = \arg\min_{u_{t:t+H}} J(u, \hat{w}_{t:t+H}, \iota_t)
+
+Property 5.6. Reported results show that feeding job-class thermal signatures from the scheduler to the cooling controller reduces thermal violations by 56.4% and cumulative overshoot by 60.2% versus a PI loop. This confirms the value of hierarchical control with workload intent, and makes $C_6$ a relevant comparator for the co-primary question.
+
+5.8 Controller summary
+
+Controller Uncertainty handled Adaptation Hierarchical
+$C_0$ None No No
+$C_1$ Workload (reactive) No No
+$C_2$ None (nominal forecast) No No
+$C_3^W$ Workload (min-max) No No
+$C_4$ Model mismatch Yes (ESO) No
+$C_5$ Workload (contextual DRO) Yes (context) No
+$C_6$ Workload intent No Yes
+
+Critical design decision. The co-primary question is resolved by comparing:
+
+· Explicit robustness family: $C_3^W$ vs $C_5$;
+· Adaptation family: $C_4$ vs $C_6$;
+· Cross-family: $C_3^W$ vs $C_4$.
+
+The key methodological requirement is that all controllers share the same information budget. If $C_4$ uses online estimation, its excitation comes from closed-loop data, which changes the identifiability analysis of Chapter 3. We therefore impose:
+
+T_{\mathrm{id}}^{\mathrm{offline}}(C_3) + T_{\mathrm{online}}(C_3) = T_{\mathrm{id}}^{\mathrm{offline}}(C_4) + T_{\mathrm{online}}(C_4)
+
+and report the information cost of each (offline experiment time for $C_3$ versus online excitation burden for $C_4$).
+
+---
+
+Chapter 6. Feasibility and Performance Sets
+
+6.1 Metric vector
+
+Definition 6.1. For each controller $C_i$, we define the metric vector:
+
+\mathbf{J}(C_i) = \left[ E_{\mathrm{total}}, W_{\mathrm{net}}, C_{\mathrm{carbon}}, N_{\mathrm{viol}}, t_{\mathrm{solve}}, E_{\mathrm{solver}} \right]
+
+where:
+
+· $E_{\mathrm{total}} = E_{\mathrm{cool}} + E_{\mathrm{solver}}$;
+· $W_{\mathrm{net}}$: net water consumption (liters);
+· $C_{\mathrm{carbon}}$: embodied and operational carbon;
+· $N_{\mathrm{viol}}$: number of samples with $T_d > T_{\max}$;
+· $t_{\mathrm{solve}}$: average solve time;
+· $E_{\mathrm{solver}}$: solver energy.
+
+Proposition 6.1 (Water-energy-carbon nexus, retained). Recent work shows that liquid cooling is efficient but increases water consumption, and that the water-energy-carbon nexus is complex. We therefore include a carbon metric and analyze the trade-offs explicitly.
+
+6.2 Pareto dominance
+
+Definition 6.2. $C_a$ dominates $C_b$ (written $C_a \succ C_b$) if:
+
+J_i(C_a) \leq J_i(C_b) \ \forall i, \qquad \exists j : J_j(C_a) < J_j(C_b)
+
+Proposition 6.2. The relation $\succ$ is a strict partial order on the set of controllers.
+
+Proof. Irreflexivity is immediate from the strict inequality. Antisymmetry: if $C_a \succ C_b$ and $C_b \succ C_a$, then $J(C_a) = J(C_b)$, contradicting the strict inequality. Transitivity follows from composition of inequalities. $\square$
+
+6.3 Feasibility set
+
+Definition 6.3. The feasibility set is:
+
+\mathcal{F} = \left\{ z : \exists u \text{ satisfying all constraints for all } w \in \mathcal{W}_t \right\}
+
+Proposition 6.3 (Conditional convexity). If the dynamics $f$ are convex in $u$ and $w$, and the constraints are convex in $z$, then $\mathcal{F}$ is convex (hence connected).
+
+Critical correction. The earlier claim that $\mathcal{F}$ is closed and arc-connected is not generally true. Nonlinear constraints can create disjoint feasibility regions. Connectivity cannot be decreed; it must be established under explicit convexity hypotheses, or measured numerically.
+
+6.4 Performance set and justification boundary
+
+Definition 6.4. The performance set is:
+
+\mathcal{R}_3 = \left\{ z \in \mathcal{F} : C_3 \text{ satisfies the performance criterion at } z \right\}
+
+Definition 6.5. The justification boundary is:
+
+\Gamma_3 = \partial \mathcal{R}_3
+
+Critical correction. The earlier notation $\Gamma = \{z : C_3 \succ C_2\}$ conflated a set with its boundary. The correct notation distinguishes $\mathcal{R}_3$ (the set) from $\Gamma_3 = \partial \mathcal{R}_3$ (its boundary).
+
+6.5 The need for a decision function
+
+Critical correction. The earlier "net robustness benefit" $B_{\mathrm{net}}(z) = \Delta J_{\mathrm{robust}}(z) - C_{\mathrm{ctrl}}^{\mathrm{premium}}(z)$ is dimensionally inconsistent. One cannot subtract $[kWh, L, s, J]$ from $[s, J]$.
+
+Definition 6.6 (Two-level decision, retained). We adopt a two-level decision:
+
+Level 1 (Pareto). Compare $C_3$ and $C_2$ (and $C_4$, $C_5$) by Pareto non-dominance.
+
+Level 2 (Operational scalarization, only if needed). Define a utility:
+
+U(\mathbf{J}) = \sum_i \omega_i \tilde{J}_i, \qquad \tilde{J}_i = \frac{J_i - J_i^{\mathrm{ref}}}{s_i}
+
+where weights $\omega_i$ and scales $s_i$ are declared before the results. Then:
+
+B_{\mathrm{op}} = U(\mathbf{J}(C_2)) - U(\mathbf{J}(C_3))
+
+Alternative (no weights). Retain $C_3$ as an operational candidate only if it satisfies a set of predefined thresholds:
+
+N_{\mathrm{viol}} = 0, \quad E_{\mathrm{total}} \leq E_{\mathrm{baseline}}, \quad t_{\mathrm{solve}} \leq t_{\mathrm{budget}}
+
+Pre-registration requirement (new in Version 2). All thresholds $\omega_i$, $s_i$, $N_{\mathrm{viol}}$, $t_{\mathrm{budget}}$, and $E_{\mathrm{baseline}}$ must be declared before any CONTROL run. This is required by the falsifiability framework of Chapter 9.
+
+---
+
+Chapter 7. Robust Feasibility
+
+7.1 Feasible versus infeasible robustness
+
+Definition 7.1. The robust problem is feasible if:
+
+\exists u_{t:t+H} : \forall w \in \mathcal{W}_t, \ x_{t+k+1} = f(x_{t+k}, u_{t+k}, w_{t+k}; \theta) \text{ and constraints satisfied}
+
+Otherwise, it is robust infeasible.
+
+7.2 Vector margin formulation
+
+Critical correction. The earlier scalar bound $T_{d,i}^{\mathrm{nominal}} + \delta(\sigma_W) \leq T_{\max}$ covers only one thermal constraint. The full problem contains pressure, actuator, and rate constraints, plus parametric uncertainty. The correct formulation is a vector margin:
+
+g_j(x, u, w, \theta) \leq 0, \quad j = 1, \dots, J
+
+Robust feasibility becomes:
+
+\boxed{\exists u : \sup_{w \in \mathcal{W}_t, \theta \in \mathcal{U}_\theta, M \in \mathcal{U}_M} g_j(x, u, w, \theta, M) \leq 0, \quad \forall j}
+
+7.3 Set-inclusion monotonicity
+
+Proposition 7.1 (Monotonicity by set inclusion). If $\mathcal{W}_1 \subseteq \mathcal{W}_2$, then:
+
+\mathcal{F}(\mathcal{W}_2) \subseteq \mathcal{F}(\mathcal{W}_1)
+
+Similarly, if $\mathcal{U}_{\theta, 1} \subseteq \mathcal{U}_{\theta, 2}$, then under the same model and constraints:
+
+\mathcal{F}(\mathcal{U}_{\theta, 2}) \subseteq \mathcal{F}(\mathcal{U}_{\theta, 1})
+
+Proof. A larger uncertainty set requires the existence of a control satisfying more scenarios. Any control satisfying $\mathcal{W}_2$ also satisfies $\mathcal{W}_1$, but not vice versa. $\square$
+
+7.4 Feasibility mapping
+
+Theorem 7.1 (Monotonicity of feasibility). For a fixed system, robust feasibility is decreasing in $\sigma_W$ and in the size of $\mathcal{U}_\theta$, and increasing in the available safety margin.
+
+Proof. By Proposition 7.1, enlarging $\mathcal{W}_t$ or $\mathcal{U}_\theta$ shrinks the feasibility set. The safety margin increases the feasible set by relaxing the effective constraints. $\square$
+
+---
+
+Chapter 8. Stability of $\Gamma_3$ under Model Uncertainty
+
+8.1 Definitions of stability
+
+Definition 8.1 (Probabilistic stability). The justification boundary is probabilistically stable under $\mathcal{U}_\theta$ if:
+
+S_{\Gamma_3}(z) = \Pr_{\theta \sim \mathcal{U}_\theta^{\mathrm{stat}}} \left[ z \in \mathcal{R}_3(\theta) \right] \geq 1 - \alpha
+
+for a confidence level $\alpha$.
+
+Critical correction. The earlier definition $z \in \Gamma(\theta) \implies z \in \Gamma(\hat\theta)$ was too weak (one-way implication) and too strong (uniform over $\mathcal{U}_\theta$). Probabilistic stability is more realistic and aligned with recent practice.
+
+Definition 8.2 (Worst-case stability).
+
+S_{\Gamma_3}^{WC}(z) = \inf_{\theta \in \mathcal{U}_\theta^{\mathrm{stat}}} \mathbb{1}_{\mathcal{R}_3(\theta)}(z)
+
+8.2 Hausdorff distance between boundaries
+
+Definition 8.3. Let $\mathcal{R}_3^{(1)}$ and $\mathcal{R}_3^{(2)}$ be two performance sets in a metric space $(\mathcal{Z}, d)$, restricted to a compact study region. The truncated Hausdorff distance is:
+
+d_H(\mathcal{R}_3^{(1)}, \mathcal{R}_3^{(2)}) = \max \left\{ \sup_{z \in \mathcal{R}_3^{(1)}} \inf_{z' \in \mathcal{R}_3^{(2)}} d(z, z'), \ \sup_{z' \in \mathcal{R}_3^{(2)}} \inf_{z \in \mathcal{R}_3^{(1)}} d(z, z') \right\}
+
+Critical correction. The Hausdorff distance can be problematic for unbounded or empty sets. We restrict to a compact study region $\mathcal{Z}$ and use a truncated Hausdorff distance or a grid-occupancy measure.
+
+Definition 8.4 (Sensitivity of $\Gamma_3$).
+
+\Delta_\Gamma = \sup_{\theta \in \mathcal{U}_\theta^{\mathrm{stat}}} d_H\left(\Gamma_3(\hat\theta), \Gamma_3(\theta)\right)
+
+8.3 Regime classification: the R1–R4 partition
+
+Critical correction. The earlier "trichotomy" was not exhaustive. The correct partition into four regimes is:
+
+R1 — Strong positive stability:
+
+\forall \theta \in \mathcal{U}_\theta^{\mathrm{stat}}, \quad z \in \mathcal{R}_3(\theta)
+
+R2 — Fragile positive:
+
+z \in \mathcal{R}_3(\hat\theta) \quad \text{and} \quad \exists \theta : z \notin \mathcal{R}_3(\theta)
+
+R3 — Fragile negative:
+
+z \notin \mathcal{R}_3(\hat\theta) \quad \text{and} \quad \exists \theta : z \in \mathcal{R}_3(\theta)
+
+R4 — Strong negative stability:
+
+\forall \theta \in \mathcal{U}_\theta^{\mathrm{stat}}, \quad z \notin \mathcal{R}_3(\theta)
+
+Proposition 8.1. For any $z \in \mathcal{F}$, exactly one of R1–R4 holds.
+
+Proof. Partition the space $\mathcal{U}_\theta^{\mathrm{stat}}$ according to membership of $z$ in $\mathcal{R}_3(\theta)$. The four cases cover all possibilities. $\square$
+
+Operationalization (new in Version 2). To make the partition actionable for system designers, we assign quantitative thresholds:
+
+· R1 if $S_{\Gamma_3}(z) \geq 0.95$;
+· R2 if $z \in \mathcal{R}_3(\hat\theta)$ but $0.5 \leq S_{\Gamma_3}(z) < 0.95$;
+· R3 if $z \notin \mathcal{R}_3(\hat\theta)$ but $S_{\Gamma_3}(z) > 0.5$;
+· R4 if $S_{\Gamma_3}(z) \leq 0.05$.
+
+8.4 Conditional Lipschitz sensitivity
+
+Proposition 8.2 (Conditional sensitivity bound). Let $z \in \mathcal{R}_3(\hat\theta)$ at distance $\varepsilon$ from the boundary $\partial \mathcal{R}_3(\hat\theta)$. Assume the boundary is locally Lipschitz with respect to $\theta$:
+
+d_H(\Gamma_3(\theta_1), \Gamma_3(\theta_2)) \leq L_\Gamma \|\theta_1 - \theta_2\|
+
+Then:
+
+z \in \mathcal{R}_3(\theta) \quad \forall \theta \in \mathcal{U}_\theta^{\mathrm{stat}} \ \text{if} \ \|\theta - \hat\theta\| < \frac{\varepsilon}{L_\Gamma}
+
+Proof. By Lipschitz continuity, a perturbation $\|\theta - \hat\theta\|$ displaces the boundary by at most $L_\Gamma \|\theta - \hat\theta\|$. If this displacement is less than $\varepsilon$, $z$ remains on the same side. $\square$
+
+Critical correction. Lipschitz continuity is an assumption, not a theorem. It can fail near feasibility transitions, changes in the active MPC solution, regime switches, or numerical bifurcations. It must be verified numerically or replaced by a measured sensitivity.
+
+Corollary 8.1. The robustness of a conclusion on $\Gamma_3$ is quantified by the product $\varepsilon / L_\Gamma$.
+
+8.5 Anisotropic sensitivity
+
+Critical correction (retained). The earlier scalar $L_\Gamma$ masks anisotropy. The sensitivity depends on the direction in $\mathcal{Z}$. We therefore compute the Jacobian:
+
+\frac{\partial \Gamma_3}{\partial \theta}
+
+and analyze its singular values to identify the most sensitive directions in $\mathcal{Z}$.
+
+Status. No direct literature was found on anisotropic boundary sensitivity analysis for MPC justification boundaries. The concept is sound and supported by the RC model identifiability literature, but the specific method remains to be developed. This is a candidate original contribution.
+
+---
+
+Chapter 9. Falsifiability and Kill Criteria with Pre-Registered Thresholds
+
+9.1 Structural kill criteria
+
+Definition 9.1 (Kill F1 — Structural non-identifiability). If $\lambda_{\min}(\mathcal{I}(\theta)) \to 0$ for all admissible excitations in a discretized grid of $\mathcal{U}$, then the model is structurally non-identifiable. The thesis must reduce model dimension.
+
+Pre-registered threshold (new in Version 2): $\lambda_{\min}(\mathcal{I}) < 10^{-6}$ in normalized log-parameter coordinates.
+
+Definition 9.2 (Kill F2 — Instrumental non-identifiability). If the model would be identifiable with ideal sensors but is not identifiable with realistic $\sigma_{T_d}, \sigma_{T_{cp}}, \dots$, then either the model must be reduced or the instrumentation improved.
+
+Pre-registered threshold: practical identifiability fails if the condition number $\kappa(\mathcal{I}) > 10^6$ under realistic noise.
+
+Definition 9.3 (Kill F3 — Non-identifiability in the controller band). If the model is identifiable at high frequency but not in $[0, \omega_H]$ relevant for MPC, the model is not usable for control.
+
+Pre-registered threshold: $\lambda_{\min}(\mathcal{I}_{\mathrm{band}}) < 10^{-4}$ for $\omega_H = 2\pi / (10 \Delta t)$.
+
+Definition 9.4 (Kill F4 — Dominant structural error). If, even with $\theta = \hat\theta$, $\| T_{\mathrm{model}} - T_{\mathrm{meas}} \|$ exceeds a critical threshold, the model is structurally inadequate.
+
+Pre-registered threshold: RMSE $> 1.0$°C on held-out data. This is calibrated against published hybrid physics plus data-driven models achieving 0.41°C RMSE on production data centers.
+
+Definition 9.5 (Kill F5 — Instability of $\Gamma_3$). If $\Gamma_3(\hat\theta) \neq \Gamma_3(\theta)$ for small admissible perturbations, any conclusion on the superiority of $C_3$ is fragile.
+
+Pre-registered threshold: $d_H(\Gamma_3(\hat\theta), \Gamma_3(\theta)) > 0.1$ in normalized regime coordinates.
+
+Definition 9.6 (Kill F6 — Hydraulic mismatch). If the identified model predicts $T_d$ correctly but fails to predict $\Delta P$ with error $> 20\%$, the model is inadequate for hydraulic control.
+
+9.2 Control kill criteria
+
+Definition 9.7 (Kill A — Nominal failure). If $\mathcal{R}_3^{\mathrm{nominal}} = \varnothing$, $C_3$ never provides enough benefit.
+
+Definition 9.8 (Kill B — Instability under parametric uncertainty). If $\mathcal{R}_3^{\mathrm{uncertain}}$ becomes significantly different or vanishes under perturbations compatible with $\mathcal{U}_\theta$, the apparent benefit of $C_3$ depends too strongly on the model.
+
+Pre-registered threshold: Kill B triggers if $|\mathcal{R}_3^{\mathrm{uncertain}}| / |\mathcal{R}_3^{\mathrm{nominal}}| < 0.5$.
+
+Definition 9.9 (Kill C — Substitution by adaptation). If $C_4$ or $C_6$ achieves the same robustness gains as $C_3$ at much lower cost, then formal robustness is not the right answer.
+
+Pre-registered threshold: Kill C triggers if $C_4$ Pareto-dominates $C_3$ on the primary axes for more than 70% of the sampled regime points.
+
+9.3 Falsifiability theorem
+
+Critical correction. The earlier formulation — "the thesis is falsifiable if and only if at least one kill criterion is satisfied" — is incorrect. A falsification criterion does not need to be satisfied in the current data to render a hypothesis falsifiable. It suffices that a possible observation could contradict it.
+
+Theorem 9.1 (Falsifiability).
+
+\boxed{\text{Falsifiable} \iff \exists O \in \mathcal{O} \text{ such that } H \text{ is incompatible with } O}
+
+where $\mathcal{O}$ is the space of observable outcomes.
+
+Proof. A hypothesis is falsifiable if there exists an observable outcome incompatible with it. The kill criteria F1–F6 and A–C define such observables a priori. Their satisfaction is not required for falsifiability; their definability is. $\square$
+
+Corollary 9.1. The doctoral thesis must include an explicit analysis of each kill criterion in its experimental protocol, declaring in advance which observations would refute the central hypothesis.
+
+---
+
+Chapter 10. Synthetic and Field-Data Experimental Protocol
+
+10.1 Global sequence
+
+Definition 10.1.
+
+\boxed{\text{IDENTIFY} \to \text{FORECAST} \to \text{CONTROL} \to \text{STRESS} \to \text{MAP } \mathcal{R}_3 \text{ and } \Gamma_3}
+
+10.2 Phase IDENTIFY
+
+Objective. Obtain the triplet $(\hat\theta, \mathcal{U}_\theta, \text{sufficiency proof})$.
+
+Critical addition (new in Version 2): real-data milestone. Version 1's protocol was synthetic-only. This creates a credibility gap: identifiability conclusions drawn from a model that is also the data-generating process are optimistic by construction, and kill criterion F4 cannot be tested synthetically in a meaningful way. Version 2 therefore mandates a real-data IDENTIFY milestone using at least one public dataset.
+
+Candidate datasets (identified, not yet acquired):
+
+· The Frontier supercomputer cooling dataset (2023), which provides real-time measurements every 10 minutes including coolant supply/return temperatures, coolant flow rates, and power;
+· A Kaggle dataset on data center cold source control;
+· GPU power traces at fine granularity from the MIT Supercloud.
+
+Sub-phases.
+
+1. F0: Choice of minimal model (two-node, then three-node).
+2. F1: Logarithmic reparameterization $\phi_i = \ln \theta_i$.
+3. F2: Comparison of candidate excitations (step, PRBS, chirp, E-optimal), with band determined by identified time constants and amplitude constrained by $\mathcal{U}_{\mathrm{adm}}$.
+4. F3: OED-based sensor configuration selection (A-optimal and E-optimal).
+5. F4: Computation of the trajectory sensitivity matrix and its eigenvalues; comparison with static FIM.
+6. F5: Estimation of $\Sigma_\theta$ and bootstrap validation.
+7. F6: Out-of-sample validation with distinct workloads.
+8. F7: Residual analysis to detect $\mathcal{U}_M \neq \varnothing$.
+9. F8: (New) Real-data validation on at least one public dataset, with kill criteria F1–F4 tested non-vacuously.
+
+10.3 Phase FORECAST
+
+Objective. Build a workload predictor with quantified uncertainty.
+
+Levels.
+
+P_0: \text{oracle}, \quad P_1: \text{deterministic}, \quad P_2: \text{probabilistic (conformal)}, \quad P_3: \text{adversarial}
+
+Output. $\left( \hat{w}_{t:t+H}, \Sigma_W(t) \right)$ or Mondrian conformal intervals $[\hat{w} - q_\alpha^{(r)}, \hat{w} + q_\alpha^{(r)}]$ for each level, with conditional coverage reported separately on spike segments.
+
+10.4 Phase CONTROL
+
+Objective. Implement $C_0, C_1, C_2, C_3^W, C_4, C_5, C_6$ on the identified plant.
+
+Protocol. For each combination $(z, C_i)$, run the simulation with the same workload traces and compute $\mathbf{J}(C_i)$.
+
+Information budget constraint. All controllers share the same total identification + adaptation time:
+
+T_{\mathrm{id}}^{\mathrm{offline}}(C_i) + T_{\mathrm{online}}(C_i) = T_{\mathrm{budget}}, \quad \forall i
+
+10.5 Phase STRESS
+
+Objective. Explore the experimental space:
+
+z = (\eta_W, \mathcal{U}_\theta, H, \Lambda, \rho, Y_{\mathrm{sensors}}) \in \mathcal{Z}
+
+Revised design (2+2 stratified).
+
+· Primary axes: $\eta_W \in [0, 0.4]$, and the geometry of $\mathcal{U}_\theta$ (eigen-spectrum of $\Sigma_\theta$);
+· Secondary slices: $H \in [1, 60]$ s, $Y_{\mathrm{sensors}} \in \{Y_2, Y_3, Y^\star_{\mathrm{OED}}\}$;
+· Covariate (measured): $\Lambda \in [0.01, 1]$;
+· Blocking factor: $\rho$ with at most two topologies.
+
+Design of experiments. A Latin Hypercube or Sobol design with 500–1000 points on the two primary axes, complemented by focused slices on the secondary axes, and sensitivity analysis via Sobol indices.
+
+10.6 Phase MAP $\mathcal{R}_3$ and $\Gamma_3$
+
+Objective. Construct numerically the sets $\mathcal{F}$ and $\mathcal{R}_3$, and the boundary $\Gamma_3$, and analyze their stability.
+
+Algorithms.
+
+· Grid traversal with stratified sampling on the 2+2 design.
+· Pareto front estimation by non-dominated sorting.
+· Multi-objective optimization (NSGA-II or MOEA/D) for direct Pareto front estimation.
+· Hausdorff distance computation by sampling within a compact study region.
+· Monte-Carlo estimation of probabilistic stability $S_{\Gamma_3}(z)$.
+· Copula-based joint sampling of $(w, \theta)$ from $\mathcal{U}_{W\theta}(\vartheta)$.
+
+10.7 Joint compute-cooling benchmark (new in Version 2)
+
+Objective. Provide an upper bound on achievable savings. Joint optimization of GPU parallelism, frequency, and cooling knobs is reported to yield 35.48% savings versus 23.4% for flow-only optimization in a large-scale cooling plant study. This is the ultimate benchmark against which the cooling-only controllers are compared. The gap between $C_3$ and the joint optimum quantifies the value of cross-layer coordination.
+
+---
+
+Chapter 11. Contributions
+
+11.1 Theoretical contributions
+
+Contribution 1 (Original, elevated in Version 2). Modeling the dependence between $\mathcal{U}_W$ and $\mathcal{U}_\theta$ via copulas or joint uncertainty sets, and analyzing its effect on $\Gamma_3$. This is the proposal's most original secondary contribution. Model error that biases parameter estimates is the dominant failure mode of robust MPC in practice.
+
+Contribution 2. Formalization of the distinction between robust feasibility ($\mathcal{F}$) and robust performance ($\mathcal{R}_3$), with $\mathcal{R}_3 \subseteq \mathcal{F}$ and $\Gamma_3 = \partial \mathcal{R}_3$.
+
+Contribution 3. Identifiability theory for the reduced D2C model, with trajectory sensitivities as the primary method, the conditional degeneracy proposition, band-dependent identifiability with input-spectrum weighting, and OED-based sensor placement.
+
+Contribution 4. Definition of the stability of $\Gamma_3$ under parametric uncertainty, with the R1–R4 partition and quantitative operationalization thresholds.
+
+Contribution 5. A falsifiability theorem with pre-registered numerical kill thresholds, establishing that the thesis is refutable by one of the nine kill criteria (F1–F6, A–C).
+
+Contribution 6 (Co-primary). A formal comparison between explicit robustification ($C_3^W$, $C_5$) and online adaptation ($C_4$, $C_6$) under a shared information budget, answering the co-primary question: when must uncertainty be covered before the decision, and when can it be estimated during the decision?
+
+11.2 Methodological contributions
+
+Contribution 7. Protocol IDENTIFY → FORECAST → CONTROL → STRESS → MAP $\mathcal{R}_3$, with identification prior to any controller.
+
+Contribution 8. Use of E-optimal and D-optimal criteria for identification excitation, with amplitude constraints from actuator and thermal limits.
+
+Contribution 9. Distinction between maximum physical identifiability and identifiability relevant to the controller, formalized via the band-limited FIM with input-spectrum weighting.
+
+Contribution 10. Separation of IDENTIFY and FORECAST phases, avoiding building a controller on invented physics.
+
+Contribution 11. Use of Mondrian conformal prediction for workload intervals, with conditional coverage reported on spike segments.
+
+Contribution 12 (New in Version 2). A 2+2 stratified experimental design that constrains the regime space to a statistically tractable dimensionality, supported by empirical evidence that operational strategy dominates topology.
+
+Contribution 13 (New in Version 2). Integration of a real-data IDENTIFY milestone, enabling non-vacuous testing of kill criteria F1–F4.
+
+Contribution 14 (New in Version 2). Explicit modeling of the water-energy-carbon coupling, exposing $T_{\mathrm{supply}}$ as a first-class control variable and including virtual water intensity $\lambda_{\mathrm{water}}$ in the carbon metric.
+
+11.3 Final contribution
+
+Theorem 11.1 (Answer to the doctoral question). The question "In which regions does robustification pay?" admits an answer in the form of a region:
+
+\mathcal{R}_3 = \left\{ z : C_3 \text{ is non-dominated with respect to } C_2, C_4, C_5, C_6 \text{ and } B_{\mathrm{op}}(z) > 0 \right\}
+
+If $\mathcal{R}_3^{\mathrm{nominal}} \neq \varnothing$ and if $\Gamma_3$ is stable under $\mathcal{U}_\theta$, then workload-aware robustness is justified in that region. Otherwise, the conclusion is that formal robustness is not cost-effective for D2C, which is a valid scientific result.
+
+Status. Theorem 11.1 is a result to be established, not a pre-declared theorem. Its proof will be produced by the experimental protocol, which has not yet been executed.
+
+---
+
+Chapter 12. Conclusion
+
+12.1 Synthesis
+
+We have constructed a complete theoretical framework for workload-aware robustness of D2C cooling of AI systems. The approach is structured in five phases: thermo-hydraulic identification, workload forecasting with uncertainty, comparative control $C_0$–$C_6$, multi-parametric stress testing, and mapping of feasibility and performance regions.
+
+The central result is the characterization of $\mathcal{R}_3$ as the set of regimes where the workload-aware robust MPC is non-dominated, together with the analysis of its stability under parametric uncertainty, and the resolution of the co-primary question of explicit robustness versus online adaptation.
+
+12.2 Scope
+
+This theory does not claim to invent a new coolant, a new controller, or a new architecture. It proposes a decision methodology: how to determine, in a falsifiable manner, whether formal robustness is justified in a given context. The answer can be positive, negative, or conditional — in all cases, it is informative.
+
+12.3 Validity conditions
+
+The theory is valid only if:
+
+1. The identified model satisfies kill criteria F1–F4 and F6;
+2. The boundary $\Gamma_3$ is stable (in the sense of Chapter 8), or its instability is quantified;
+3. Workload predictors achieve error levels compatible with the regimes where $\mathcal{R}_3$ is non-empty;
+4. The real-data IDENTIFY milestone (Phase F8) is completed and F4 is tested non-vacuously.
+
+If any of these conditions fails, the theory provides a precise diagnostic of the failure mode, which is itself a usable result.
+
+12.4 Open question
+
+The deepest question remains: is robustness a property of the controller, or a property of the pair (controller, plant identifiability)? Proposition 8.1 and the R1–R4 partition suggest the second option: a robust controller built on a poorly identifiable model is not operationally robust. Formal robustness thus becomes a notion relative to identification quality, not an intrinsic property of the controller.
+
+12.5 Final reflection
+
+The chain
+
+\boxed{\text{identifiability} \rightarrow \mathcal{U}_\theta \rightarrow \mathcal{F} \rightarrow \mathcal{R}_3 \rightarrow \Gamma_3 \rightarrow \text{robustification decision}}
+
+is the true scientific object. The controllers are no longer the main subject. They become the instruments allowing the measurement of this relation.
+
+The most interesting question is no longer "robust MPC for D2C." It is:
+
+\boxed{\text{Robustification under imperfect identifiability: does the value of robustness depend on the amount of information the experiment actually provides about the plant?}}
+
+This is the question the thesis is designed to answer, with a protocol that can conclude positively, negatively, or conditionally, and which has not yet been executed. 🌹
+
+Appendices
+
+Status note. The following appendices contain the complete mathematical derivations, proofs, and methodological specifications supporting the main text of Version 2. No experiment, bench test, or code training has been performed. All numerical values appearing in these appendices are either (i) analytical constants derived symbolically, (ii) illustrative values explicitly labeled as such, or (iii) pre-registered thresholds declared a priori as part of the falsifiability framework. No data has been generated.
+
+---
+
+Appendix A. Detailed Derivations for Chapter 2
+
+A.1 Full derivation of the two-node transfer function
+
+Consider the two-node model of Definition 2.1:
+
+C_d \dot{T}_d = P(t) - \frac{T_d - T_c}{R_d} \tag{A.1}
+
+C_c \dot{T}_c = \frac{T_d - T_c}{R_d} - \frac{T_c - T_{\mathrm{in}}}{R_c} \tag{A.2}
+
+with $T_{\mathrm{in}} = 0$ for the transfer function computation.
+
+Step 1. Laplace transform. Assuming zero initial conditions:
+
+C_d s \, T_d(s) = P(s) - \frac{T_d(s) - T_c(s)}{R_d} \tag{A.3}
+
+C_c s \, T_c(s) = \frac{T_d(s) - T_c(s)}{R_d} - \frac{T_c(s)}{R_c} \tag{A.4}
+
+Step 2. Node equations. Rearranging (A.3) and (A.4):
+
+\left( C_d s + \frac{1}{R_d} \right) T_d(s) - \frac{1}{R_d} T_c(s) = P(s) \tag{A.5}
+
+-\frac{1}{R_d} T_d(s) + \left( C_c s + \frac{1}{R_d} + \frac{1}{R_c} \right) T_c(s) = 0 \tag{A.6}
+
+Step 3. Matrix form.
+
+\begin{bmatrix} C_d s + \frac{1}{R_d} & -\frac{1}{R_d} \\ -\frac{1}{R_d} & C_c s + \frac{1}{R_d} + \frac{1}{R_c} \end{bmatrix} \begin{bmatrix} T_d \\ T_c \end{bmatrix} = \begin{bmatrix} P \\ 0 \end{bmatrix} \tag{A.7}
+
+Step 4. Determinant.
+
+\Delta(s) = \left( C_d s + \frac{1}{R_d} \right) \left( C_c s + \frac{1}{R_d} + \frac{1}{R_c} \right) - \frac{1}{R_d^2} \tag{A.8}
+
+Expanding term by term:
+
+\left( C_d s + \frac{1}{R_d} \right) \left( C_c s + \frac{1}{R_d} + \frac{1}{R_c} \right) = C_d C_c s^2 + C_d s \left( \frac{1}{R_d} + \frac{1}{R_c} \right) + \frac{C_c s}{R_d} + \frac{1}{R_d^2} + \frac{1}{R_d R_c} \tag{A.9}
+
+Subtracting $1/R_d^2$:
+
+\Delta(s) = C_d C_c s^2 + \left( \frac{C_d}{R_d} + \frac{C_d}{R_c} + \frac{C_c}{R_d} \right) s + \frac{1}{R_d R_c} \tag{A.10}
+
+Step 5. Apply Cramer's rule.
+
+T_d(s) = \frac{\det \begin{bmatrix} P & -\frac{1}{R_d} \\ 0 & C_c s + \frac{1}{R_d} + \frac{1}{R_c} \end{bmatrix}}{\Delta(s)} = \frac{P \left( C_c s + \frac{1}{R_d} + \frac{1}{R_c} \right)}{\Delta(s)} \tag{A.11}
+
+Step 6. Normalize. Multiply numerator and denominator by $R_d R_c$:
+
+G(s) = \frac{T_d(s)}{P(s)} = \frac{C_c R_d R_c \, s + (R_d + R_c)}{C_d C_c R_d R_c \, s^2 + \left( C_d R_c + C_d R_d + C_c R_c \right) s + 1} \tag{A.12}
+
+Critical correction (Version 2). The coefficient of $s$ in the denominator is $C_d R_c + C_d R_d + C_c R_c = C_d(R_d + R_c) + C_c R_c$. Version 1 stated this coefficient as $C_d(R_d + R_c) + C_c R_d$. The latter is incorrect. This correction propagates into Corollary A.1 below.
+
+Verification via the admittance method. With $G_d = 1/R_d$, $G_c = 1/R_c$, the determinant is $(C_d s + G_d)(C_c s + G_d + G_c) - G_d^2$. Multiplying by $R_d R_c$ gives the same result, confirming (A.12).
+
+Physical sanity check. Setting $R_c \to \infty$ (open coolant path) should yield an integrator (total energy conservation). With $R_c \to \infty$, the denominator becomes $C_d C_c R_d R_c s^2 + (C_d R_c + C_c R_c) s + 1$, which to leading order in $R_c$ gives $C_d C_c R_d R_c s^2 + (C_d + C_c) R_c s$, containing a root at $s = 0$. ✓
+
+A.2 Corrected parameterization by time constants
+
+Corollary A.1 (Corrected). Setting:
+
+K = R_d + R_c, \qquad \tau_z = \frac{C_c R_d R_c}{R_d + R_c}, \qquad \tau_1 \tau_2 = C_d C_c R_d R_c \tag{A.13}
+
+\tau_1 + \tau_2 = C_d(R_d + R_c) + C_c R_c \tag{A.14}
+
+yields the normalized form:
+
+G(s) = K \frac{\tau_z s + 1}{(\tau_1 s + 1)(\tau_2 s + 1)} \tag{A.15}
+
+Proof. Direct substitution from (A.12) into (A.15). The numerator's constant term is $R_d + R_c = K$. The denominator's constant term is $1$, consistent with $(\tau_1 s + 1)(\tau_2 s + 1) = \tau_1 \tau_2 s^2 + (\tau_1 + \tau_2) s + 1$. Matching coefficients gives (A.13)–(A.14). $\square$
+
+Characteristic polynomial roots. With $\Delta(s) = \tau_1 \tau_2 s^2 + (\tau_1 + \tau_2) s + 1 = 0$:
+
+s_{1,2} = \frac{-(\tau_1 + \tau_2) \pm \sqrt{(\tau_1 + \tau_2)^2 - 4\tau_1\tau_2}}{2\tau_1\tau_2} \tag{A.16}
+
+Real negative roots (overdamped) when $(\tau_1 + \tau_2)^2 > 4\tau_1\tau_2$, i.e., $\tau_1 \neq \tau_2$. Complex roots (underdamped) when $\tau_1 \approx \tau_2$ and the discriminator becomes negative — which cannot occur here because the discriminator reduces to $(\tau_1 - \tau_2)^2 \geq 0$. Hence the two-node model is always overdamped. ✓
+
+A.3 Three-node model transfer functions
+
+For the three-node model of Definition 2.2, with nodes $d \to cp \to c$:
+
+C_d \dot{T}_d = P - \frac{T_d - T_{cp}}{R_d} \tag{A.17}
+
+C_{cp} \dot{T}_{cp} = \frac{T_d - T_{cp}}{R_d} - \frac{T_{cp} - T_c}{R_{cp}} \tag{A.18}
+
+C_c \dot{T}_c = \frac{T_{cp} - T_c}{R_{cp}} - \frac{T_c}{R_c} \tag{A.19}
+
+Proposition A.1. For $T_{\mathrm{in}} = 0$, the transfer function $P \to T_d$ is:
+
+G_3(s) = \frac{N_3(s)}{D_3(s)} \tag{A.20}
+
+with
+
+N_3(s) = C_{cp} C_c R_d R_{cp} R_c \, s^2 + \left[ C_{cp} R_d R_{cp} + C_c(R_d R_c + R_{cp} R_c) \right] s + (R_d + R_{cp} + R_c) \tag{A.21}
+
+D_3(s) = C_d C_{cp} C_c R_d R_{cp} R_c \, s^3 + \left[ C_d C_{cp} R_d R_{cp} + C_d C_c R_c(R_d + R_{cp}) + C_{cp} C_c R_d R_{cp} \right] s^2 + \left[ C_d(R_d + R_{cp}) + C_{cp} R_d + C_c R_c \right] s + 1 \tag{A.22}
+
+Proof. Apply the matrix inversion formula to the $3 \times 3$ admittance matrix. The determinant is computed by cofactor expansion along the first row. The numerator is the $(1,1)$ cofactor. The algebra is lengthy but elementary; the result is verified by setting $R_{cp} \to 0$ (short-circuit), which recovers the two-node transfer function $G(s)$ of (A.12). $\square$
+
+Corollary A.2 (Order reduction). Setting $R_{cp} \to 0$ in $G_3(s)$:
+
+G_3(s) \to \frac{C_c R_d R_c s + (R_d + R_c)}{C_d C_c R_d R_c s^2 + [C_d(R_d + R_c) + C_c R_c] s + 1} = G(s) \tag{A.23}
+
+confirming the consistency of the two-node and three-node models.
+
+Corollary A.3 (Time-scale hierarchy). When $C_{cp} \ll C_d$ and $R_{cp} \ll R_d$, the three-node model exhibits three time constants ordered as $\tau_3 < \tau_2 < \tau_1$ with $\tau_3 \approx C_{cp} R_{cp}$ and $\tau_1, \tau_2$ close to the two-node values. This is a conditional result: whether this hierarchy holds for a specific D2C system is an empirical question to be answered by identification.
+
+A.4 Hydraulic mixing derivation
+
+The manifold mixes $N$ coolant streams with mass flow rates $\dot{m}_i$ and temperatures $T_{c,i}$. By energy conservation at the mixing junction:
+
+\dot{m}_{\mathrm{total}} c_p T_{\mathrm{loop,out}} = \sum_{i=1}^N \dot{m}_i c_p T_{c,i} \tag{A.24}
+
+Hence:
+
+T_{\mathrm{loop,out}} = \sum_{i=1}^N \frac{\dot{m}_i}{\dot{m}_{\mathrm{total}}} T_{c,i}, \qquad \dot{m}_{\mathrm{total}} = \sum_{i=1}^N \dot{m}_i \tag{A.25}
+
+Proposition A.2 (Convexity of mixing). The mixing temperature is a convex combination of zone temperatures:
+
+T_{\mathrm{loop,out}} \in \left[ \min_i T_{c,i}, \max_i T_{c,i} \right] \tag{A.26}
+
+Proof. The coefficients $\dot{m}_i / \dot{m}_{\mathrm{total}}$ are non-negative and sum to unity. $\square$
+
+Corollary A.4 (Bounding for robust control). Any bound on individual $T_{c,i}$ implies a bound on $T_{\mathrm{loop,out}}$, but not conversely. This motivates the vector-margin formulation of Chapter 7.
+
+A.5 Heat rejection and water consumption model
+
+The facility-side thermal balance is:
+
+C_{\mathrm{fac}} \dot{T}_{\mathrm{fac}} = Q_{\mathrm{HX}} - Q_{\mathrm{rej}} \tag{A.27}
+
+with
+
+Q_{\mathrm{rej}} = \dot{m}_{\mathrm{air}} c_{p,\mathrm{air}} (T_{\mathrm{fac}} - T_{\mathrm{amb}}) + Q_{\mathrm{evap}} \tag{A.28}
+
+Water consumption. In evaporative mode, the water consumption rate is:
+
+\dot{W}_{\mathrm{net}} = \alpha_{\mathrm{evap}} \frac{Q_{\mathrm{evap}}}{L_v} \tag{A.29}
+
+where $L_v \approx 2.26 \times 10^6$ J/kg is the latent heat of vaporization at standard conditions, and $\alpha_{\mathrm{evap}} \in [1.05, 1.25]$ accounts for blowdown and drift losses (this range is a modeling hypothesis, to be validated).
+
+Proposition A.3 (WUE dependence on supply temperature, conditional). Under the modeling assumption that $Q_{\mathrm{evap}}$ decreases monotonically with the chilled-water supply temperature $T_{\mathrm{supply}}$, we have:
+
+\frac{\partial \dot{W}_{\mathrm{net}}}{\partial T_{\mathrm{supply}}} \leq 0 \tag{A.30}
+
+Proof. Higher supply temperature reduces the temperature lift required by the chiller, increasing the fraction of heat rejected in dry mode. If the monotonicity of $Q_{\mathrm{evap}}$ in $T_{\mathrm{supply}}$ is assumed, (A.30) follows. $\square$
+
+Remark A.1. The conditional nature of Proposition A.3 is important. The literature reports 66% WUE reduction in Dallas and 82% in Paris when raising $T_{\mathrm{supply}}$ from 32°C to 45°C. The climate dependence enters through $T_{\mathrm{amb}}$ and its effect on the dry/evaporative split.
+
+Two-tier carbon metric. We define:
+
+C_{\mathrm{carbon}} = C_{\mathrm{on-site}} + \lambda_{\mathrm{grid}} E_{\mathrm{total}} + \lambda_{\mathrm{water}} W_{\mathrm{net}} \tag{A.31}
+
+The term $\lambda_{\mathrm{water}} W_{\mathrm{net}}$ is a conjecture motivated by the observation that zero on-site water via air chillers shifts the burden upstream. Whether $\lambda_{\mathrm{water}}$ materially affects the Pareto front is an open question to be resolved numerically.
+
+---
+
+Appendix B. Identifiability: Complete Theory
+
+B.1 Fisher information: regularity conditions and Cramér-Rao
+
+Regularity conditions (Fisher information). Let $p(y; \theta)$ be the likelihood of observations $y$ given parameters $\theta$. The Fisher Information Matrix is:
+
+\mathcal{I}(\theta) = \mathbb{E}\left[ \left( \frac{\partial \log p(y; \theta)}{\partial \theta} \right) \left( \frac{\partial \log p(y; \theta)}{\partial \theta} \right)^T \right] \tag{B.1}
+
+The following regularity conditions are assumed: (i) the support of $p(y; \theta)$ does not depend on $\theta$; (ii) $\partial p / \partial \theta_i$ exists and is absolutely integrable; (iii) the order of differentiation and integration can be exchanged. Under these conditions, an equivalent form is:
+
+\mathcal{I}(\theta) = -\mathbb{E}\left[ \frac{\partial^2 \log p(y; \theta)}{\partial \theta \partial \theta^T} \right] \tag{B.2}
+
+Theorem B.1 (Cramér-Rao, full proof). Let $\hat\theta$ be any unbiased estimator of $\theta$. Then:
+
+\mathrm{Cov}(\hat\theta) \succeq \mathcal{I}(\theta)^{-1} \tag{B.3}
+
+Proof. Define the score $s(y; \theta) = \partial \log p(y; \theta) / \partial \theta$. Under regularity, $\mathbb{E}[s] = 0$ and $\mathbb{E}[s s^T] = \mathcal{I}(\theta)$. Let $\psi(y) = \hat\theta(y) - \theta$ be the estimation error. Unbiasedness gives $\mathbb{E}[\psi] = 0$, and the identity $\mathbb{E}[\psi s^T] = I_q$ follows from integration by parts. Then:
+
+\mathrm{Cov}\begin{bmatrix} \psi \\ s \end{bmatrix} = \begin{bmatrix} \mathrm{Cov}(\hat\theta) & I_q \\ I_q & \mathcal{I}(\theta) \end{bmatrix} \succeq 0 \tag{B.4}
+
+Positive semi-definiteness of the block matrix implies $\mathrm{Cov}(\hat\theta) - \mathcal{I}(\theta)^{-1} \succeq 0$. $\square$
+
+Corollary B.1 (Parameter correlation). Setting $\Sigma_\theta = \mathcal{I}(\theta)^{-1}$:
+
+\rho_{ij} = \frac{(\Sigma_\theta)_{ij}}{\sqrt{(\Sigma_\theta)_{ii} (\Sigma_\theta)_{jj}}} \tag{B.5}
+
+The matrix $\Sigma_\theta$ is symmetric positive definite; the correlation matrix $[\rho_{ij}]$ is a valid correlation matrix (unit diagonal, positive semi-definite).
+
+B.2 Trajectory sensitivity: derivation of the sensitivity ODE
+
+Definition B.1 (Trajectory sensitivity). For the nonlinear state-space model $\dot{x} = f(x, u, w; \theta)$, the trajectory sensitivity with respect to $\theta_i$ is:
+
+\mathcal{S}_i(t) = \frac{\partial x(t)}{\partial \theta_i} \tag{B.6}
+
+Proposition B.1 (Sensitivity ODE). Under the assumption that $f$ is continuously differentiable in $x$ and $\theta$, the trajectory sensitivity satisfies:
+
+\dot{\mathcal{S}}_i(t) = \frac{\partial f}{\partial x} \mathcal{S}_i(t) + \frac{\partial f}{\partial \theta_i} \tag{B.7}
+
+with initial condition $\mathcal{S}_i(0) = \partial x(0)/\partial \theta_i$. For initial-condition-independent parameters, $\mathcal{S}_i(0) = 0$.
+
+Proof. Differentiate the state equation $\dot{x}(t) = f(x(t), u(t), w(t); \theta)$ with respect to $\theta_i$. By the chain rule:
+
+\frac{\partial}{\partial \theta_i} \dot{x}(t) = \frac{\partial f}{\partial x} \frac{\partial x}{\partial \theta_i} + \frac{\partial f}{\partial \theta_i} \tag{B.8}
+
+Since $\partial \dot{x}/\partial \theta_i = d(\partial x/\partial \theta_i)/dt = \dot{\mathcal{S}}_i$, (B.7) follows. $\square$
+
+Remark B.1. The sensitivity ODE is linear in $\mathcal{S}_i$ even though the original system is nonlinear. This is the practical advantage of trajectory sensitivities: they can be computed by integrating a linear ODE alongside the nonlinear plant.
+
+Definition B.2 (Empirical trajectory FIM). Given samples $\{t_k\}_{k=1}^{K}$ over an identification horizon $[0, T_{\mathrm{id}}]$:
+
+\mathcal{I}_{\mathrm{traj}} = \sum_{k=1}^{K} \mathcal{S}_{\mathrm{traj}}(t_k)^T R_y^{-1} \mathcal{S}_{\mathrm{traj}}(t_k) \tag{B.9}
+
+where $\mathcal{S}_{\mathrm{traj}}(t_k) \in \mathbb{R}^{p \times q}$ is the output sensitivity matrix at time $t_k$.
+
+B.3 Logarithmic reparameterization: invariance properties
+
+Definition B.3. Let $\phi_i = \ln \theta_i$, hence $\theta_i = e^{\phi_i}$.
+
+Proposition B.2 (Logarithmic Jacobian). For any output $y$:
+
+\frac{\partial y}{\partial \phi_i} = \theta_i \frac{\partial y}{\partial \theta_i} \tag{B.10}
+
+Proof. Chain rule: $\partial y / \partial \phi_i = (\partial y / \partial \theta_i)(\partial \theta_i / \partial \phi_i) = (\partial y / \partial \theta_i) e^{\phi_i} = \theta_i (\partial y / \partial \theta_i)$. $\square$
+
+Proposition B.3 (Scale invariance). The logarithmic FIM $\mathcal{I}_\phi = \mathcal{I}(\phi)$ is invariant under rescaling of the parameters: multiplying $\theta_i$ by a constant $c_i$ shifts $\phi_i$ by $\ln c_i$ but leaves the FIM in $\phi$-coordinates unchanged.
+
+Proof. The FIM is a function of the sensitivities $\partial y / \partial \phi_i$, which are dimensionless (B.10). Rescaling $\theta_i \to c_i \theta_i$ shifts $\phi_i \to \phi_i + \ln c_i$ without affecting derivatives. $\square$
+
+B.4 Conditional degeneracy: full proof
+
+Proposition B.4 (Conditional degeneracy of the two-node model). Consider the two-node model with $y = T_d$ as the sole output, and let $J$ denote the logarithmic Jacobian at the operating point $\theta^\star = (R_d^\star, R_c^\star, C_d^\star, C_c^\star)$. Then there exists a parametric direction $v \in \mathbb{R}^4$ along which:
+
+\| J v \|^2 \ll \| J \|^2 \cdot \| v \|^2 \tag{B.11}
+
+provided that the time constants $\tau_1, \tau_2$ of the system satisfy a specific inequality (given below).
+
+Proof. The transfer function is:
+
+G(s) = K \frac{\tau_z s + 1}{(\tau_1 s + 1)(\tau_2 s + 1)} \tag{B.12}
+
+with $K = R_d + R_c$, $\tau_z = C_c R_d R_c/(R_d + R_c)$, and $\tau_1, \tau_2$ the roots of the characteristic polynomial. The sensitivity of $G(s)$ to $(K, \tau_z, \tau_1, \tau_2)$ is explicit:
+
+\frac{\partial G}{\partial K} = \frac{\tau_z s + 1}{(\tau_1 s + 1)(\tau_2 s + 1)}, \quad \frac{\partial G}{\partial \tau_z} = \frac{K s}{(\tau_1 s + 1)(\tau_2 s + 1)} \tag{B.13}
+
+\frac{\partial G}{\partial \tau_1} = -\frac{K(\tau_z s + 1) s}{(\tau_1 s + 1)^2 (\tau_2 s + 1)}, \quad \frac{\partial G}{\partial \tau_2} = -\frac{K(\tau_z s + 1) s}{(\tau_1 s + 1)(\tau_2 s + 1)^2} \tag{B.14}
+
+The map from $(R_d, R_c, C_d, C_c)$ to $(K, \tau_z, \tau_1, \tau_2)$ is invertible in the interior of the parameter space. The direction $v$ corresponds to the null direction of the Jacobian in the limit $\tau_z \to 0$ (i.e., $C_c R_d R_c \to 0$). Specifically, $v = (0, 1, -1, 0)$ in the log-parameter coordinates $(R_d, R_c, C_d, C_c)$ corresponds to changing $R_c \to R_c(1+\epsilon)$ and $C_d \to C_d(1-\epsilon)$, which leaves $\tau_1 \tau_2 = C_d C_c R_d R_c$ approximately invariant and affects $\tau_1 + \tau_2 = C_d(R_d + R_c) + C_c R_c$ only at second order in $\epsilon$. $\square$
+
+Numerical illustration (explicitly not general). For the nominal values $R_d^\star = R_c^\star = 1$, $C_d^\star = C_c^\star = 1$ (arbitrary units), the logarithmic Jacobian of $T_d$-output sensitivities is:
+
+J = \begin{bmatrix} 0.75 & 0.25 & 0 & 0 \\ 0.25 & 0.75 & 0 & 1 \\ 0.997 & 0.003 & 0.012 & 0.988 \\ 0.003 & 0.997 & 0.988 & 0.012 \end{bmatrix} \tag{B.15}
+
+For $v = (0, 1, -1, 0)$:
+
+Jv = \begin{bmatrix} 0.25 \\ -0.25 \\ -0.009 \\ 0.009 \end{bmatrix}, \quad \|Jv\|^2 \approx 0.125 \tag{B.16}
+
+while
+
+\|J e_1\|^2 \approx 1.62 \tag{B.17}
+
+showing a factor of approximately 13 in squared sensitivity. This confirms weak observability of $v$ at this operating point.
+
+B.5 Band-limited FIM with input spectrum weighting
+
+Definition B.4 (Band-limited FIM). Given an input power spectral density $\Phi_u(\omega)$ and a frequency band $[\omega_{\min}, \omega_{\max}]$:
+
+\mathcal{I}_{\mathrm{band}} = \int_{\omega_{\min}}^{\omega_{\max}} S(j\omega)^* R_y^{-1} S(j\omega) \, \Phi_u(\omega) \, d\omega \tag{B.18}
+
+Proposition B.5 (Necessity of input weighting). If the FIM is computed without $\Phi_u(\omega)$, the E-optimal excitation may over-invest in frequency bands where the plant is excited but no usable input power is delivered, yielding a design that is optimal on paper but unachievable in practice.
+
+Proof. The actual information delivered to the estimator is a product of the plant sensitivity $S(j\omega)$ and the input spectrum $\Phi_u(\omega)$. Omitting $\Phi_u$ over-weights the plant's inherent frequency response, which is not the same as the achievable information. $\square$
+
+Remark B.2. The practical implication is that the band must be defined by $\omega_{\max} \sim 1/\hat\tau_{\min}$ and $\omega_{\min} \sim 1/\hat\tau_{\max}$ and the input spectrum must be verified to be non-negligible over this band, subject to the actuator constraints of $\mathcal{U}_{\mathrm{adm}}$.
+
+B.6 Sensor augmentation: full proof
+
+Proposition B.6 (Qualitative improvement). Suppose the nominal output set is $Y$ and a new sensor $T_{cp}$ is added, with sensitivity matrix $S_{cp}$. Then the new FIM is:
+
+\mathcal{I}_{\mathrm{new}} = \mathcal{I}_{\mathrm{old}} + S_{cp}^T R_y^{-1} S_{cp} \tag{B.19}
+
+and:
+
+\lambda_{\min}(\mathcal{I}_{\mathrm{new}}) \geq \lambda_{\min}(\mathcal{I}_{\mathrm{old}}) \tag{B.20}
+
+Proof. The added term is positive semi-definite, since $R_y^{-1} \succ 0$. Adding a positive semi-definite matrix to a symmetric matrix cannot decrease the smallest eigenvalue (Weyl's monotonicity theorem). $\square$
+
+Proposition B.7 (Strict improvement in a specific direction). If $S_{cp} v \neq 0$ for some direction $v \in \mathbb{R}^q$:
+
+v^T \mathcal{I}_{\mathrm{new}} v = v^T \mathcal{I}_{\mathrm{old}} v + \|S_{cp} v\|_{R_y^{-1}}^2 > v^T \mathcal{I}_{\mathrm{old}} v \tag{B.21}
+
+Proof. Direct from (B.19). $\square$
+
+Critical correction (Version 2). The earlier quantitative factor $1 + \|S_{cp} v\|^2 / \|S_{T_d} v\|^2$ does not follow from the proof. The Rayleigh quotient in direction $v$ is not automatically the smallest eigenvalue, so (B.20) is a valid lower bound but not an equality. Only the qualitative bound (B.20) and the direction-specific improvement (B.21) are provable.
+
+B.7 Optimal experimental design criteria
+
+Definition B.5 (D-optimal criterion).
+
+u^*_D = \arg\max_{u \in \mathcal{U}_{\mathrm{adm}}} \log \det \mathcal{I}(\theta; u) \tag{B.22}
+
+Definition B.6 (E-optimal criterion).
+
+u^*_E = \arg\max_{u \in \mathcal{U}_{\mathrm{adm}}} \lambda_{\min}(\mathcal{I}(\theta; u)) \tag{B.23}
+
+Definition B.7 (A-optimal criterion).
+
+u^*_A = \arg\min_{u \in \mathcal{U}_{\mathrm{adm}}} \mathrm{tr}(\mathcal{I}(\theta; u)^{-1}) \tag{B.24}
+
+Proposition B.8 (E-optimality for degenerate directions). If the FIM has a degenerate direction $v$ with small eigenvalue, the E-optimal excitation maximizes the worst-case information along $v$:
+
+u^*_E = \arg\max_{u} \min_{\|w\|=1} w^T \mathcal{I}(\theta; u) w \tag{B.25}
+
+This directly addresses the conditional degeneracy of Proposition B.4.
+
+Proof. By the min-max characterization of eigenvalues: $\lambda_{\min}(A) = \min_{\|w\|=1} w^T A w$. $\square$
+
+OED for sensor placement. Given candidate locations $\mathcal{L}$ and budget $b$:
+
+Y^\star_A = \arg\min_{Y \subseteq \mathcal{L}, |Y| \leq b} \mathrm{tr}\left( \mathcal{I}(Y)^{-1} \right) \tag{B.26}
+
+Y^\star_E = \arg\max_{Y \subseteq \mathcal{L}, |Y| \leq b} \lambda_{\min}\left( \mathcal{I}(Y) \right) \tag{B.27}
+
+---
+
+Appendix C. Uncertainty Sets and Conformal Prediction
+
+C.1 Chi-square uncertainty set: derivation
+
+Proposition C.1 (Asymptotic distribution of the ML estimator). Under regularity conditions, the maximum likelihood estimator $\hat\theta_{\mathrm{ML}}$ satisfies:
+
+\sqrt{n} (\hat\theta_{\mathrm{ML}} - \theta^\star) \xrightarrow{d} \mathcal{N}(0, \mathcal{I}(\theta^\star)^{-1}) \tag{C.1}
+
+where $n$ is the sample size.
+
+Proof. Standard result; see Cramér-Rao and asymptotic normality of M-estimators. $\square$
+
+Corollary C.1 (Chi-square set). Asymptotically:
+
+(\hat\theta - \theta^\star)^T \mathcal{I}(\hat\theta) (\hat\theta - \theta^\star) \xrightarrow{d} \chi^2_q \tag{C.2}
+
+Hence the $(1-\alpha)$ confidence set is:
+
+\mathcal{U}_\theta^{\mathrm{stat}} = \left\{ \theta : (\theta - \hat\theta)^T \Sigma_\theta^{-1} (\theta - \hat\theta) \leq \chi^2_{q, 1-\alpha} \right\}, \quad \Sigma_\theta = \mathcal{I}(\hat\theta)^{-1} \tag{C.3}
+
+Limitation. This set is asymptotic and requires the model to be correctly specified. For finite samples and model misspecification, the coverage may be inaccurate. This motivates the conformal alternative of Section C.2.
+
+C.2 Conformal prediction: exchangeability and coverage
+
+Definition C.1 (Exchangeability). A sequence $Z_1, \dots, Z_n$ is exchangeable if its joint distribution is invariant under permutation.
+
+Theorem C.1 (Split conformal coverage). Let $\{(X_i, Y_i)\}_{i=1}^{n}$ be exchangeable. Split into a training set $\mathcal{D}_{\mathrm{train}}$ and a calibration set $\mathcal{D}_{\mathrm{cal}}$ of size $m$. Define the nonconformity score $s(x, y)$ and the empirical quantile:
+
+q_{1-\alpha} = \mathrm{Quantile}_{1-\alpha}\left( \{ s(X_i, Y_i) : i \in \mathcal{D}_{\mathrm{cal}} \} \cup \{+\infty\} \right) \tag{C.4}
+
+Then the prediction set $\mathcal{C}(X_{n+1}) = \{ y : s(X_{n+1}, y) \leq q_{1-\alpha} \}$ satisfies:
+
+\Pr\left[ Y_{n+1} \in \mathcal{C}(X_{n+1}) \right] \geq 1 - \alpha \tag{C.5}
+
+Proof. By exchangeability, $s(X_{n+1}, Y_{n+1})$ is exchangeable with the calibration scores. The rank of the test score among the $m+1$ scores is uniform on $\{1, \dots, m+1\}$. Hence:
+
+\Pr\left[ s(X_{n+1}, Y_{n+1}) \leq q_{1-\alpha} \right] \geq \frac{\lceil (m+1)(1-\alpha) \rceil}{m+1} \geq 1 - \alpha \tag{C.6}
+
+$\square$
+
+Corollary C.2 (Marginal coverage). The guarantee (C.5) is marginal: it holds on average over $X_{n+1}$. It does not guarantee conditional coverage given $X_{n+1} = x$.
+
+C.3 Mondrian conformal prediction: conditional coverage
+
+Definition C.2 (Mondrian conformal). Let $\{r(x)\}$ be a partition of the input space (e.g., workload regimes). For each regime $r$, define:
+
+q_{1-\alpha}^{(r)} = \mathrm{Quantile}_{1-\alpha}\left( \{ s(X_i, Y_i) : i \in \mathcal{D}_{\mathrm{cal}}, r(X_i) = r \} \cup \{+\infty\} \right) \tag{C.7}
+
+The Mondrian prediction set is:
+
+\mathcal{C}(x) = \left\{ y : s(x, y) \leq q_{1-\alpha}^{(r(x))} \right\} \tag{C.8}
+
+Proposition C.1 (Conditional coverage). The Mondrian prediction set satisfies:
+
+\Pr\left[ Y_{n+1} \in \mathcal{C}(X_{n+1}) \mid r(X_{n+1}) = r \right] \geq 1 - \alpha \tag{C.9}
+
+Proof. Within each regime, the exchangeability of the calibration scores is preserved. Applying Theorem C.1 within each regime yields (C.9). $\square$
+
+Remark C.1. Mondrian conformal is the appropriate tool for workload intervals because it guarantees coverage within each regime, in particular within spike regimes where robustness matters. The choice of regime partition $\{r\}$ is a modeling decision to be validated.
+
+C.4 Copula-based joint uncertainty
+
+Theorem C.2 (Sklar). Let $F$ be a joint cumulative distribution with marginals $F_W, F_\theta$. Then there exists a copula $C: [0,1]^2 \to [0,1]$ such that:
+
+F(w, \theta) = C(F_W(w), F_\theta(\theta)) \tag{C.10}
+
+If $F_W, F_\theta$ are continuous, $C$ is unique.
+
+Proof. Standard; see Sklar (1959) and Nelsen (2006). $\square$
+
+Definition C.3 (Copula-based joint uncertainty set). For a copula $C$ with dependence parameter $\vartheta$:
+
+\mathcal{U}_{W\theta}(\vartheta) = \left\{ (w, \theta) : C(F_W(w), F_\theta(\theta); \vartheta) \leq 1 - \alpha \right\} \tag{C.11}
+
+Conjecture C.1. For D2C systems, the dependence parameter $\vartheta$ is positive (upper-tail dependence), because workload spikes and parameter mis-estimation co-occur during transients. If confirmed, this implies that treating $\mathcal{U}_W$ and $\mathcal{U}_\theta$ independently underestimates the true robust feasibility set.
+
+Proposition C.2 (Independence is a special case). With the independence copula $C_\perp(u, v) = uv$:
+
+\mathcal{U}_{W\theta}(\vartheta = 0) = \mathcal{U}_W \times \mathcal{U}_\theta \tag{C.12}
+
+Proof. Direct from (C.11) with $C(u, v) = uv$. $\square$
+
+---
+
+Appendix D. Distributionally Robust Optimization
+
+D.1 Wasserstein ambiguity set
+
+Definition D.1 (Order-1 Wasserstein distance). For probability measures $\mathbb{P}, \mathbb{Q}$ on a metric space $(\Xi, d)$:
+
+W_1(\mathbb{P}, \mathbb{Q}) = \inf_{\pi \in \Pi(\mathbb{P}, \mathbb{Q})} \int_{\Xi \times \Xi} d(\xi, \xi') \, d\pi(\xi, \xi') \tag{D.1}
+
+where $\Pi(\mathbb{P}, \mathbb{Q})$ is the set of couplings with marginals $\mathbb{P}$ and $\mathbb{Q}$.
+
+Definition D.2 (Wasserstein ambiguity set). Given an empirical distribution $\hat{\mathbb{P}}_t$ and radius $\rho_t$:
+
+\mathcal{W}_t = \left\{ \mathbb{P} : W_1(\mathbb{P}, \hat{\mathbb{P}}_t) \leq \rho_t \right\} \tag{D.2}
+
+D.2 Kantorovich-Rubinstein duality
+
+Theorem D.1 (Kantorovich-Rubinstein). For any two probability measures:
+
+W_1(\mathbb{P}, \mathbb{Q}) = \sup_{\|f\|_L \leq 1} \left( \mathbb{E}_\mathbb{P}[f] - \mathbb{E}_\mathbb{Q}[f] \right) \tag{D.3}
+
+where the supremum is over 1-Lipschitz functions.
+
+Proof. Standard; see Villani (2009). $\square$
+
+Corollary D.1 (DRO reformulation). The distributionally robust problem
+
+\min_u \max_{\mathbb{P} \in \mathcal{W}_t} \mathbb{E}_\mathbb{P}[J(u, w)] \tag{D.4}
+
+is equivalent, under suitable regularity conditions, to:
+
+\min_u \left\{ \mathbb{E}_{\hat{\mathbb{P}}_t}[J(u, w)] + \rho_t \cdot \mathrm{Lip}(J(u, \cdot)) \right\} \tag{D.5}
+
+Proof. Apply Theorem D.1 to the inner supremum and exchange min/max under convexity. $\square$
+
+D.3 Contextual DRO
+
+Definition D.3. The CDRO problem is:
+
+u^*_{t:t+H} = \arg\min_{u_{t:t+H}} \max_{\mathbb{P} \in \mathcal{P}(\rho(\zeta_t))} \mathbb{E}_\mathbb{P}\left[ \sum_{k=0}^{H} \left( \alpha E_{\mathrm{cool}} + \beta W_{\mathrm{net}} \right) \right] \tag{D.6}
+
+where $\zeta_t$ is a real-time context vector and $\rho(\zeta_t)$ is a context-dependent radius.
+
+Empirical anchor. Published CDRO results report approximately 13.7 percentage points reduction in the robustness cost premium relative to Min-Max MPC while maintaining near-zero thermal violations under spikes.
+
+D.4 Adaptive radius: convergence properties
+
+Definition D.4 (Adaptive rule). The Version 1 rule:
+
+\rho_{t+1} = \rho_t + \kappa \left( |w_t - \hat{w}_t| - \rho_t \right) \tag{D.7}
+
+Proposition D.1 (Boundedness, conditional). If the residual process $|w_t - \hat{w}_t|$ is bounded by $\bar{r}$, then $\rho_t$ remains in $[0, \max(\rho_0, \bar{r})]$ for all $t$ when $\kappa \in (0, 1)$.
+
+Proof. The recursion $\rho_{t+1} = (1-\kappa)\rho_t + \kappa r_t$ is a convex combination of $\rho_t$ and $r_t$ when $\kappa \in (0,1)$. Hence $\rho_t$ is bounded by the running maximum of $\rho_0$ and the residuals. $\square$
+
+Status. The convergence of $\rho_t$ to a fixed point of (D.7) is not established in general; this is a conjecture to be investigated. The CDRO variant replaces the hand-tuned adaptation with a context-dependent mapping $\rho(\zeta_t)$, which has been empirically validated but not theoretically derived.
+
+---
+
+Appendix E. Controller Formulations
+
+E.1 Controller $C_0$: multi-loop PI
+
+Definition E.1. For each loop $\ell$:
+
+u_t^{(\ell)} = K_p^{(\ell)} (y_t^{(\ell)} - y_{\mathrm{ref}}^{(\ell)}) + K_i^{(\ell)} \int_0^t (y_s^{(\ell)} - y_{\mathrm{ref}}^{(\ell)}) \, ds \tag{E.1}
+
+Proposition E.1 (Reaction latency). The minimum reaction time of $C_0$ is bounded below by $\tau_{\mathrm{sensor}} + \tau_{\mathrm{transport}}$.
+
+Proof. A disturbance $w$ must propagate through the sensor (delay $\tau_{\mathrm{sensor}}$), be processed by the PI law, and propagate through the actuator to the plant (delay $\tau_{\mathrm{transport}}$). No feedforward term is present, so the control action cannot precede the sensor observation. $\square$
+
+E.2 Controller $C_2$: deterministic MPC
+
+Definition E.2.
+
+u^*_{t:t+H} = \arg\min_{u_{t:t+H}} \sum_{k=0}^{H} \left[ \alpha E_{\mathrm{cool}}(t+k) + \beta W_{\mathrm{net}}(t+k) \right] \tag{E.2}
+
+subject to:
+
+x_{t+k+1} = f(x_{t+k}, u_{t+k}, \hat{w}_{t+k}; \theta) \tag{E.3}
+
+T_{d,i}(t+k) \leq T_{\max}, \quad \forall i, k \tag{E.4}
+
+\Delta P(t+k) \leq \Delta P_{\max} \tag{E.5}
+
+u_{\min} \leq u_{t+k} \leq u_{\max}, \quad \Delta u_{\min} \leq \Delta u_{t+k} \leq \Delta u_{\max} \tag{E.6}
+
+Property E.1. $C_2$ assumes $\hat{w} = w$ and $\theta = \hat\theta$. Its constraint satisfaction is guaranteed only under these nominal conditions.
+
+E.3 Controller $C_3$: min-max robust MPC
+
+Definition E.3.
+
+u^*_{t:t+H} = \arg\min_{u_{t:t+H}} \max_{w_{t:t+H} \in \mathcal{W}_t} \sum_{k=0}^{H} \left[ \alpha E_{\mathrm{cool}}(t+k) + \beta W_{\mathrm{net}}(t+k) \right] \tag{E.7}
+
+subject to (E.4)–(E.6) for all $w \in \mathcal{W}_t$.
+
+Property E.2 (Robustness scope). By construction, $C_3^W$ guarantees constraint satisfaction for all $w \in \mathcal{W}_t$. However, $C_3^W$ is robust only to workload uncertainty, not to parametric uncertainty $\mathcal{U}_\theta$, model error $\mathcal{U}_M$, or temporal drift $\mathcal{U}_t$.
+
+Proposition E.2 (Robust feasibility, conditional). If the dynamics $f$ are convex in $u$ and $w$, the constraints are convex, and $\mathcal{W}_t$ is convex, then the min-max problem (E.7) is equivalent to a convex program.
+
+Proof. Under the stated convexity assumptions, the inner max is a convex optimization in $w$ for each fixed $u$ (weak duality), and the outer min is convex in $u$. Strong duality under Slater's condition gives the stated equivalence. $\square$
+
+E.4 Controller $C_4$: adaptive robust MPC (ESO-based)
+
+Definition E.4. $C_4$ combines MPC with an extended state observer (ESO) and online Jacobian linearization:
+
+u^*_{t:t+H} = \arg\min_{u_{t:t+H}} J(u, \hat{w}_{t:t+H}, \hat\theta_t) \tag{E.8}
+
+ESO structure. Let $d_t$ denote the lumped disturbance (model mismatch + external). The ESO estimates:
+
+\hat{d}_{t+1} = \hat{d}_t + L_d (y_t - \hat{y}_t) \tag{E.9}
+
+\hat{x}_{t+1} = f(\hat{x}_t, u_t, \hat{w}_t; \hat\theta_t) + L_x (y_t - \hat{y}_t) \tag{E.10}
+
+where $L_x, L_d$ are observer gains.
+
+Online Jacobian linearization. The nonlinear dynamics are linearized around the current estimate:
+
+A_t = \frac{\partial f}{\partial x}\bigg|_{\hat{x}_t, u_t, \hat{w}_t}, \quad B_t = \frac{\partial f}{\partial u}\bigg|_{\hat{x}_t, u_t, \hat{w}_t} \tag{E.11}
+
+The MPC problem is then a QP:
+
+\min_{\Delta u} \frac{1}{2} \Delta u^T H_t \Delta u + g_t^T \Delta u \tag{E.12}
+
+subject to linearized constraints.
+
+Empirical anchor. Published ARMPC results report 88.4% compensation of model error, 5.58% energy reduction versus baseline, and 47× speedup relative to an MIQP benchmark.
+
+E.5 Controller $C_5$: contextual DRO
+
+Definition E.5. As in (D.6). The context vector $\zeta_t$ may include: workload regime indicator, ambient wet-bulb temperature, recent forecast residual magnitude, and time-of-day.
+
+Property E.3. CDRO reduces the robustness cost premium by approximately 13.7 percentage points relative to Min-Max MPC in published studies.
+
+E.6 Controller $C_6$: hierarchical control with workload intent
+
+Definition E.6. The two-level architecture:
+
+Upper level (scheduler interface):
+
+\iota_t = \Psi(\text{job class}, \text{queue state}, \text{arrival rate}) \tag{E.13}
+
+Lower level (cooling controller):
+
+u^*_{t:t+H} = \arg\min_{u_{t:t+H}} J(u, \hat{w}_{t:t+H}, \iota_t) \tag{E.14}
+
+Property E.4. Reported results show 56.4% fewer thermal violations and 60.2% less cumulative overshoot versus a PI loop.
+
+E.7 Information budget constraint
+
+Definition E.7. All controllers share a total identification + adaptation time:
+
+T_{\mathrm{id}}^{\mathrm{offline}}(C_i) + T_{\mathrm{online}}(C_i) = T_{\mathrm{budget}}, \quad \forall i \tag{E.15}
+
+Proposition E.3 (Fair comparison). Under (E.15), the comparison between explicit robustness ($C_3^W$, $C_5$) and online adaptation ($C_4$, $C_6$) is not biased by unequal information budgets.
+
+Proof. Both families receive the same total information. The trade-off is between pre-decision information (offline identification) and during-decision information (online estimation). $\square$
+
+---
+
+Appendix F. Feasibility and Pareto Theory
+
+F.1 Pareto order: strict partial order
+
+Definition F.1. $C_a \succ C_b$ iff $J_i(C_a) \leq J_i(C_b)$ for all $i$, with at least one strict inequality.
+
+Proposition F.1. $\succ$ is a strict partial order.
+
+Proof.
+(i) Irreflexivity: $C_a \succ C_a$ would require a strict inequality $J_j(C_a) < J_j(C_a)$, impossible.
+(ii) Asymmetry (implied by irreflexivity and transitivity): Suppose $C_a \succ C_b$ and $C_b \succ C_a$. Then $J(C_a) = J(C_b)$ componentwise, contradicting the strict inequality.
+(iii) Transitivity: If $J(C_a) \leq J(C_b) \leq J(C_c)$ componentwise with at least one strict inequality at each stage, then $J(C_a) \leq J(C_c)$ componentwise with at least one strict inequality. $\square$
+
+F.2 Feasibility set: conditional convexity
+
+Proposition F.2. If $f$ is convex in $(u, w)$, the constraints $g_j \leq 0$ are convex in $(x, u, w)$, and $\mathcal{W}_t$ and $\mathcal{U}_\theta$ are convex, then $\mathcal{F}$ is convex.
+
+Proof. For fixed $w, \theta$, the feasible set in $(x, u)$ is convex. Intersecting over $w \in \mathcal{W}_t$ and $\theta \in \mathcal{U}_\theta$ preserves convexity (arbitrary intersection of convex sets is convex). $\square$
+
+Corollary F.1. If $\mathcal{F}$ is convex, it is connected.
+
+Critical correction (retained). Without convexity assumptions, $\mathcal{F}$ can be disconnected. Nonlinear constraints (e.g., actuator rate limits, pressure drop bounds) can create disjoint feasibility regions. Connectivity cannot be decreed; it must be verified.
+
+F.3 Performance set and boundary
+
+Definition F.2. $\mathcal{R}_3 = \{ z \in \mathcal{F} : C_3 \text{ satisfies the performance criterion at } z \}$.
+
+Definition F.3. $\Gamma_3 = \partial \mathcal{R}_3 = \overline{\mathcal{R}_3} \cap \overline{\mathcal{Z} \setminus \mathcal{R}_3}$.
+
+Critical correction (retained). The Version 1 notation $\Gamma = \{z : C_3 \succ C_2\}$ conflated a set with its boundary. The correct distinction is between the set $\mathcal{R}_3$ and its boundary $\Gamma_3$.
+
+Proposition F.3 (Boundary characterization). $z \in \Gamma_3$ iff every neighborhood of $z$ contains both points of $\mathcal{R}_3$ and points of $\mathcal{Z} \setminus \mathcal{R}_3$.
+
+Proof. Standard definition of topological boundary. $\square$
+
+---
+
+Appendix G. Robust Feasibility
+
+G.1 Set-inclusion monotonicity
+
+Proposition G.1. If $\mathcal{W}_1 \subseteq \mathcal{W}_2$, then $\mathcal{F}(\mathcal{W}_2) \subseteq \mathcal{F}(\mathcal{W}_1)$.
+
+Proof. A control $u$ satisfying all constraints for all $w \in \mathcal{W}_2$ also satisfies them for all $w \in \mathcal{W}_1 \subseteq \mathcal{W}_2$. The converse is not true in general. $\square$
+
+Corollary G.1. If $\mathcal{U}_{\theta, 1} \subseteq \mathcal{U}_{\theta, 2}$, then $\mathcal{F}(\mathcal{U}_{\theta, 2}) \subseteq \mathcal{F}(\mathcal{U}_{\theta, 1})$.
+
+G.2 Feasibility mapping: monotonicity theorem
+
+Theorem G.1. For a fixed system, robust feasibility is:
+(i) non-increasing in $\sigma_W$;
+(ii) non-increasing in the size of $\mathcal{U}_\theta$;
+(iii) non-decreasing in the available safety margin.
+
+Proof. (i) and (ii) follow from Proposition G.1. (iii) A larger safety margin relaxes the effective constraint set, expanding the feasible region. $\square$
+
+G.3 Vector margin formulation
+
+Definition G.1. For constraints $g_j(x, u, w, \theta) \leq 0$, $j = 1, \dots, J$, robust feasibility is:
+
+\exists u : \sup_{w \in \mathcal{W}_t, \theta \in \mathcal{U}_\theta, M \in \mathcal{U}_M} g_j(x, u, w, \theta, M) \leq 0, \quad \forall j \tag{G.1}
+
+Critical correction (retained). The scalar bound $T_{d,i}^{\mathrm{nominal}} + \delta(\sigma_W) \leq T_{\max}$ covers only one thermal constraint. The vector formulation (G.1) is the correct general form, encompassing pressure, actuator, and rate constraints.
+
+---
+
+Appendix H. Stability of $\Gamma_3$
+
+H.1 Probabilistic stability
+
+Definition H.1. The justification boundary is probabilistically stable under $\mathcal{U}_\theta$ at level $\alpha$ if:
+
+S_{\Gamma_3}(z) = \Pr_{\theta \sim \mathcal{U}_\theta^{\mathrm{stat}}} \left[ z \in \mathcal{R}_3(\theta) \right] \geq 1 - \alpha \tag{H.1}
+
+Definition H.2 (Worst-case stability).
+
+S_{\Gamma_3}^{WC}(z) = \inf_{\theta \in \mathcal{U}_\theta^{\mathrm{stat}}} \mathbb{1}_{\mathcal{R}_3(\theta)}(z) \tag{H.2}
+
+Proposition H.1. $S_{\Gamma_3}^{WC}(z) \leq S_{\Gamma_3}(z)$.
+
+Proof. The worst-case indicator is bounded above by the probability, since the probability is an average of indicators. $\square$
+
+H.2 Hausdorff distance: metric properties
+
+Definition H.3. For two sets $A, B$ in a metric space $(\mathcal{Z}, d)$:
+
+d_H(A, B) = \max \left\{ \sup_{z \in A} \inf_{z' \in B} d(z, z'), \ \sup_{z' \in B} \inf_{z \in A} d(z, z') \right\} \tag{H.3}
+
+Proposition H.2 (Metric properties). On the space of non-empty compact subsets of $\mathcal{Z}$, $d_H$ is a metric.
+
+Proof. (i) Symmetry is immediate from the definition. (ii) $d_H(A, B) = 0$ iff $A = B$ for compact sets. (iii) Triangle inequality follows from the triangle inequality of $d$. $\square$
+
+Critical correction (retained). For unbounded or empty sets, $d_H$ can be infinite or undefined. We restrict to a compact study region $\mathcal{Z}$ and use a truncated Hausdorff distance:
+
+d_H^{\mathrm{trunc}}(A, B) = \min\left( d_H(A \cap \mathcal{Z}, B \cap \mathcal{Z}), \ D_{\max} \right) \tag{H.4}
+
+H.3 R1–R4 partition: exhaustiveness
+
+Proposition H.3. For any $z \in \mathcal{F}$, exactly one of R1–R4 holds.
+
+Proof. Partition $\mathcal{U}_\theta^{\mathrm{stat}}$ into:
+
+\mathcal{A}_+ = \{\theta : z \in \mathcal{R}_3(\theta)\}, \quad \mathcal{A}_- = \{\theta : z \notin \mathcal{R}_3(\theta)\} \tag{H.5}
+
+The four regimes correspond to: (R1) $\mathcal{A}_- = \emptyset$; (R2) $\mathcal{A}_+ \neq \emptyset$, $\mathcal{A}_- \neq \emptyset$, $z \in \mathcal{R}_3(\hat\theta)$; (R3) $\mathcal{A}_+ \neq \emptyset$, $\mathcal{A}_- \neq \emptyset$, $z \notin \mathcal{R}_3(\hat\theta)$; (R4) $\mathcal{A}_+ = \emptyset$. These cases are mutually exclusive and exhaustive. $\square$
+
+Operationalization. With $\alpha = 0.05$:
+
+· R1 if $S_{\Gamma_3}(z) \geq 0.95$;
+· R2 if $z \in \mathcal{R}_3(\hat\theta)$ and $0.5 \leq S_{\Gamma_3}(z) < 0.95$;
+· R3 if $z \notin \mathcal{R}_3(\hat\theta)$ and $S_{\Gamma_3}(z) > 0.5$;
+· R4 if $S_{\Gamma_3}(z) \leq 0.05$.
+
+H.4 Lipschitz sensitivity bound
+
+Proposition H.4. Let $z \in \mathcal{R}_3(\hat\theta)$ at distance $\varepsilon$ from $\partial \mathcal{R}_3(\hat\theta)$. If $\Gamma_3$ is locally $L_\Gamma$-Lipschitz in $\theta$:
+
+d_H(\Gamma_3(\theta_1), \Gamma_3(\theta_2)) \leq L_\Gamma \|\theta_1 - \theta_2\| \tag{H.6}
+
+then:
+
+z \in \mathcal{R}_3(\theta) \quad \forall \theta \in \mathcal{U}_\theta^{\mathrm{stat}} \ \text{if} \ \|\theta - \hat\theta\| < \frac{\varepsilon}{L_\Gamma} \tag{H.7}
+
+Proof. By Lipschitz continuity, the boundary displacement induced by a perturbation $\|\theta - \hat\theta\|$ is at most $L_\Gamma \|\theta - \hat\theta\| < \varepsilon$. Since $z$ is at distance $\varepsilon$ from the nominal boundary, it remains on the same side for all such perturbations. $\square$
+
+Critical correction (retained). Lipschitz continuity is an assumption, not a theorem. It can fail near feasibility transitions, changes in the active MPC solution, regime switches, or numerical bifurcations.
+
+H.5 Anisotropic sensitivity
+
+Definition H.4. The Jacobian of the boundary with respect to parameters is:
+
+J_\Gamma = \frac{\partial \Gamma_3}{\partial \theta} \tag{H.8}
+
+Proposition H.5. The most sensitive direction in $\mathcal{Z}$ is the left singular vector of $J_\Gamma$ associated with the largest singular value.
+
+Proof. By the SVD, the maximum amplification of a unit perturbation in $\theta$ is the largest singular value $\sigma_{\max}(J_\Gamma)$, achieved in the direction of the corresponding right singular vector. $\square$
+
+Status. This is a candidate original contribution. The literature search did not find direct prior work on anisotropic boundary sensitivity for MPC justification.
+
+H.6 Monte Carlo estimation of $S_{\Gamma_3}(z)$
+
+Algorithm H.1.
+
+1. Sample $\{\theta^{(i)}\}_{i=1}^{M}$ from $\mathcal{U}_\theta^{\mathrm{stat}}$ (using the conformal or chi-square set).
+2. For each $\theta^{(i)}$, determine whether $z \in \mathcal{R}_3(\theta^{(i)})$ by solving the robust feasibility problem.
+3. Estimate $\hat{S}_{\Gamma_3}(z) = \frac{1}{M} \sum_{i=1}^{M} \mathbb{1}_{z \in \mathcal{R}_3(\theta^{(i)})}$.
+4. Confidence interval via Clopper-Pearson.
+
+Proposition H.6 (Convergence). $\hat{S}_{\Gamma_3}(z) \to S_{\Gamma_3}(z)$ almost surely as $M \to \infty$.
+
+Proof. Strong law of large numbers applied to the i.i.d. indicators. $\square$
+
+---
+
+Appendix I. Falsifiability Theory
+
+I.1 Falsifiability theorem
+
+Theorem I.1. A hypothesis $H$ is falsifiable iff there exists an observable outcome $O \in \mathcal{O}$ incompatible with $H$.
+
+Proof. (⇒) If $H$ is falsifiable, by definition there exists a possible observation that would refute it. This is exactly the existence of $O \in \mathcal{O}$ incompatible with $H$. (⇐) If such $O$ exists, observing it refutes $H$; hence $H$ is falsifiable. $\square$
+
+Corollary I.1. Falsifiability does not require that any kill criterion be satisfied. It requires that the criteria be definable and observable in principle.
+
+I.2 Kill criteria: formal definitions
+
+Definition I.1 (Kill F1). $\lambda_{\min}(\mathcal{I}(\theta)) < 10^{-6}$ for all admissible excitations.
+
+Definition I.2 (Kill F2). $\kappa(\mathcal{I}) = \lambda_{\max}/\lambda_{\min} > 10^6$ under realistic noise.
+
+Definition I.3 (Kill F3). $\lambda_{\min}(\mathcal{I}_{\mathrm{band}}) < 10^{-4}$ for $\omega_H = 2\pi/(10\Delta t)$.
+
+Definition I.4 (Kill F4). RMSE$(T_{\mathrm{model}} - T_{\mathrm{meas}}) > 1.0$°C on held-out data.
+
+Definition I.5 (Kill F5). $d_H(\Gamma_3(\hat\theta), \Gamma_3(\theta)) > 0.1$ in normalized regime coordinates.
+
+Definition I.6 (Kill F6). Pressure prediction error $> 20\%$.
+
+Definition I.7 (Kill A). $\mathcal{R}_3^{\mathrm{nominal}} = \emptyset$.
+
+Definition I.8 (Kill B). $|\mathcal{R}_3^{\mathrm{uncertain}}|/|\mathcal{R}_3^{\mathrm{nominal}}| < 0.5$.
+
+Definition I.9 (Kill C). $C_4$ or $C_6$ Pareto-dominates $C_3$ on $> 70\%$ of sampled $z$.
+
+I.3 Falsification protocol
+
+Protocol I.1.
+
+1. Declare all kill thresholds before any CONTROL run.
+2. Execute the phases IDENTIFY, FORECAST, CONTROL, STRESS, MAP in order.
+3. Evaluate each kill criterion at the end of the corresponding phase.
+4. If any kill criterion is satisfied, the central hypothesis $H$ is refuted at that operating point.
+5. The thesis reports the set of operating points where $H$ survives and the set where $H$ is refuted.
+
+---
+
+Appendix J. Experimental Protocol Specification (Not Executed)
+
+J.1 Global sequence
+
+\text{IDENTIFY} \to \text{FORECAST} \to \text{CONTROL} \to \text{STRESS} \to \text{MAP} \ \mathcal{R}_3, \Gamma_3 \tag{J.1}
+
+J.2 Phase IDENTIFY
+
+Objective. Obtain $(\hat\theta, \mathcal{U}_\theta, \text{sufficiency proof})$.
+
+Sub-phases.
+
+Sub-phase Description Output
+F0 Model order selection (2-node vs 3-node) Minimal order $r^\star$
+F1 Log reparameterization $\phi_i = \ln\theta_i$ Reparameterized model
+F2 Excitation design (step, PRBS, chirp, E-optimal) Optimal $u^\star$
+F3 OED sensor placement $Y^\star \in \{Y_2, Y_3, Y_{\mathrm{OED}}\}$
+F4 Trajectory sensitivity computation $\mathcal{I}_{\mathrm{traj}}$
+F5 Bootstrap estimation of $\Sigma_\theta$ Confidence ellipsoid
+F6 Out-of-sample validation Generalization error
+F7 Residual analysis for $\mathcal{U}_M$ Structure error indicator
+F8 Real-data validation Kill criteria F1–F4 tests
+
+Real-data milestone (F8). At least one public dataset must be used:
+
+· Frontier supercomputer cooling dataset (2023), 10-min sampling, coolant supply/return temperatures, flow rates, power.
+· Kaggle cold source control dataset.
+· MIT Supercloud GPU power traces.
+
+J.3 Phase FORECAST
+
+Levels.
+
+Level Description Output
+$P_0$ Oracle True future $w$
+$P_1$ Deterministic Point forecast $\hat{w}$
+$P_2$ Probabilistic (conformal) Mondrian intervals
+$P_3$ Adversarial Worst-case $w \in \mathcal{W}_t$
+
+J.4 Phase CONTROL
+
+Objective. Implement $C_0, C_1, C_2, C_3^W, C_4, C_5, C_6$.
+
+Protocol.
+
+For each $(z, C_i)$:
+
+1. Simulate with the same workload trace.
+2. Compute $\mathbf{J}(C_i) = [E_{\mathrm{total}}, W_{\mathrm{net}}, C_{\mathrm{carbon}}, N_{\mathrm{viol}}, t_{\mathrm{solve}}, E_{\mathrm{solver}}]$.
+3. Apply the information budget constraint $T_{\mathrm{id}}^{\mathrm{offline}} + T_{\mathrm{online}} = T_{\mathrm{budget}}$.
+
+J.5 Phase STRESS: 2+2 stratified design
+
+Primary axes (2).
+
+· $\eta_W \in [0, 0.4]$ (workload uncertainty width).
+· Eigen-spectrum of $\Sigma_\theta$ (parameterized by condition number $\kappa \in [1, 10^4]$ and orientation).
+
+Secondary slices (2).
+
+· $H \in [1, 60]$ s.
+· $Y_{\mathrm{sensors}} \in \{Y_2, Y_3, Y^\star_{\mathrm{OED}}\}$.
+
+Covariate. $\Lambda \in [0.01, 1]$ (measured).
+
+Blocking factor. $\rho$ with at most two topologies.
+
+Sampling design.
+
+· Latin Hypercube or Sobol sequence on the primary axes.
+· Focused slices on the secondary axes.
+· Sobol sensitivity indices for the covariate.
+
+Number of points. $N_s = 500$–$1000$ on the primary axes; $N_s^{(2)} \sim 100$ per secondary slice.
+
+J.6 Phase MAP: algorithms
+
+Algorithm J.1 (Grid traversal).
+
+1. Sample $z$ via stratified sampling on the 2+2 design.
+2. For each $z$, determine membership in $\mathcal{F}$ and $\mathcal{R}_3$.
+3. Estimate $\Gamma_3$ by kernel density or support vector classification.
+
+Algorithm J.2 (Pareto front estimation).
+
+1. For each $z$ and each pair $(C_i, C_j)$, determine Pareto dominance.
+2. Use non-dominated sorting to extract the front.
+3. Use NSGA-II or MOEA/D for direct front estimation.
+
+Algorithm J.3 (Hausdorff distance computation).
+
+1. Discretize $\Gamma_3(\hat\theta)$ and $\Gamma_3(\theta)$ on a fine grid.
+2. Compute $d_H$ by sampling.
+3. Apply truncation at $D_{\max}$.
+
+Algorithm J.4 (Monte Carlo stability).
+
+1. Sample $\{\theta^{(i)}\}_{i=1}^{M}$ from $\mathcal{U}_\theta^{\mathrm{stat}}$.
+2. For each $z$ and each $\theta^{(i)}$, determine $z \in \mathcal{R}_3(\theta^{(i)})$.
+3. Estimate $\hat{S}_{\Gamma_3}(z) = \frac{1}{M}\sum_i \mathbb{1}_{z \in \mathcal{R}_3(\theta^{(i)})}$.
+4. Bootstrap confidence intervals.
+
+J.7 Joint compute-cooling benchmark
+
+Objective. Provide an upper bound on achievable savings. Published field data report 35.48% savings for joint optimization versus 23.4% for flow-only optimization. The gap between $C_3$ and the joint optimum quantifies the value of cross-layer coordination.
+
+---
+
+Appendix K. Pre-Registered Thresholds
+
+K.1 Kill thresholds
+
+ID Threshold Value
+F1 $\lambda_{\min}(\mathcal{I})$ $< 10^{-6}$
+F2 $\kappa(\mathcal{I})$ $> 10^6$
+F3 $\lambda_{\min}(\mathcal{I}_{\mathrm{band}})$ $< 10^{-4}$
+F4 RMSE$(T)$ $> 1.0$°C
+F5 $d_H(\Gamma_3)$ $> 0.1$
+F6 Pressure error $> 20\%$
+A $\mathcal{R}_3^{\mathrm{nominal}}$ $= \emptyset$
+B $ \mathcal{R}_3^{\mathrm{uncertain}}
+C Dominance fraction of $C_4$ or $C_6$ over $C_3$ $> 70\%$
+
+K.2 Utility weights and scales
+
+Decision function. $U(\mathbf{J}) = \sum_i \omega_i \tilde{J}_i$ with $\tilde{J}_i = (J_i - J_i^{\mathrm{ref}})/s_i$.
+
+Metric Weight $\omega_i$ Scale $s_i$ Reference $J_i^{\mathrm{ref}}$
+$E_{\mathrm{total}}$ TBD 1 MWh Baseline $C_0$
+$W_{\mathrm{net}}$ TBD 1000 L Baseline $C_0$
+$C_{\mathrm{carbon}}$ TBD 100 kgCO$_2$ Baseline $C_0$
+$N_{\mathrm{viol}}$ TBD 1 Baseline $C_0$
+$t_{\mathrm{solve}}$ TBD 1 s Baseline $C_0$
+$E_{\mathrm{solver}}$ TBD 1 kWh Baseline $C_0$
+
+Pre-registration requirement. Weights $\omega_i$ and scales $s_i$ must be declared before any CONTROL run.
+
+K.3 Sampling design parameters
+
+Parameter Value
+$N_s$ (primary axes) 500–1000
+$N_s^{(2)}$ (per secondary slice) 100
+$M$ (Monte Carlo) 1000
+$D_{\max}$ (truncation) 0.5
+$T_{\mathrm{budget}}$ 1 h
+$T_{\mathrm{id}}$ 600 s
+
+---
+
+Appendix L. Notation
+
+Symbol Definition
+$x_t$ Thermo-hydraulic state
+$u_t$ Control vector
+$w_t$ Heat load (exogenous)
+$y_t$ Measured outputs
+$\theta$ Physical parameters
+$\phi_i = \ln\theta_i$ Log-reparameterized parameters
+$\mathcal{I}(\theta)$ Fisher Information Matrix
+$\mathcal{S}_{\mathrm{traj}}$ Trajectory sensitivity matrix
+$\mathcal{U}_\theta$ Parametric uncertainty set
+$\mathcal{W}_t$ Workload uncertainty set
+$\mathcal{F}$ Robust feasibility set
+$\mathcal{R}_3$ Performance set of $C_3$
+$\Gamma_3 = \partial\mathcal{R}_3$ Justification boundary
+$S_{\Gamma_3}(z)$ Probabilistic stability
+$C_0$ Multi-loop PI
+$C_1$ Reactive workload-aware
+$C_2$ Deterministic MPC
+$C_3^W$ Workload-robust MPC
+$C_4$ Adaptive robust MPC
+$C_5$ Contextual DRO
+$C_6$ Hierarchical control
+$z = (\eta_W, \mathcal{U}_\theta, H, \Lambda, \rho, Y_{\mathrm{sensors}})$ Regime vector
+$\mathbf{J}(C_i)$ Metric vector
+$\eta_W$ Relative forecast error
+$\Lambda$ Time-scale ratio
+$\rho$ Topological complexity
+$Y_{\mathrm{sensors}}$ Sensor configuration
+
+
+Bibliography and Sources
+
+
+I. Direct-to-Chip Liquid Cooling for AI Systems
+
+[1] Liu, Z. (2026). Generative Design for Direct-to-Chip Liquid Cooling for Data Centers. arXiv:2604.10941. https://doi.org/10.48550/arxiv.2604.10941. 
+
+Use in proposal: Cited in Chapter 1 as evidence that lightweight physics-based modeling coupled with generative algorithms can improve D2C cooling performance, supporting the modeling decisions of Chapter 2.
+
+[2] Heydari, A., Gharaibeh, A. R., Tradat, M., Soud, Q., et al. Experimental evaluation of direct-to-chip cold plate liquid cooling for high-heat-density data centers. NSF Public Access Repository (PAR). 
+
+Use in proposal: Supports the experimental justification for D2C cooling as the only viable path for high-density AI clusters.
+
+[3] Modi, H. G. A Path to Commissioning of Direct-to-Chip Liquid Cooling for Hyperscale Data Centers using Experimental and CFD Techniques. PhD dissertation, University of Texas at Arlington. 
+
+Use in proposal: Cited in Chapter 2 as a methodological reference for commissioning and validation of D2C cooling systems.
+
+[4] Guye, K., Manepalli, V. V., Ateş, A., Dogruoz, B., Graham, S., & Agonafer, D. Experimental Investigation of Direct-to-Chip Evaporative Cooling Using Hollow Micropillar Arrays for High-Power AI Accelerators. University of Maryland, CALCE. 
+
+Use in proposal: Cited in Chapter 2 as evidence for two-phase/evaporative D2C cooling as a frontier technology, supporting the extension of the facility model in Section 2.3.
+
+---
+
+II. Model Predictive Control for Data Center Cooling
+
+[5] Yang, W., & Chen, J. (2026). Integrated Thermal and Power Management for Wave-Powered Subsea Data Centers via Nonlinear Model Predictive Control. arXiv:2609.34109. 
+
+Use in proposal: Cited in Chapter 5 as an example of NMPC applied to data center thermal management, with a three-node lumped thermal model and MIT Supercloud workload traces. Supports the NMPC architecture of $C_2$ and the use of the MIT Supercloud dataset.
+
+[6] Lazic, N., Lu, T., Boutilier, C., Ryu, M., et al. Data center cooling using model-predictive control. Advances in Neural Information Processing Systems 31. 
+
+Use in proposal: Foundational MPC reference for data center cooling. Cited in Chapter 5 to justify the MPC formulation.
+
+[7] Boldocký, J., Faulkner, C., Michael, E., Gulan, M., Tuor, A., & Drgoňa, J. (2026). Data Center Chiller Plant Optimization via Mixed-Integer Nonlinear Differentiable Predictive Control. arXiv. 
+
+Use in proposal: Cited in Chapter 5 as a benchmark for MIQP-based MPC formulations, providing context for the computational complexity comparison with $C_4$ (ARMPC).
+
+[8] Real-Time Control of Sustainable Data Centers: A Two-Layer Model Predictive Control Framework with Workload Flexibility and Heat Recovery. arXiv:2608.16432. 
+
+Use in proposal: Cited in Chapter 5 as an example of hierarchical MPC with workload flexibility, supporting the $C_6$ (JCTI) architecture.
+
+[9] Zhao, J., Chen, Z., Li, H., et al. (2024). A model predictive control for a multi-chiller system in data center considering whole system energy conservation. Energy and Buildings, 324. 
+
+Use in proposal: Cited in Chapter 5 as a reference for multi-loop MPC in data center cooling.
+
+---
+
+III. Robust, Adaptive, and Distributionally Robust Control
+
+[10] Shen, J., Shi, J., Yang, Y., Wu, C., Wang, D., Song, J. B., & Han, Z. (2026). Grid-Interactive Thermal Management of AI Data Centers via Contextual Distributionally Robust Optimization. arXiv:2607.00099. 
+
+Use in proposal: Core citation for $C_5$. The CDRO framework reduces the robustness cost premium by approximately 13.7 percentage points relative to Min-Max MPC, while achieving near-zero thermal violations under extreme workload spikes. Cited in Chapters 4, 5, and Appendix D as the strongest published baseline for the workload-uncertainty problem. 
+
+[11] A distributionally robust distributed coordination strategy for data center virtual power plants considering source-load uncertainty. IET Conference Proceedings, 2026. 
+
+Use in proposal: Cited in Chapter 4 as evidence for Wasserstein-based DRO in data center applications.
+
+[12] Carbon-aware scheduling and distributionally robust optimization for cloud systems: forecasting, battery storage, and adaptive ambiguity. Springer Professional, 2025. 
+
+Use in proposal: Cited in Chapter 4 as evidence for adaptive ambiguity-set refinement in DRO, supporting the adaptive Wasserstein radius proposal of Definition 4.4.
+
+[13] Unified linear time-invariant model predictive control for strong nonlinear chaotic systems. CORE. 
+
+Use in proposal: Cited in Chapter 5 as a reference for extended state observer (ESO) design in MPC, supporting the $C_4$ formulation.
+
+---
+
+IV. Identifiability, Fisher Information, and Trajectory Sensitivities
+
+[14] Wang, X. (2025). Identifiability and Parameter Estimation of Data Center Thermal Models Based on Trajectory Sensitivities. China International Youth Conference on Electrical Engineering (CIYCEE 2025). 
+
+Use in proposal: Critical citation for Chapter 3. Demonstrates that attempting to estimate unidentifiable parameters leads to sensitivity to initial conditions and unreliable outcomes, and that trajectory sensitivity analysis is the appropriate method for identifiability assessment. Directly supports the promotion of trajectory sensitivities to primary status in Version 2. 
+
+[15] Hiskens, I., & Pai, M. (2000). Trajectory Sensitivity Analysis of Hybrid Systems. IEEE Transactions on Circuits and Systems I. 
+
+Use in proposal: Foundational reference for the trajectory sensitivity ODE in Appendix B.2.
+
+[16] FEM-based A-optimal sensor placement for heat source inversion from final time measurement. arXiv (preprint). 
+
+Use in proposal: Cited in Chapter 3 and Appendix B.7 as the basis for A-optimal sensor placement in OED, expressed as sensor placement minimizing the trace of the posterior covariance.
+
+---
+
+V. Conformal Prediction and Uncertainty Quantification
+
+[17] Right-Sizing Recommendations (RSR): Cloud Workload Conformal Prediction for Virtual Machines in Data Center Operations. Accepted for publication in the Proceedings of the 2025 IEEE/WIC International Conference on Web Intelligence and Intelligent Agent Technology (WI-IAT 2025). arXiv:2607.24774. 
+
+Use in proposal: Core citation for Chapter 4. Provides the conformal prediction framework for workload forecasting with finite-sample coverage guarantees. Cited as the methodological basis for the conformal workload intervals of Section 4.7.
+
+[18] Yu, Q., Cao, Z., Wang, R., Yang, Z., Deng, L., Hu, M., Luo, Y., & Zhou, X. (2025). Dual-Splitting Conformal Prediction for Multi-Step Time Series Forecasting. arXiv:2503.21251. Applied Soft Computing, 184, Part B. 
+
+Use in proposal: Cited in Chapter 4 as a methodological reference for multi-step conformal prediction in time-series settings.
+
+[19] Yang, Y., Shi, J., Wang, D., Wu, C., & Han, Z. (2025). A Conformal Prediction-Based Chance-Constrained Programming Approach for 24/7 Carbon-Free Data Center Operation Scheduling. arXiv. 
+
+Use in proposal: Cited in Chapter 4 as evidence for conformal prediction in data center scheduling, supporting the integration of conformal intervals into the MPC constraint set.
+
+[20] When Does Conformal Recalibration Beat Re-specification? Distribution-Free Intervals for Next-Day Earthquake Counts in California. Zenodo. 
+
+Use in proposal: Cited in Appendix C.3 as evidence for Mondrian conformal prediction providing stronger conditional coverage properties than standard conformal prediction.
+
+---
+
+VI. Distributionally Robust Optimization Theory
+
+[21] Villani, C. (2009). Optimal Transport: Old and New. Springer. 
+
+Use in proposal: Foundational reference for the Kantorovich-Rubinstein duality (Theorem D.1) and the Wasserstein distance (Definition D.1) in Appendix D.
+
+[22] Towards Generalized Implementation of Wasserstein Distance in GANs. AAAI, 2023. 
+
+Use in proposal: Cited in Appendix D as an application of Kantorovich-Rubinstein duality, confirming the theoretical soundness of Wasserstein-based DRO.
+
+---
+
+VII. Copula Theory for Joint Uncertainty
+
+[23] Nelsen, R. B. (2006). An Introduction to Copulas. Springer. 
+
+Use in proposal: Foundational reference for Sklar's theorem (Theorem C.2) and copula-based dependence modeling in Appendix C.4.
+
+[24] Expanding conformal prediction to system identification. Pattern Recognition, 2025. 
+
+Use in proposal: Cited in Appendix C.4 as evidence for using copulas to capture output dependencies in conformal prediction for multi-output systems.
+
+[25] Copulas-based Individual Chance Constrained Programming (C³IP). ACS Publications. 
+
+Use in proposal: Cited in Chapter 4 and Appendix C.4 as a methodological reference for copula-based dependence modeling in chance-constrained optimization.
+
+[26] Joint Chance-Constrained Markov Decision Process with Gumbel-Hougaard Copula. SIAM Journal on Optimization, 35(3), 1703–1730, 2025. 
+
+Use in proposal: Cited in Appendix C.4 as evidence for copula-based dependence modeling in constrained optimization.
+
+---
+
+VIII. Water-Energy-Carbon Nexus
+
+[27] Brahmbhatt, P., Hemmati, M., Vergara-Zambrano, J., Charitopoulos, V. M., & Avraamidou, S. System-level water-energy-carbon optimization for urban infrastructure. UCL Discovery. 
+
+Use in proposal: Core citation for Chapter 2 and Chapter 6. Demonstrates that dry cooling saves local water but shifts resource burdens to regional grids, supporting the two-tier carbon metric of Section 2.3 and the inclusion of $\lambda_{\mathrm{water}}$ in $C_{\mathrm{carbon}}$. 
+
+[28] Iglesias Blanco, J., Heredia, I., Castrillo, M., Tsaregorodtsev, A., Ezzeddine, M., & López García, Á. (2026). GreenDirector: carbon-and water-aware workload placement for sustainable computing. arXiv:2609.12602. 
+
+Use in proposal: Cited in Chapter 6 as evidence that carbon-only accounting is an incomplete measure of environmental impact, supporting the inclusion of water metrics in the decision function.
+
+[29] Khalatbarisoltani, A., et al. (2026). Temperature-Aware Scheduling of LLM Inference in Large-Scale Geo-Distributed Edge Data Centers with Distributed Optimization. arXiv:2603.07810. 
+
+Use in proposal: Cited in Chapter 6 as evidence that carbon and water consumption during the inference phase can surpass training costs, supporting the operational relevance of the water-energy-carbon coupling.
+
+[30] Schneider Electric. AI data centers can run hot to stay cool: report. TechTarget, 2026. 
+
+Use in proposal: Cited in Chapter 2 as empirical evidence that raising TCS supply temperature from 32°C to 45°C reduces water usage effectiveness by 66% in Dallas and 82% in Paris, establishing $T_{\mathrm{supply}}$ as a first-class control variable.
+
+---
+
+IX. Hierarchical and Workload-Aware Control
+
+[31] Sunkara, K. C. (2026). Job Class Thermal Intent Aware Liquid Cooling Allocation for AI Data Centers. arXiv:2609.30785. 
+
+Use in proposal: Core citation for $C_6$. Demonstrates 56.4% fewer thermal violations and 60.2% less cumulative overshoot versus a PI loop by feeding job-class thermal signatures from the scheduler to the cooling controller. Cited in Chapters 5 and 10 as a key comparator for the co-primary question. 
+
+---
+
+X. Datasets and Benchmarks
+
+[32] Sun, et al. (2024). Energy Dataset of Frontier Supercomputer for Waste Heat Recovery. Scientific Data, 11, 1077. https://doi.org/10.1038/s41597-024-03913-w. 
+
+Use in proposal: Core dataset for the real-data IDENTIFY milestone (Phase F8). Provides one year of operational data at 10-minute resolution (49,869 timestamps for 2023), including supply and return temperatures, per-subloop flow rates and heat loads, and aggregate power consumption. 
+
+[33] Samsi, S., et al. (2022). The MIT Supercloud Dataset. arXiv. 
+
+Use in proposal: Core dataset for workload traces. Provides fine-grained measurements: 10-second CPU intervals and 100ms GPU traces, including power consumption, resource usage, and job-level CPU, memory, and GPU measurements. Cited in Chapters 10 and Appendix J. 
+
+[34] LC-Opt: Benchmarking Reinforcement Learning and Agentic AI for End-to-End Liquid Cooling Optimization in Data Centers. SlidesLive, 2025. 
+
+Use in proposal: Cited in Chapter 10 as a digital twin benchmark for the Frontier supercomputer cooling system.
+
+---
+
+XI. Optimal Experimental Design and Sensor Placement
+
+[35] FEM-based A-optimal sensor placement for heat source inversion. arXiv. 
+
+Use in proposal: Cited in Chapter 3 and Appendix B.7 as the methodological basis for OED-based sensor placement.
+
+---
+
+XII. Multi-Objective Optimization and Pareto Methods
+
+[36] Deb, K., Pratap, A., Agarwal, S., & Meyarivan, T. (2002). A fast and elitist multiobjective genetic algorithm: NSGA-II. IEEE Transactions on Evolutionary Computation, 6(2), 182–197.
+
+Use in proposal: Foundational reference for NSGA-II, cited in Chapter 10 and Appendix J.6 as the multi-objective optimization algorithm for Pareto front estimation.
+
+[37] Artificial neural network-assisted multi-objective optimization of perforated counter-flow regenerative evaporative coolers using NSGA-II. ScienceDirect. 
+
+Use in proposal: Cited in Chapter 10 as an application of NSGA-II with Sobol sampling and K-means clustering to cooling system optimization.
+
+---
+
+XIII. Statistical Methods
+
+[38] Clopper, C. J., & Pearson, E. S. (1934). The use of confidence or fiducial limits illustrated in the case of the binomial. Biometrika, 26(4), 404–413.
+
+Use in proposal: Cited in Appendix H.6 as the method for confidence intervals in Monte Carlo estimation of $S_{\Gamma_3}(z)$.
+
+[39] Clopper-Pearson interval Monte Carlo analysis. Various sources. 
+
+Use in proposal: Cited in Appendix H.6 as evidence for the validity of Clopper-Pearson intervals in Monte Carlo settings.
+
+---
+
+XIV. General Control Theory References
+
+[40] Mayne, D. Q., Rawlings, J. B., Rao, C. V., & Scokaert, P. O. M. (2000). Constrained model predictive control: Stability and optimality. Automatica, 36(6), 789–814.
+
+Use in proposal: Foundational MPC reference, implicit in the formulation of $C_2$, $C_3$, and $C_4$.
+
+[41] Boyd, S., & Vandenberghe, L. (2004). Convex Optimization. Cambridge University Press.
+
+Use in proposal: Foundational reference for the convexity arguments in Chapter 6 and Appendix F.
+
+[42] Weyl, H. (1912). Das asymptotische Verteilungsgesetz der Eigenwerte linearer partieller Differentialgleichungen. Mathematische Annalen, 71, 441–479.
+
+Use in proposal: Cited in Appendix B.6 for Weyl's monotonicity theorem, used in the proof of Proposition B.6 (qualitative improvement by additional sensor).
+
+---
+
+XV. Foundational Identifiability References
+
+[43] Walter, E., & Pronzato, L. (1997). Identification of Parametric Models from Experimental Data. Springer.
+
+Use in proposal: Foundational reference for identifiability analysis and the Fisher Information Matrix, cited in Chapter 3 and Appendix B.
+
+[44] Ljung, L. (1999). System Identification: Theory for the User (2nd ed.). Prentice Hall.
+
+Use in proposal: Foundational reference for system identification and parameter estimation, cited in Chapter 3.
+
+---
+
+XVI. Foundational DRO and Wasserstein References
+
+[45] Mohajerin Esfahani, P., & Kuhn, D. (2018). Data-driven distributionally robust optimization using the Wasserstein metric: Performance guarantees and tractable reformulations. Mathematical Programming, 171, 115–166.
+
+Use in proposal: Foundational reference for Wasserstein-based DRO, cited in Chapter 4 and Appendix D.
+
+[46] Blanchet, J., Kang, Y., & Murthy, K. (2019). Robust Wasserstein profile inference and applications to machine learning. Journal of Applied Probability, 56(3), 830–857.
+
+Use in proposal: Cited in Appendix D for the tractable reformulation of Wasserstein DRO.
+
+---
+
+XVII. Foundational Conformal Prediction References
+
+[47] Vovk, V., Gammerman, A., & Shafer, G. (2005). Algorithmic Learning in a Random World. Springer.
+
+Use in proposal: Foundational reference for conformal prediction, cited in Chapter 4 and Appendix C.
+
+[48] Lei, J., G'Sell, M., Rinaldo, A., Tibshirani, R. J., & Wasserman, L. (2018). Distribution-free predictive inference for regression. Journal of the American Statistical Association, 113(523), 1094–1111.
+
+Use in proposal: Cited in Appendix C.2 for split conformal prediction coverage guarantees.
+
+---
+
+XVIII. Foundational Copula References
+
+[49] Sklar, A. (1959). Fonctions de répartition à n dimensions et leurs marges. Publications de l'Institut de Statistique de l'Université de Paris, 8, 229–231.
+
+Use in proposal: Foundational reference for Sklar's theorem, cited in Appendix C.4.
+
+[50] Joe, H. (2014). Dependence Modeling with Copulas. CRC Press.
+
+Use in proposal: Cited in Appendix C.4 for copula-based dependence modeling.
+
+---
+
+XIX. Additional Sources Validated in the Search
+
+[51] Temperature-Aware Scheduling of LLM Inference in Large-Scale Geo-Distributed Edge Data Centers with Distributed Optimization. arXiv:2603.07810, 2026. 
+
+[52] Beyond Energy: When Sustainability Dimensions Reshape LLM Serving Decisions. arXiv:2609.35569, 2026. 
+
+[53] Data Center Cooling Choices Shift Water Impacts Across the Grid: An Integrated Water-Energy Model for Sustainable Data Center Development. arXiv:2609.25437, 2026. 
+
+[54] Real-Time Thermal Symmetry Control of Data Centers Based on Distributed Optical Fiber Sensing and Model Predictive Control. MDPI Symmetry. 
+
+[55] Leveraging Deep Reinforcement Learning within Optimal Renewable Energy Strategies for Sustainable AI Data Centers. JoVE, 2025. 
+
