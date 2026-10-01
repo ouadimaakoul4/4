@@ -1,10 +1,141 @@
 A Theory of Workload-Aware Robustness for Direct-to-Chip Cooling of AI Computing Systems
 
-Revised Theoretical PhD Proposal (Version 2)
+ouadi Maakoul and SI TEAM 
+
 
 Epistemic status note. This document distinguishes four levels of claim: (i) working hypotheses, which are modeling choices subject to validation; (ii) conditional propositions, provable under explicit hypotheses; (iii) expected results, to be produced by the experimental protocol; (iv) conjectures, which structure the research but are not yet demonstrated. No physical experiment, no bench test, and no code training has been performed at this stage. This is a theoretical and methodological framework, explicitly falsifiable. The protocol described in Chapter 10 has not been executed.
 
----
+Abstract
+
+A Theory of Workload-Aware Robustness for Direct-to-Chip Cooling of AI Computing Systems
+
+This thesis develops a falsifiable theoretical framework for deciding when workload-aware robust model predictive control (MPC) is justified for direct-to-chip (D2C) cooling of AI computing systems, and when the same robustness can be achieved more economically by online adaptation. The central premise is that controller robustness is not an intrinsic property of a control law but a property of the pair (controller, plant identifiability): a robust controller built on a poorly identifiable model is not operationally robust. The thesis therefore reframes the classical question "when is robustification justified?" — which presupposes a binary answer — as a regional characterization of the set
+
+\mathcal{R}_3 = \{ z : C_3 \text{ is non-dominated and operationally acceptable at } z \}
+
+where $z = (\eta_W, \mathcal{U}_\theta, H, \Lambda, \rho, Y_{\mathrm{sensors}})$ is the experimental regime, together with its boundary $\Gamma_3 = \partial \mathcal{R}_3$ and the stability of that boundary under parametric uncertainty.
+
+The theoretical contribution is organized along a chain
+
+\text{identifiability} \rightarrow \mathcal{U}_\theta \rightarrow \mathcal{F} \rightarrow \mathcal{R}_3 \rightarrow \Gamma_3 \rightarrow \text{robustification decision}
+
+in which the controllers $C_0$–$C_6$ become instruments for measuring this relation rather than the primary objects of study. The framework distinguishes robust feasibility $\mathcal{F}$ from robust performance $\mathcal{R}_3$; replaces scalar parametric uncertainty $\eta_\theta$ by a set $\mathcal{U}_\theta$; promotes trajectory sensitivities over the static Fisher Information Matrix as the primary identifiability tool; uses conformal prediction with Mondrian buckets for workload intervals and parametric uncertainty sets; and introduces a copula-based joint uncertainty set $\mathcal{U}_{W\theta}(\vartheta)$ to model the dependence between forecast error and parameter mis-estimation, which is conjectured to dominate the failure modes of robust MPC in practice.
+
+A co-primary question is elevated to equal standing: when must uncertainty be covered before the decision (explicit robustness, $C_3^W$ and contextual DRO $C_5$), and when can it be estimated during the decision (online adaptation, $C_4$ and hierarchical intent-based control $C_6$)? All controllers are compared under a shared information budget
+
+T_{\mathrm{id}}^{\mathrm{offline}}(C_i) + T_{\mathrm{online}}(C_i) = T_{\mathrm{budget}}, \quad \forall i
+
+so that the comparison is not biased by unequal access to excitation.
+
+The methodological contribution is a protocol
+
+\text{IDENTIFY} \rightarrow \text{FORECAST} \rightarrow \text{CONTROL} \rightarrow \text{STRESS} \rightarrow \text{MAP } \mathcal{R}_3, \Gamma_3
+
+with identification prior to any controller, a 2+2 stratified design that constrains the regime space to a statistically tractable dimensionality, optimal experimental design for sensor placement, and a real-data IDENTIFY milestone to enable non-vacuous testing of structural kill criteria. Nine pre-registered numerical kill criteria (F1–F6, A–C) render the framework explicitly falsifiable, and an R1–R4 partition classifies each regime as strongly positive, fragile positive, fragile negative, or strongly negative.
+
+No experiment, bench test, or code training has been performed. This is a theoretical and methodological proposal. All propositions are conditional on stated hypotheses; all numerical values appearing in the text are analytical constants, explicitly labeled illustrations, or pre-registered thresholds declared a priori. The central hypothesis — the value of robustness depends on the amount of information the identification experiment actually provides about the plant — remains falsifiable and untested. A negative result, in which formal robustness is found not to be cost-effective for D2C cooling in identified regimes, is a valid and publishable outcome.
+
+Keywords: direct-to-chip cooling; AI data centers; robust model predictive control; distributionally robust optimization; identifiability; trajectory sensitivities; conformal prediction; copulas; water-energy-carbon nexus; falsifiability.
+
+Introduction
+
+1. The Context: AI Computing and the Thermal Imperative
+
+The past decade has witnessed an acceleration in the scale and density of AI computing systems that has outpaced every prior generation of data center infrastructure. Training runs for frontier models now consume tens of megawatts, and the thermal design power of individual accelerators has crossed 1000 W per package, with multi-die assemblies approaching 1500 W. Air cooling, which served the industry for two decades, has reached a physical ceiling: the volumetric heat capacity of air is roughly 3500 times lower than that of water, and the convective resistance of an air-cooled heat sink cannot be reduced below the level required to keep junction temperatures within silicon reliability limits at these power densities.
+
+Direct-to-chip (D2C) liquid cooling has consequently emerged not as an option but as a structural necessity. In a D2C system, a cold plate is mounted directly on the die, and single-phase or two-phase coolant carries heat to a facility loop through a CDU (coolant distribution unit). The architecture is modular, retrofittable, and compatible with high-density racks, but it introduces a control problem of considerable difficulty: the thermal dynamics span four orders of magnitude in time constant, from die-level thermal capacitance (sub-second) through coldplate and coolant transport (tens of seconds) to facility loop and cooling tower (hundreds to thousands of seconds); the hydraulic network couples all zones through shared manifold pressure; and the heat load is not a smooth exogenous signal but a bursty, job-scheduled, spatially heterogeneous disturbance driven by the AI workload itself.
+
+To this is added an operational constraint that did not exist in the air-cooled era: water consumption. Evaporative heat rejection, which is the most energy-efficient pathway in most climates, consumes water at rates that have become a first-order sustainability concern for hyperscale operators. The water-energy-carbon nexus is no longer an academic abstraction; it is a control trade-off. Raising the chilled-water supply temperature from 32°C to 45°C has been reported to reduce water usage effectiveness by 66% in Dallas and 82% in Paris, at the cost of increased chiller energy in some configurations. The controller must therefore navigate a multi-objective landscape in which energy, water, carbon, and thermal safety are simultaneously at stake.
+
+2. The Control Problem: Uncertainty in Three Forms
+
+Model predictive control (MPC) is the natural candidate for this problem. It handles constraints explicitly, exploits a model to anticipate disturbances, and can be formulated to optimize a vector of metrics. Deterministic MPC, however, assumes that the future workload $\hat{w}_{t:t+H}$ and the plant parameters $\hat\theta$ are known exactly. In a real D2C system, neither assumption holds.
+
+Workload uncertainty. AI workloads are bursty and job-dependent. A training step may draw near-peak power for seconds and then idle; a checkpoint may produce a sharp thermal spike; a change in batch size or sequence length may shift the spatial distribution of heat across the package. Forecast error is not Gaussian in the tails, and it is precisely in the tails — during spikes — that robustness matters. Recent work has shown that conformal prediction, with its finite-sample coverage guarantees, is better suited than Gaussian covariance models for this regime.
+
+Parametric uncertainty. The physical parameters of the D2C plant — thermal resistances $R_d, R_{cp}$, capacitances $C_d, C_{cp}, C_c$, heat exchanger conductance $UA_{\mathrm{HX}}$, transport delays $\tau_{\mathrm{transport}}$ — are not known exactly. They are identified from noisy measurements, and the identification is not equally informative in all directions. In the two-node RC model, for example, the steady-state gain $G(0) = R_d + R_c$ reveals only the sum of the two resistances, not their individual values. The product $C_d R_c$ and the sum $C_d(R_d + R_c) + C_c R_c$ enter the denominator, and certain combinations of parameters can be changed without measurably affecting the output over the excited frequency band. This is practical non-identifiability, and it is not a pathology of a poorly designed experiment alone; it is a structural property of the reduced model.
+
+Model structure error and temporal drift. Even with perfect parameters, the reduced model is an approximation. Aging, fouling, coolant degradation, and changes in ambient conditions introduce drift that no static identification can capture. Online adaptation methods — extended state observers, online Jacobian linearization, recursive least squares — can partially compensate, but they consume excitation and require closed-loop data whose information content is not guaranteed.
+
+3. The Gap: Robustification as a Regional, Identifiability-Conditioned Decision
+
+The dominant framing in the robust control literature treats the decision to robustify as binary: either the controller is robust to a specified uncertainty set, or it is not. The cost of robustness — the "price of robustness" in the Bertsimas-Sim sense, or the "cost premium" in the DRO sense — is acknowledged but typically treated as a scalar to be minimized, not as a function of the experimental regime. The implicit assumption is that robustness is always desirable when uncertainty is present.
+
+This framing obscures three facts.
+
+First, robustness has a cost, and the cost is not uniform. The min-max MPC $C_3^W$ guarantees constraint satisfaction for all $w \in \mathcal{W}_t$, but it does so by paying for the worst case at every step. When the actual workload realization is far from the worst case — which is most of the time — the robust controller is conservative. The magnitude of this conservatism depends on the geometry of $\mathcal{W}_t$, the horizon $H$, and the ratio $\Lambda$ of workload to thermal time scales.
+
+Second, the value of robustness depends on identifiability. A robust controller that is robust to $\mathcal{U}_W$ but not to $\mathcal{U}_\theta$ may violate constraints not because the workload was worse than expected, but because the plant was not what the controller thought it was. This is not hypothetical. Published adaptive MPC work reports that online estimation compensates 88.4% of model error, implying that in the absence of adaptation, model error would have dominated the constraint violations. The question is not whether robustness is good in the abstract, but whether it is good given the information the identification experiment actually provides.
+
+Third, the strongest competitor to explicit robustness is not deterministic MPC but adaptive control. ARMPC with extended state observers, contextual distributionally robust optimization with real-time context adaptation, and hierarchical control with job-class thermal intent all achieve substantial robustness gains through mechanisms that are not min-max over a static uncertainty set. CDRO reduces the robustness cost premium by approximately 13.7 percentage points relative to min-max MPC while maintaining near-zero thermal violations under spikes. Job-class thermal intent reduces thermal violations by 56.4% versus a PI loop. These are not marginal benchmarks; they are alternative answers to the same question.
+
+The gap, then, is this: the literature lacks a framework for deciding where in the regime space robust MPC is non-dominated, how that region depends on identifiability, and when explicit robustness is dominated by online adaptation. This thesis proposes to fill that gap.
+
+4. The Central Questions
+
+The thesis is organized around a primary question and a co-primary question, which are answered jointly.
+
+Primary question. In which regions $z$ of the experimental regime space does workload-aware robust MPC remain non-dominated and operationally acceptable under the identified uncertainty? Formally, characterize the set
+
+\mathcal{R}_3 = \{ z \in \mathcal{F} : C_3 \text{ satisfies the performance criterion at } z \}
+
+its boundary $\Gamma_3 = \partial \mathcal{R}_3$, and the stability of $\Gamma_3$ under $\mathcal{U}_\theta$.
+
+Co-primary question. When must uncertainty be covered before the decision (explicit robustness), and when can it be estimated during the decision (online adaptation)? Formally, compare the family $\{C_3^W, C_5\}$ of explicit-robustness controllers against the family $\{C_4, C_6\}$ of adaptation-based controllers under a shared information budget
+
+T_{\mathrm{id}}^{\mathrm{offline}}(C_i) + T_{\mathrm{online}}(C_i) = T_{\mathrm{budget}}, \quad \forall i
+
+so that the comparison is not biased by unequal access to excitation.
+
+The two questions are not independent. The answer to the co-primary question determines which controller defines $\mathcal{R}_3$ in the primary question. The final object of study is therefore not a single controller but the relation between identifiability, uncertainty, feasibility, and performance.
+
+5. The Approach
+
+The thesis proceeds along a chain
+
+\text{identifiability} \rightarrow \mathcal{U}_\theta \rightarrow \mathcal{F} \rightarrow \mathcal{R}_3 \rightarrow \Gamma_3 \rightarrow \text{robustification decision}
+
+in which each arrow is a theoretical or methodological step, and the controllers $C_0$–$C_6$ are instruments for measuring the relation rather than the primary objects of study.
+
+Modeling. The plant is represented by a multi-zone RC network with two-node and three-node reductions. The facility loop is extended beyond the algebraic heat-rejection term of earlier versions to expose the chilled-water supply temperature $T_{\mathrm{supply}}$ as a control degree of freedom, and to predict water consumption $W_{\mathrm{net}}$ and carbon $C_{\mathrm{carbon}}$ as functions of the control input. Linear Parameter-Varying (LPV) models are retained as a credible alternative for the adaptive controller $C_4$.
+
+Identifiability. Trajectory sensitivities, not the static Fisher Information Matrix, are the primary identifiability tool. The Fisher Information Matrix is retained as a supporting diagnostic, with the important correction that the band-limited FIM must be weighted by the input power spectral density $\Phi_u(\omega)$, not by a rectangular band. Optimal experimental design is used for sensor placement, with A-optimal and E-optimal criteria.
+
+Uncertainty. The total uncertainty is decomposed as $\mathcal{U} = \mathcal{U}_W \times \mathcal{U}_\theta^{\mathrm{stat}} \times \mathcal{U}_M \times \mathcal{U}_t$, but the independence assumption between components is explicitly relaxed. A copula-based joint uncertainty set $\mathcal{U}_{W\theta}(\vartheta)$ is proposed to model the dependence between forecast error and parameter mis-estimation, with the conjecture that upper-tail dependence dominates the failure modes of robust MPC in practice. Conformal prediction with Mondrian buckets is used for workload intervals, and conformal calibration is used for parametric uncertainty sets in place of the Gaussian/chi-square approximation.
+
+Control. Seven controllers are compared: $C_0$ (multi-loop PI), $C_1$ (reactive workload-aware), $C_2$ (deterministic MPC), $C_3^W$ (workload-robust MPC), $C_4$ (adaptive robust MPC with ESO), $C_5$ (contextual DRO), and $C_6$ (hierarchical control with job-class intent). The comparison is conducted under a shared information budget and with pre-registered metrics.
+
+Falsifiability. Nine numerical kill criteria (F1–F6, A–C) are pre-registered before any CONTROL run. The falsifiability theorem states that the thesis is falsifiable iff there exists an observable outcome incompatible with its central hypothesis; the kill criteria define such observables a priori. A negative conclusion — that formal robustness is not cost-effective for D2C cooling in identified regimes — is a valid and publishable scientific result.
+
+Experimental protocol. The protocol is
+
+\text{IDENTIFY} \rightarrow \text{FORECAST} \rightarrow \text{CONTROL} \rightarrow \text{STRESS} \rightarrow \text{MAP } \mathcal{R}_3, \Gamma_3
+
+with identification prior to any controller, a 2+2 stratified design that constrains the regime space to a statistically tractable dimensionality, and a real-data IDENTIFY milestone using public datasets (Frontier supercomputer cooling data, MIT Supercloud workload traces) to enable non-vacuous testing of structural kill criteria.
+
+6. Contributions
+
+The thesis makes six theoretical contributions, eight methodological contributions, and one final contribution.
+
+Theoretical. (i) A copula-based model of the dependence between workload and parametric uncertainty, which is the proposal's most original secondary contribution. (ii) A formalization of the distinction between robust feasibility $\mathcal{F}$ and robust performance $\mathcal{R}_3$. (iii) An identifiability theory for the reduced D2C model based on trajectory sensitivities, with a conditional degeneracy proposition, band-dependent identifiability with input-spectrum weighting, and OED-based sensor placement. (iv) A definition of the stability of $\Gamma_3$ under parametric uncertainty, with the R1–R4 partition and quantitative operationalization thresholds. (v) A falsifiability theorem with pre-registered numerical kill thresholds. (vi) A formal comparison between explicit robustification and online adaptation under a shared information budget.
+
+Methodological. The IDENTIFY → FORECAST → CONTROL → STRESS → MAP protocol; E-optimal and D-optimal excitation design with amplitude constraints; the distinction between maximum physical identifiability and controller-relevant identifiability; the separation of IDENTIFY and FORECAST phases; Mondrian conformal prediction for workload intervals with conditional coverage on spikes; the 2+2 stratified experimental design; the real-data IDENTIFY milestone; and the explicit modeling of the water-energy-carbon coupling.
+
+Final contribution. The characterization of $\mathcal{R}_3$ as the set of regimes where the workload-aware robust MPC is non-dominated, together with the analysis of its stability under $\mathcal{U}_\theta$ and the resolution of the co-primary question. If $\mathcal{R}_3^{\mathrm{nominal}} \neq \varnothing$ and $\Gamma_3$ is stable, workload-aware robustness is justified in that region. Otherwise, the conclusion is that formal robustness is not cost-effective for D2C, which is itself an informative result.
+
+7. Epistemic Status and Scope
+
+No physical experiment, no bench test, and no code training has been performed at this stage. This is a theoretical and methodological framework, explicitly falsifiable. The document distinguishes four levels of claim: working hypotheses, which are modeling choices subject to validation; conditional propositions, provable under explicit hypotheses; expected results, to be produced by the experimental protocol; and conjectures, which structure the research but are not yet demonstrated. All numerical values appearing in the text are analytical constants derived symbolically, illustrative values explicitly labeled as such, or pre-registered thresholds declared a priori as part of the falsifiability framework.
+
+The thesis does not claim to invent a new coolant, a new controller, or a new architecture. It proposes a decision methodology: how to determine, in a falsifiable manner, whether formal robustness is justified in a given context. The answer can be positive, negative, or conditional — in all cases, it is informative.
+
+8. Roadmap
+
+Chapter 1 formulates the problem and states the primary and co-primary questions. Chapter 2 develops the multi-scale thermo-hydraulic model, including the extended facility-side model with the water-energy-carbon coupling. Chapter 3 develops the identifiability theory based on trajectory sensitivities, with the conditional degeneracy proposition and OED-based sensor placement. Chapter 4 develops the uncertainty sets, including the copula-based joint set and the conformal calibration. Chapter 5 specifies the seven controllers $C_0$–$C_6$. Chapter 6 constructs the feasibility and performance sets, with the two-level decision function. Chapter 7 formalizes robust feasibility with the vector-margin formulation. Chapter 8 analyzes the stability of $\Gamma_3$ under parametric uncertainty, with the R1–R4 partition. Chapter 9 states the falsifiability theorem and the nine kill criteria with pre-registered numerical thresholds. Chapter 10 specifies the experimental protocol. Chapter 11 summarizes the contributions. Chapter 12 concludes with the open question of whether robustness is a property of the controller or of the pair (controller, plant identifiability).
+
+The appendices contain the complete mathematical derivations, proofs, and methodological specifications. Appendix A derives the two-node and three-node transfer functions and the hydraulic mixing equations. Appendix B develops the identifiability theory, including the trajectory sensitivity ODE and the band-limited FIM. Appendix C develops the uncertainty sets and conformal prediction. Appendix D develops the distributionally robust optimization theory. Appendix E specifies the controllers. Appendix F develops the Pareto theory. Appendix G formalizes robust feasibility. Appendix H develops the stability theory. Appendix I states the falsifiability theory. Appendix J specifies the experimental protocol. Appendix K lists the pre-registered thresholds. Appendix L provides the notation table.
+
+
 
 Chapter 1. Problem Formulation
 
