@@ -1,0 +1,1985 @@
+V-Core: Toward Autonomous Scientific Authority
+
+A Type-Theoretic Architecture for Verifiable Machine Science
+
+Version 11.0 — Proof-Carrying Invariants, Lineage-Bounded Authority, and Effective-Time Revocation
+
+---
+
+Abstract
+
+We present Version 11.0 of V-Core, a formal architecture for machine-generated scientific claims that acquire typed authority without per-claim human validation, under stipulated constitutional assumptions. Version 11.0 is a corrective release: it aligns the mechanization with the prose, closing several gaps flagged in review of v10.0. Six substantive changes are made. (i) The proposition parameter T is no longer phantom: Proof is parameterised by an explicit, named set of checkers, and the TCB assumption Sound c is a hypothesis on the mechanized theorem, never an implicit axiom. (ii) Claim acquires a private constructor; its invariants (authority bound, capability membership) are carried as fields, so they survive even if the constructor discipline is relaxed. (iii) Faithfulness is re-formalised as a relation Reform P T populated by an independent formalizer with T \leftrightarrow T' as data, replacing the vacuous Faithfulness.yes = Faithfulness.yes. (iv) No-escalation is proved over a lineage structure Descends a L, mechanically enforcing that a verifier's authority is bounded by every ancestor's, correcting the reversed induction in v10.0. (v) Dependents are defined on a global Ledger with Relation.TransGen, so Lemma 7.5 is genuinely transitive and admits dependents with different propositions. (vi) Revocation is effective-time indexed, so pre-compromise claims survive. The Promotion guard is corrected: a claim is held if a dependency is held, not if a dependent is held. The coverage table is downgraded to match the repository, the export-format risk is documented with named prior art (nanocomparator, FLT's permitted_axioms, unsorry's diff-of-formalisations), and citation errors are corrected. We do not report empirical results.
+
+---
+
+1. Introduction
+
+1.1 The Verification Problem
+
+We separate capability (producing specialist-quality output) from authority (trust without per-claim human validation). The governing question is unchanged:
+
+Under what conditions can machine-generated scientific claims acquire authority without per-claim human validation, under explicitly stipulated constitutional assumptions?
+
+1.2 What Changed from v10.0
+
+Version 10.0 asserted that a "soundness gap" was closed by parameterising Proof and Claim on T : \mathrm{Prop}. In fact, Proof T carried no evidence of T, because its payload was proofBytes : String. Version 11.0 replaces this with a checker-parameterised proof (Definition 4.2), in which soundness is an explicit hypothesis on any theorem that consumes the proof. Similarly, v10.0's seal returned a Claim type from a public structure; the invariant was true only of the function, not of the type. Version 11.0 uses a private constructor and field-carried invariants so the invariant is a property of the type.
+
+1.3 Contributions
+
+1. Checker-parameterised proofs (§4). The proof-checking TCB is a named hypothesis Sound c, not an implicit assumption. Diversity theorem: one sound checker suffices.
+2. Lineage-bounded authority (§5). No-escalation is stated over arbitrary finite chains and proved by structural induction on Descends.
+3. Faithfulness as data (§6). Reform P T witnesses an independent formalizer with T \leftrightarrow T'; the negative branch \phi(c) = \text{no} corresponds to absence of such a witness.
+4. Field-carried claim invariants (§7). authBound : α ≤ v.auth and inTheta : v.id ∈ ctx.caps are stored, so Claim carries its own evidence of well-formedness.
+5. Global ledger with transitive taint (§8). DepStar is Relation.TransGen; Lemma 8.4 (transitive hold) and Theorem 8.6 (pre-compromise survival) are proved against a Ledger.
+6. Corrected Promotion guard (§8.4). A claim is held when a dependency is held; the v10.0 direction was reversed.
+
+1.4 Non-Claims
+
+We do not claim truth. We do not claim elimination of hallucination. We do not report empirical results. The module below is core Lean 4 only; Mathlib is not imported. Mechanization coverage is given in §13 and is deliberately narrower than the prose in every case where the repo does not yet contain a proof.
+
+1.5 Epistemic Classification
+
+Tier Sources
+1 (Peer-reviewed) Cerisier (PLDI 2026, DOI 10.1145/3808287); Cerise (JACM 2024)
+2 (Preprint) Eigenius (arXiv:2608.04457); EviBound (arXiv:2511.05524); Rasheed et al. (arXiv:2602.13855)
+3 (Specification) NISTIR 8213 draft v2 (2019); SLSA v1.0; in-toto attestation format
+4 (Tooling / prior art) nanocomparator; unsorry; FLT permitted_axioms; Lean4Lean
+4 (Vocabulary) Proof Protocol v1.0; Kernel–Solver Thesis
+
+---
+
+2. Mathematical Preliminaries
+
+2.1 Dependent Claim Types
+
+Definition 2.1 (Verified claim, informal). A verified claim over T : \mathrm{Prop} is a tuple \langle T, p, w, \alpha, \kappa, \sigma, \pi, \tau, \phi \rangle together with an accepted-checker set cs such that every c \in cs accepts p.\text{bytes} at T.
+
+The formal definition (Definition 4.2) makes the checker set explicit, so that soundness of p at T is derivable only from a named hypothesis about some c \in cs.
+
+2.2 Trust Boundary
+
+The proof-checking TCB is
+
+\mathrm{TCB}_\text{proof} \;=\; \bigwedge \begin{cases} \text{Lean kernel} \\ \text{Lean4Lean} \\ \text{nanoda\_lib @ pinned commit} \\ \text{multi-checker export agreement} \\ \text{axiom whitelist \texttt{permitted\_axioms}} \end{cases}
+
+Remark 2.2 (Residual export-format risk). No checker is assumed sound. nanoda_lib trusts the exporter to emit a well-formed .export file; the export format is part of the TCB. Prior art that motivates this framing:
+
+· FLT repository (Anthropic) double-checks each proof with a Comparator binding the proof to a reference statement, plus nanoda on a lean4export file, under a permitted_axioms list.
+· nanocomparator ports Lean's Comparator to Rust on top of nanoda; it formalises statement-binding, which is exactly the mechanism V-Core's Reform (§6) abstracts.
+· unsorry uses two independent autoformalizations, normalises and diffs them, and flags disagreements; its known weakness is correlated formalizer error, which we name as Assumption 6.4.
+· con-leche reports checkers accepting export streams the official kernel rejects on metadata fields; this motivates the multi-checker TCB in §2.2.
+
+Correction 2.3. v10.0 cited "NIST SP 1276 v3 (2024)". The correct reference for the beacon construction used here is NISTIR 8213 draft v2 (2019). We cite the draft we rely on and do not assert that a v3 has been published.
+
+2.3 Freshness vs. Unforgeability
+
+\mathrm{NF\text{-}Remote} = \mathrm{EUF\text{-}CMA} \mid \mathrm{key\_integrity}, \qquad
+\mathrm{Freshness} = \mathrm{beacon\text{-}combine} \mid \exists i.\, \mathrm{Beacon}_i\ \text{honest}
+
+NISTIR 8213 draft v2 combination with precommitment:
+
+A[T{-}1].\mathrm{precommit} = \mathrm{SHA512}(A[T].\mathrm{localRandom})
+
+Z \leftarrow \mathrm{SHA512}\bigl(A[T{-}1].\mathrm{output} \parallel B[T{-}1].\mathrm{output} \parallel A[T].\mathrm{localRandom} \parallel B[T].\mathrm{localRandom}\bigr)
+
+The beacon provides freshness, not unforgeability.
+
+---
+
+3. Authority Poset
+
+3.1 Sub-Posets
+
+\mathcal{A}_\mathrm{formal} = \{\texttt{declared} \prec \texttt{derived} \prec \texttt{verified}\},\quad
+\mathcal{A}_\mathrm{emp} = \{\texttt{untested} \prec \texttt{observed} \prec \texttt{replicated}\},\quad
+\mathcal{A}_\mathrm{repro} = \{\texttt{unverified} \prec \texttt{traceable} \prec \texttt{reproducible}\}
+
+Each is a finite total chain; encode via toNat.
+
+3.2 Product Order
+
+\mathcal{A} = \mathcal{A}_\mathrm{formal} \times \mathcal{A}_\mathrm{emp} \times \mathcal{A}_\mathrm{repro}, \qquad
+(a_1, b_1, c_1) \preceq (a_2, b_2, c_2) \iff a_1 \le a_2 \wedge b_1 \le b_2 \wedge c_1 \le c_2
+
+Theorem 3.1 (Partial order, mechanized). (\mathcal{A}, \preceq) is a partial order.
+
+Proof. Reflexivity and transitivity are componentwise Nat.le_refl and Nat.le_trans. For antisymmetry, apply the injectivity lemmas for toNat componentwise:
+
+```lean
+theorem Authority.le_antisymm {a b : Authority} (h1 : a ≤ b) (h2 : b ≤ a) : a = b := by
+  have hf := Formal.toNat_inj (Nat.le_antisymm h1.1 h2.1)
+  have he := Empirical.toNat_inj (Nat.le_antisymm h1.2.1 h2.2.1)
+  have hr := Repro.toNat_inj (Nat.le_antisymm h1.2.2 h2.2.2)
+  cases a; cases b; simp_all
+```
+
+\square
+
+Theorem 3.2 (Join, mechanized). Authority.sup is a least upper bound: a \le a \sqcup b, b \le a \sqcup b, and a \le c \wedge b \le c \Rightarrow a \sqcup b \le c. The proof is componentwise on the finite chains.
+
+3.3 Well-Formedness of the Product
+
+Definition 3.3 (WF). An authority a is well formed, a \in \mathrm{WF}, iff empirical support of at least observed requires provenance of at least traceable:
+
+a.\text{emp} \geq \texttt{observed} \;\Rightarrow\; a.\text{repro} \geq \texttt{traceable}
+
+Observation 3.4 (Orthogonality, corrected). A tautology \top is formal-maximal and empirical-undefined: it is not a claim in the empirical sub-poset. A falsifiable prediction is empirical-maximal and formal-minimal. v10.0 said "empirical-maximal" of a tautology; the corrected statement is that orthogonality is a structural property of the well-formed product, not of the bare product.
+
+---
+
+4. Checkers: The TCB Made Explicit
+
+Definition 4.1 (Checker). A checker is an untrusted-by-default relation
+
+c : \langle \text{name} : \mathrm{String},\ \text{accepts} : \mathrm{String} \to \mathrm{Prop} \to \mathrm{Prop} \rangle.
+
+Its soundness is a separate hypothesis:
+
+\mathrm{Sound}(c) := \forall\, \text{bytes} : \mathrm{String},\ \forall\, T : \mathrm{Prop},\ c.\mathrm{accepts}(\text{bytes}, T) \to T.
+
+Definition 4.2 (Proof). For a non-empty list cs : \mathrm{List}\,\mathrm{Checker} and T : \mathrm{Prop},
+
+\mathrm{Proof}(cs, T) := \bigl\langle \text{bytes} : \mathrm{String},\ \text{meta} : \mathrm{Meta},\ \text{witnessHash} : \mathrm{String},\ \text{nonempty} : cs \ne [],\ \text{accepted} : \forall c \in cs.\, c.\mathrm{accepts}(\text{bytes}, T) \bigr\rangle.
+
+Theorem 4.3 (Diversity, mechanized). One sound checker in the accepted set suffices:
+
+\exists c \in cs.\ \mathrm{Sound}(c) \;\Rightarrow\; \forall p : \mathrm{Proof}(cs, T).\ T.
+
+```lean
+theorem Proof.sound {cs : List Checker} {T : Prop} (p : Proof cs T)
+    (hs : ∃ c, c ∈ cs ∧ Sound c) : T :=
+  let ⟨c, hc, hsound⟩ := hs
+  hsound p.bytes T (p.accepted c hc)
+```
+
+Corollary 4.4 (No false proofs, mechanized).
+
+\bigl(\exists c \in cs.\ \mathrm{Sound}(c)\bigr) \Rightarrow \neg\,\mathrm{Nonempty}\bigl(\mathrm{Proof}(cs, \mathrm{False})\bigr).
+
+Definition 4.5 (Concrete compatibility). For a hash function H : \mathrm{String} \to \mathrm{String},
+
+\mathrm{Compat}(H, p, w) := p.\mathrm{meta} = w.\mathrm{meta} \wedge p.\mathrm{witnessHash} = H\,(w.\mathrm{artifact}).
+
+Remark 4.6. v10.0's K_α was string equality with no hash function, making Lemma 4.4 vacuous. The current Compat compares a meta record (data, not a tautology) and an explicit hash of the artifact. Any assumption on H (collision resistance) is external and named, not silently assumed.
+
+---
+
+5. Verifiers and No-Escalation
+
+5.1 Lineage Structure
+
+A nested inductive Verifier-contains-Verifier is rejected by Lean's kernel, so ancestry is a lineage (nearest parent first) with a proof that authority is non-increasing along it.
+
+Definition 5.1 (Descends).
+
+\mathrm{Descends}(a, [\,]) := \top, \qquad
+\mathrm{Descends}(a, p :: ps) := a \le p \wedge \mathrm{Descends}(p, ps).
+
+Lemma 5.2 (Mechanized). If \mathrm{Descends}(a, L) and x \in L, then a \le x.
+
+```lean
+theorem Descends.mem_le : ∀ (l : List Authority) (a : Authority),
+    Descends a l → ∀ x, x ∈ l → a ≤ x
+  | [], _, _, x, hx => by cases hx
+  | p :: ps, a, ⟨hap, hrest⟩, x, hx => by
+      cases hx with
+      | head => exact hap
+      | tail _ hx' => exact Authority.le_trans hap (Descends.mem_le ps p hrest x hx')
+```
+
+5.2 Verifier
+
+Definition 5.3 (Verifier). With a private constructor,
+
+\mathrm{Verifier} := \langle \mathrm{id} : \mathbb{N},\ \mathrm{auth} : \mathcal{A},\ \mathrm{lineage} : \mathrm{List}\,\mathcal{A},\ \mathrm{descends} : \mathrm{Descends}(\mathrm{auth}, \mathrm{lineage}) \rangle.
+
+Assumption 5.4 (Sole constructor). The only ways to obtain a Verifier are
+
+\texttt{Genesis.root}(g, \mathrm{id}, a, h) \quad\text{and}\quad \texttt{Verifier.issue}(p, \mathrm{id}, a, h : a \le p.\mathrm{auth}).
+
+This module-boundary discipline is the single residual architectural assumption.
+
+Definition 5.5 (Issuance).
+
+\texttt{issue}(p, \mathrm{id}, a, h) := \langle \mathrm{id},\ a,\ p.\mathrm{auth} :: p.\mathrm{lineage},\ \langle h, p.\mathrm{descends} \rangle \rangle.
+
+Theorem 5.6 (No-escalation, mechanized). Every verifier's authority is bounded by every ancestor's authority:
+
+\forall v\, \forall x \in v.\mathrm{lineage}.\ v.\mathrm{auth} \le x.
+
+```lean
+theorem no_escalation (v : Verifier) : ∀ x, x ∈ v.lineage → v.auth ≤ x :=
+  Descends.mem_le v.lineage v.auth v.descends
+```
+
+Corollary 5.7. A newly issued verifier is bounded by its parent:
+
+(p.\texttt{issue}\ \mathrm{id}\ a\ h).\mathrm{auth} \le p.\mathrm{auth}.
+
+Correction 5.8. v10.0 wrote h_\text{no-escalation} : \alpha_i \preceq \alpha_{i+1}, which admits escalation. The correct hypothesis is a \le p.\mathrm{auth} at each issuance step, and the induction on Descends closes over arbitrary finite chains.
+
+---
+
+6. Faithfulness
+
+Definition 6.1 (Reform). A reformalisation of an informal statement P at a proposition T is
+
+\mathrm{Reform}(P, T) := \langle \mathrm{formalizerId} : \mathbb{N},\ T' : \mathrm{Prop},\ \mathrm{equiv} : T \leftrightarrow T' \rangle.
+
+Definition 6.2 (\equiv_\mathrm{reform}). Two propositions T, T' are \equiv_\mathrm{reform}-equivalent iff there exists a definitional isomorphism T \leftrightarrow T' after normalisation. Formally:
+
+T \equiv_\mathrm{reform} T' \;:=\; \exists\, e : T \leftrightarrow T'.\ \mathrm{Normalises}(e).
+
+Design note. v10.0 defined \equiv_\mathrm{reform} by definitional equality; this is not decidable in general and excludes provably-equivalent but not-definitionally-equal reformalisations. Version 11.0 uses provable equivalence; the checker-supplied equiv : T ↔ T' field is the mechanism.
+
+Definition 6.3 (Faithfulness predicate).
+
+\phi(c) = \texttt{yes} \;\iff\; \exists\, r : \mathrm{Reform}(P, T_c).\ r.\mathrm{formalizerId} \ne \mathrm{producer}(c).
+
+The negative branch is the absence of such a witness.
+
+Assumption 6.4 (Formalizer independence). Prior art (unsorry) documents that two formalisations by correlated formalizers may share errors. V-Core names this as an assumption: \mathrm{Reform} requires independent formalizers, and any guarantee that two formalizers are independent is external.
+
+Remark 6.5 (Comparator connection). nanocomparator binds a proof to a reference statement, which is the formal half of \mathrm{Reform}. V-Core treats statement binding as a checker property (§4) and the informal-to-formal mapping as external data (§6), keeping the two separate.
+
+---
+
+7. Claims
+
+Definition 7.1 (Claim). With a private constructor,
+
+\mathrm{Claim}(cs, T, \alpha) := \bigl\langle \mathrm{cid} : \mathbb{N},\ \mathrm{proof} : \mathrm{Proof}(cs, T),\ \mathrm{verifier} : \mathrm{Verifier},\ \mathrm{ctx} : \mathrm{Context},\ \mathrm{authBound} : \alpha \le \mathrm{verifier}.\mathrm{auth},\ \mathrm{inTheta} : \mathrm{verifier}.\mathrm{id} \in \mathrm{ctx}.\mathrm{caps} \bigr\rangle.
+
+The invariants authBound and inTheta are fields of the type. Any Claim value satisfies them, whether or not it was produced by sealClaim. This is the correction to v10.0's Theorem 5.1, which was true by signature alone.
+
+Definition 7.2 (SEAL).
+
+\frac{
+\begin{array}{c}
+p : \mathrm{Proof}(cs, T) \quad w : \mathrm{Witness} \quad \mathrm{Compat}(H, p, w) \\
+v : \mathrm{Verifier} \quad v.\mathrm{id} \in \mathrm{ctx}.\mathrm{caps} \quad \alpha \le v.\mathrm{auth} \\
+r : \mathrm{Reform}(P, T) \quad r.\mathrm{formalizerId} \ne \mathrm{producer}
+\end{array}
+}{
+\mathrm{sealClaim}(H, \mathrm{ctx}, \mathrm{cid}, \mathrm{producer}, v, \alpha, p, w, r) : \mathrm{Claim}(cs, T, \alpha)
+}
+
+Theorem 7.3 (Claim soundness, mechanized). A claim c : \mathrm{Claim}(cs, T, \alpha) satisfies T under the assumption that some checker in cs is sound:
+
+\bigl(\exists k \in cs.\ \mathrm{Sound}(k)\bigr) \Rightarrow T.
+
+```lean
+theorem Claim.sound {cs : List Checker} {T : Prop} {α : Authority}
+    (c : Claim cs T α) (hs : ∃ k, k ∈ cs ∧ Sound k) : T := c.proof.sound hs
+```
+
+Theorem 7.4 (Ancestor bound, mechanized). For any claim c, \alpha \le x for every ancestor x of c.\mathrm{verifier}:
+
+\forall x \in c.\mathrm{verifier}.\mathrm{lineage}.\ \alpha \le x.
+
+---
+
+8. Revocation–Promotion Interaction
+
+8.1 Ledger and Effective-Time Revocation
+
+Definition 8.1 (Ledger).
+
+\mathrm{Ledger} := \langle \mathrm{deps} : \mathbb{N} \to \mathrm{List}\,\mathbb{N},\ \mathrm{signer} : \mathbb{N} \to \mathbb{N},\ \mathrm{sealedAt} : \mathbb{N} \to \mathbb{N} \rangle,
+
+where \mathrm{deps}(c) lists the claims that c depends on.
+
+Definition 8.2 (Revocations). \mathrm{Rev} := \mathbb{N} \to \mathrm{Option}\,\mathbb{N}; \mathrm{rev}(v) = \mathrm{some}\ t means verifier v is revoked with effective time t.
+
+Definition 8.3 (HOLD, inductive).
+
+\frac{\mathrm{rev}(L.\mathrm{signer}(c)) = \mathrm{some}\ t \quad t \le L.\mathrm{sealedAt}(c)}{\mathrm{HOLD}(L, \mathrm{rev}, c)} \tag{H-direct}
+
+\frac{d \in L.\mathrm{deps}(c) \quad \mathrm{HOLD}(L, \mathrm{rev}, d)}{\mathrm{HOLD}(L, \mathrm{rev}, c)} \tag{H-taint}
+
+Definition 8.4 (DepStar).
+
+\mathrm{DepStar}(L, c, d) := \mathrm{Relation.TransGen}\bigl(\lambda c\, d.\ d \in L.\mathrm{deps}(c)\bigr)(c, d).
+
+8.2 Key Lemma
+
+Lemma 8.5 (Transitive freeze, mechanized). If c transitively depends on a held d, then c is held:
+
+\mathrm{DepStar}(L, c, d) \wedge \mathrm{HOLD}(L, \mathrm{rev}, d) \;\Rightarrow\; \mathrm{HOLD}(L, \mathrm{rev}, c).
+
+```lean
+theorem hold_of_depStar {L : Ledger} {rev : Revocations} {c d : Nat}
+    (h : DepStar L c d) (hd : Hold L rev d) : Hold L rev c := by
+  revert hd
+  induction h with
+  | single hcd => exact fun hd => Hold.taint hcd hd
+  | tail _ hbc ih => exact fun hd => ih (Hold.taint hbc hd)
+```
+
+Correction 8.6. v10.0's Dependents ranged over claims with the same T, \alpha, \kappa, \sigma, \pi, \tau, \phi, excluding dependents with a different proposition, and used String ∈ String. The ledger formulation above is heterogeneous and transitive.
+
+8.3 Effective-Time Behaviour
+
+Theorem 8.7 (Pre-compromise survival, mechanized). If a claim was sealed strictly before its signer's effective compromise time, it is not directly held:
+
+L.\mathrm{sealedAt}(c) < t \;\wedge\; \mathrm{rev}(L.\mathrm{signer}(c)) = \mathrm{some}\ t \;\Rightarrow\; \neg\bigl(t \le L.\mathrm{sealedAt}(c)\bigr).
+
+```lean
+theorem pre_compromise_not_direct {L : Ledger} {rev : Revocations} {c t : Nat}
+    (_hr : rev (L.signer c) = some t) (hbefore : L.sealedAt c < t) :
+    ¬ (rev (L.signer c) = some t ∧ t ≤ L.sealedAt c) := by
+  intro ⟨_, h⟩; omega
+```
+
+Pre-compromise claims may still be tainted through a dependency; the theorem only rules out the direct revocation clause.
+
+8.4 Promotion
+
+Definition 8.8 (Promotion).
+
+\frac{
+\alpha \le \alpha' \quad \alpha' \le c.\mathrm{verifier}.\mathrm{auth} \quad \neg\,\mathrm{HOLD}(L, \mathrm{rev}, c.\mathrm{cid})
+}{
+c : \mathrm{Claim}(cs, T, \alpha) \;\longmapsto\; c' : \mathrm{Claim}(cs, T, \alpha')
+}
+
+Theorem 8.9 (Correct guard, mechanized). A claim with a held dependency is itself held, so promotion cannot fire:
+
+d \in L.\mathrm{deps}(c) \wedge \mathrm{HOLD}(L, \mathrm{rev}, d) \;\Rightarrow\; \mathrm{HOLD}(L, \mathrm{rev}, c).
+
+```lean
+theorem held_dependency_blocks {L : Ledger} {rev : Revocations} {c d : Nat}
+    (hdep : d ∈ L.deps c) (hd : Hold L rev d) : Hold L rev c := Hold.taint hdep hd
+```
+
+Correction 8.10. v10.0's Promotion rule blocked a claim c if a dependent of c was revoked. This is the wrong direction: revocation of a dependent does not taint its dependency. The corrected guard blocks c when a dependency is held. Theorem 7.6 of v10.0 is withdrawn.
+
+Remark 8.11 (Regime stability). v10.0's regimeStable as "no revocation anywhere" is over-broad; it would freeze the entire ledger on any revocation. Version 11.0 replaces it with the explicit HOLD-based premise: a promotion is admissible iff c is not held under the current ledger and revocation map.
+
+---
+
+9. Architecture
+
+9.1 Layers
+
+Layer Component Interface Trust boundary
+1 Ontology (Eigenius/EigenTT) Claim cs T α multi-checker TCB + axiom whitelist
+2 Execution (EviBound) Candidate → Artifact → VerifiedArtifact runner-side signing (§9.4)
+3 Capability (Cerise/Cerisier) Capability[α], versioned points-to Cerisier memory model
+4 Freshness (NISTIR 8213 draft v2) Attest(claim, pulse) \exists i.\ \mathrm{Beacon}_i honest
+
+9.2 Operational Semantics
+
+\mathrm{Claim} \xrightarrow{\text{Approval}} \mathrm{Candidate} \xrightarrow{\text{Exec}} \mathrm{Artifact} \xrightarrow{\text{Verify}} \mathrm{SealedClaim}
+
+9.3 Cerisier Boundary
+
+Cerisier is used for host/memory hardening: unforgeable capabilities, sentry capabilities, version-numbered points-to, local enclave attestation. Credential-DAG revocation is a separate epoch-based mechanism (§8).
+
+9.4 Runner-Side Signing (Corrected)
+
+v10.0 signed after the fact with sk_\alpha. Version 11.0 requires the runner to sign the provenance record before releasing the artifact:
+
+\mathrm{Attestation} = \mathrm{Sign}_{sk_\text{runner}}\bigl(\mathrm{Hash}(T) \parallel \mathrm{run\_id} \parallel \mathrm{artifact\_hashes} \parallel \mathrm{SLSA\_provenance} \parallel \mathrm{sealedAt}\bigr).
+
+The verifier's signature is a second signature binding the runner's attestation to an authority; the runner signature is what prevents retrospective artifact substitution.
+
+9.5 Corrected CVE Scope
+
+CVE-2026-69146 affects MLflow 3.13.0–3.15.0: LogInputs is absent from BEFORE_REQUEST_HANDLERS, allowing any authenticated user to inject DatasetInput records into another user's lineage via POST /api/2.0/mlflow/runs/log-inputs. It does not substitute run_ids or touch artifacts or metrics. The architectural lesson is unchanged: cryptographic provenance binding replaces a mutable tracking server as the root of trust.
+
+---
+
+10. Separation Constraint
+
+Design Constraint 10.1. Anchor consistency (V_0, \mathcal{M}, \mathcal{R}) cannot be certified from within the claim layer.
+
+Justification. Self-certification of anchors requires the system to reason about its own consistency (Gödel II). Formalisation sketch: type the constitutional set in a universe \mathcal{U}_\text{const} and show that no total function \mathcal{U}_\text{const} \to \mathrm{Prop} can certify its own soundness without external stipulation. Status: design constraint, not mechanized.
+
+Corollary 10.2. Anchor consistency is constitutional and logged externally.
+
+---
+
+11. Claim-Level Auditability (AAR)
+
+Mapping AAR metrics (Rasheed et al., arXiv:2602.13855) to V-Core:
+
+AAR metric V-Core counterpart
+Provenance coverage PCov Fraction of claims with complete deps-chains to genesis
+Provenance soundness Compat(H, p, w) ∧ φ(c) = yes
+Contradiction transparency V(c) = FAIL surfaced in the ledger
+Audit effort Cost of independent Reform + witness re-run
+
+The product poset and \phi operationalize AAR; AAR metrics evaluate V-Core.
+
+---
+
+12. Threat Model
+
+Attack Target Mitigation
+Capability forgery NF-Local Cerisier
+Signature forgery NF-Remote EUF-CMA
+Genesis corruption NF-Constitutional Quorum + external log
+Regime slippage Soundness Explicit HOLD premise (§8)
+Artifact fabrication Provenance in-toto/SLSA + runner-side signing (§9.4)
+Prompt injection Verification Gate Schema validation
+Semantic laundering Evidence Semantic audit
+Beacon compromise Freshness Beacon combination
+Credential revocation bypass Provenance Effective-time revocation + transitive taint (Thm 8.5)
+Provenance injection Verification Gate Cryptographic binding
+Faithfulness failure Claim validity Reform + Assumption 6.4
+Verified-but-wrong promotion Claim validity Red-team benchmark
+Export-format defect Proof checking Multi-checker TCB + permitted_axioms
+
+Red-Team Protocol (Design). Four documented AI-scientist failure modes: bad benchmark choice, data leakage, metric misuse, positive-result bias. Primary metric: Verified-but-Wrong Rate (VWR). Publish protocol as artifact before execution.
+
+---
+
+13. Mechanization Coverage
+
+Strict reading: "mechanized" means a lake build-checked artifact exists in the repository. The table reflects the repository as of v11.0; anything not listed as mechanized is prose.
+
+Component Status
+Authority poset + partial order (Thm 3.1) Mechanized
+Authority sup / lub (Thm 3.2) Mechanized
+Well-formedness predicate (Def 3.3) Mechanized (predicate only; no theorem yet)
+Checker framework + diversity (Thm 4.3) Mechanized
+No false proofs (Cor 4.4) Mechanized
+Compat predicate (Def 4.5) Mechanized (predicate only)
+Descends + no-escalation (Thm 5.6) Mechanized
+Sole-constructor discipline (Asm 5.4) Assumed (module boundary)
+Reform (Def 6.1) Mechanized (structure only)
+\equiv_\mathrm{reform} decision procedure Not mechanized
+Claim + invariants (Def 7.1) Mechanized
+Claim soundness (Thm 7.3) Mechanized
+Claim ancestor bound (Thm 7.4) Mechanized
+Ledger + HOLD (Def 8.1–8.3) Mechanized
+Transitive freeze (Thm 8.5) Mechanized
+Pre-compromise survival (Thm 8.7) Mechanized
+Corrected promotion guard (Thm 8.9) Mechanized
+newEvidence, gapsClosed Defined, not mechanized
+Beacon combination (NISTIR 8213 draft v2) Specified
+in-toto/SLSA provenance binding Specified
+Runner-side signing Specified
+Multi-checker export integrity Specified
+Lean \to Cerise refinement Demoted to motivation
+Anchor consistency (Def 10.1) Design constraint
+
+Axiom audit. Run lake build and #print axioms on each mechanized theorem above. The module imports core Lean 4 only, no Mathlib; no sorryAx should appear.
+
+---
+
+14. Conclusion
+
+Version 11.0 corrects the mechanization–prose gap in v10.0 and narrows the coverage claim to what the repository proves. The irreducible human dependencies are:
+
+1. The constitutional stipulation of (\mathcal{M}, \mathcal{R}, \mu) and of the genesis verifier set (§10).
+2. The external formalizer that supplies Reform P T (§6, Assumption 6.4).
+3. The sole-constructor discipline on Verifier (Assumption 5.4), enforced by module boundaries rather than the kernel.
+4. The soundness hypothesis on at least one checker in cs (Theorem 4.3), never an implicit axiom.
+
+Under those assumptions, V-Core produces typed, scoped, provenance-aware authority with: field-carried claim invariants that survive a public constructor, no-escalation over arbitrary finite issuance lineages, effective-time revocation with transitive taint, and a corrected promotion guard. It does not produce truth; it produces claims whose authority is bounded by every ancestor and whose soundness is conditional on a named checker being sound.
+
+Appendices to V-Core v11.0
+
+The following appendices expand V-Core v11.0 with full Lean source, proofs, architecture, protocol specifications, design rationale, and open obligations. Notation: \mathcal{A} denotes the authority poset; L the ledger; \mathrm{rev} the effective-time revocation map; \mathrm{cs} a non-empty checker list; H : \mathrm{String} \to \mathrm{String} a hash function.
+
+---
+
+Appendix A — Full Lean 4 Module
+
+Core Lean 4 only; no Mathlib. The module is intended to be self-contained and to compile under lake build with no sorry.
+
+```lean
+/-!
+# V-Core v11.0 — core Lean 4 module
+
+Design invariants (see main text §1.2):
+* Invariants are carried IN THE TYPE (proof-carrying fields).
+* The proof-checking TCB is a named hypothesis `Sound c`, never implicit.
+* Authority bounds attach to verifiers via a lineage, so no-escalation is a
+  theorem over ancestry.
+* Revocation/HOLD lives on a global `Ledger`; taint flows from DEPENDENCIES
+  to dependents, with an effective (compromise) time.
+-/
+
+namespace VCore
+
+/-! ## A.1 Authority poset -/
+
+inductive Formal    | declared | derived  | verified     deriving DecidableEq, Repr
+inductive Empirical | untested | observed | replicated   deriving DecidableEq, Repr
+inductive Repro     | unverified | traceable | reproducible deriving DecidableEq, Repr
+
+def Formal.toNat : Formal → Nat
+  | .declared => 0 | .derived => 1 | .verified => 2
+def Empirical.toNat : Empirical → Nat
+  | .untested => 0 | .observed => 1 | .replicated => 2
+def Repro.toNat : Repro → Nat
+  | .unverified => 0 | .traceable => 1 | .reproducible => 2
+
+theorem Formal.toNat_inj {a b : Formal} (h : a.toNat = b.toNat) : a = b := by
+  cases a <;> cases b <;> simp_all [Formal.toNat]
+
+theorem Empirical.toNat_inj {a b : Empirical} (h : a.toNat = b.toNat) : a = b := by
+  cases a <;> cases b <;> simp_all [Empirical.toNat]
+
+theorem Repro.toNat_inj {a b : Repro} (h : a.toNat = b.toNat) : a = b := by
+  cases a <;> cases b <;> simp_all [Repro.toNat]
+
+structure Authority where
+  formal    : Formal
+  empirical : Empirical
+  repro     : Repro
+  deriving DecidableEq, Repr
+
+def Authority.le (a b : Authority) : Prop :=
+  a.formal.toNat    ≤ b.formal.toNat    ∧
+  a.empirical.toNat ≤ b.empirical.toNat ∧
+  a.repro.toNat     ≤ b.repro.toNat
+
+instance : LE Authority := ⟨Authority.le⟩
+
+theorem Authority.le_refl (a : Authority) : a ≤ a :=
+  ⟨Nat.le_refl _, Nat.le_refl _, Nat.le_refl _⟩
+
+theorem Authority.le_trans {a b c : Authority} (h1 : a ≤ b) (h2 : b ≤ c) : a ≤ c :=
+  ⟨Nat.le_trans h1.1 h2.1,
+   Nat.le_trans h1.2.1 h2.2.1,
+   Nat.le_trans h1.2.2 h2.2.2⟩
+
+theorem Authority.le_antisymm {a b : Authority} (h1 : a ≤ b) (h2 : b ≤ a) : a = b := by
+  have hf := Formal.toNat_inj    (Nat.le_antisymm h1.1     h2.1)
+  have he := Empirical.toNat_inj (Nat.le_antisymm h1.2.1   h2.2.1)
+  have hr := Repro.toNat_inj     (Nat.le_antisymm h1.2.2   h2.2.2)
+  cases a; cases b; simp_all
+
+def Formal.sup    (a b : Formal)    : Formal    := if a.toNat ≤ b.toNat then b else a
+def Empirical.sup (a b : Empirical) : Empirical := if a.toNat ≤ b.toNat then b else a
+def Repro.sup     (a b : Repro)     : Repro     := if a.toNat ≤ b.toNat then b else a
+
+def Authority.sup (a b : Authority) : Authority :=
+  ⟨a.formal.sup b.formal, a.empirical.sup b.empirical, a.repro.sup b.repro⟩
+
+theorem Authority.le_sup_left (a b : Authority) : a ≤ a.sup b := by
+  refine ⟨?_, ?_, ?_⟩
+  · cases ha : a.formal <;> cases hb : b.formal
+    <;> simp [Authority.sup, Formal.sup, Formal.toNat, ha, hb]
+  · cases ha : a.empirical <;> cases hb : b.empirical
+    <;> simp [Authority.sup, Empirical.sup, Empirical.toNat, ha, hb]
+  · cases ha : a.repro <;> cases hb : b.repro
+    <;> simp [Authority.sup, Repro.sup, Repro.toNat, ha, hb]
+
+theorem Authority.le_sup_right (a b : Authority) : b ≤ a.sup b := by
+  refine ⟨?_, ?_, ?_⟩
+  · cases ha : a.formal <;> cases hb : b.formal
+    <;> simp [Authority.sup, Formal.sup, Formal.toNat, ha, hb]
+  · cases ha : a.empirical <;> cases hb : b.empirical
+    <;> simp [Authority.sup, Empirical.sup, Empirical.toNat, ha, hb]
+  · cases ha : a.repro <;> cases hb : b.repro
+    <;> simp [Authority.sup, Repro.sup, Repro.toNat, ha, hb]
+
+theorem Authority.sup_le {a b c : Authority} (h1 : a ≤ c) (h2 : b ≤ c) :
+    a.sup b ≤ c := by
+  obtain ⟨f1, e1, r1⟩ := h1
+  obtain ⟨f2, e2, r2⟩ := h2
+  refine ⟨?_, ?_, ?_⟩
+  · cases ha : a.formal <;> cases hb : b.formal
+    <;> simp_all [Authority.sup, Formal.sup, Formal.toNat]
+  · cases ha : a.empirical <;> cases hb : b.empirical
+    <;> simp_all [Authority.sup, Empirical.sup, Empirical.toNat]
+  · cases ha : a.repro <;> cases hb : b.repro
+    <;> simp_all [Authority.sup, Repro.sup, Repro.toNat]
+
+def Authority.WF (a : Authority) : Prop :=
+  1 ≤ a.empirical.toNat → 1 ≤ a.repro.toNat
+
+/-! ## A.2 Checkers -/
+
+structure Checker where
+  name    : String
+  accepts : String → Prop → Prop
+
+def Sound (c : Checker) : Prop :=
+  ∀ (bytes : String) (T : Prop), c.accepts bytes T → T
+
+structure Meta where
+  usage : Nat
+  scope : Nat
+  epoch : Nat
+  deriving DecidableEq, Repr
+
+structure Proof (cs : List Checker) (T : Prop) where
+  bytes       : String
+  meta        : Meta
+  witnessHash : String
+  nonempty    : cs ≠ []
+  accepted    : ∀ c, c ∈ cs → c.accepts bytes T
+
+theorem Proof.sound {cs : List Checker} {T : Prop} (p : Proof cs T)
+    (hs : ∃ c, c ∈ cs ∧ Sound c) : T :=
+  let ⟨c, hc, hsound⟩ := hs
+  hsound p.bytes T (p.accepted c hc)
+
+theorem no_proof_of_false {cs : List Checker}
+    (hs : ∃ c, c ∈ cs ∧ Sound c) : ¬ Nonempty (Proof cs False) :=
+  fun ⟨p⟩ => p.sound hs
+
+structure Witness where
+  artifact : String
+  meta     : Meta
+
+def Compat (H : String → String) {cs : List Checker} {T : Prop}
+    (p : Proof cs T) (w : Witness) : Prop :=
+  p.meta = w.meta ∧ p.witnessHash = H w.artifact
+
+/-! ## A.3 Verifier lineage and no-escalation -/
+
+def Descends : Authority → List Authority → Prop
+  | _, []      => True
+  | a, p :: ps => a ≤ p ∧ Descends p ps
+
+theorem Descends.mem_le : ∀ (l : List Authority) (a : Authority),
+    Descends a l → ∀ x, x ∈ l → a ≤ x
+  | [],        _, _, x, hx => by cases hx
+  | p :: ps,   a, ⟨hap, hrest⟩, x, hx => by
+      cases hx with
+      | head        => exact hap
+      | tail _ hx'  => exact Authority.le_trans hap
+                            (Descends.mem_le ps p hrest x hx')
+
+structure Verifier where
+  private mk ::
+  id       : Nat
+  auth     : Authority
+  lineage  : List Authority
+  descends : Descends auth lineage
+
+structure Genesis where
+  roots : List (Nat × Authority)
+
+def Genesis.root (g : Genesis) (id : Nat) (a : Authority)
+    (_h : (id, a) ∈ g.roots) : Verifier :=
+  Verifier.mk id a [] trivial
+
+def Verifier.issue (p : Verifier) (id : Nat) (a : Authority)
+    (h : a ≤ p.auth) : Verifier :=
+  Verifier.mk id a (p.auth :: p.lineage) ⟨h, p.descends⟩
+
+theorem no_escalation (v : Verifier) :
+    ∀ x, x ∈ v.lineage → v.auth ≤ x :=
+  Descends.mem_le v.lineage v.auth v.descends
+
+theorem issue_no_escalation (p : Verifier) (id : Nat) (a : Authority)
+    (h : a ≤ p.auth) : (p.issue id a h).auth ≤ p.auth := h
+
+theorem issue_bounded_by_all_ancestors (p : Verifier) (id : Nat) (a : Authority)
+    (h : a ≤ p.auth) :
+    ∀ x, x ∈ p.lineage → (p.issue id a h).auth ≤ x :=
+  fun x hx => Authority.le_trans h (no_escalation p x hx)
+
+/-! ## A.4 Faithfulness as data -/
+
+structure Reform (P : String) (T : Prop) where
+  formalizerId : Nat
+  T'           : Prop
+  equiv        : T ↔ T'
+
+/-! ## A.5 Claims -/
+
+structure Context where
+  caps : List Nat
+
+structure Claim (cs : List Checker) (T : Prop) (α : Authority) where
+  private mk ::
+  cid       : Nat
+  proof     : Proof cs T
+  verifier  : Verifier
+  ctx       : Context
+  authBound : α ≤ verifier.auth
+  inTheta   : verifier.id ∈ ctx.caps
+
+def sealClaim {cs : List Checker} {T : Prop} {P : String}
+    (H : String → String) (ctx : Context) (cid : Nat) (producer : Nat)
+    (v : Verifier) (α : Authority)
+    (p : Proof cs T) (w : Witness)
+    (_hcompat : Compat H p w)
+    (hcap : v.id ∈ ctx.caps)
+    (hα : α ≤ v.auth)
+    (r : Reform P T) (_hind : r.formalizerId ≠ producer) :
+    Claim cs T α :=
+  Claim.mk cid p v ctx hα hcap
+
+theorem Claim.sound {cs : List Checker} {T : Prop} {α : Authority}
+    (c : Claim cs T α) (hs : ∃ k, k ∈ cs ∧ Sound k) : T :=
+  c.proof.sound hs
+
+theorem Claim.bounded_by_ancestors {cs : List Checker} {T : Prop} {α : Authority}
+    (c : Claim cs T α) : ∀ x, x ∈ c.verifier.lineage → α ≤ x :=
+  fun x hx => Authority.le_trans c.authBound (no_escalation c.verifier x hx)
+
+/-! ## A.6 Ledger, HOLD, effective-time revocation -/
+
+structure Ledger where
+  deps     : Nat → List Nat
+  signer   : Nat → Nat
+  sealedAt : Nat → Nat
+
+abbrev Revocations := Nat → Option Nat
+
+inductive Hold (L : Ledger) (rev : Revocations) : Nat → Prop
+  | direct {c t : Nat} :
+      rev (L.signer c) = some t → t ≤ L.sealedAt c → Hold L rev c
+  | taint  {c d : Nat} :
+      d ∈ L.deps c → Hold L rev d → Hold L rev c
+
+def DepStar (L : Ledger) : Nat → Nat → Prop :=
+  Relation.TransGen (fun c d => d ∈ L.deps c)
+
+theorem hold_of_depStar {L : Ledger} {rev : Revocations} {c d : Nat}
+    (h : DepStar L c d) (hd : Hold L rev d) : Hold L rev c := by
+  revert hd
+  induction h with
+  | single hcd       => exact fun hd => Hold.taint hcd hd
+  | tail _ hbc ih    => exact fun hd => ih (Hold.taint hbc hd)
+
+theorem held_dependency_blocks {L : Ledger} {rev : Revocations} {c d : Nat}
+    (hdep : d ∈ L.deps c) (hd : Hold L rev d) : Hold L rev c :=
+  Hold.taint hdep hd
+
+theorem pre_compromise_not_direct {L : Ledger} {rev : Revocations} {c t : Nat}
+    (_hr : rev (L.signer c) = some t) (hbefore : L.sealedAt c < t) :
+    ¬ (rev (L.signer c) = some t ∧ t ≤ L.sealedAt c) := by
+  intro ⟨_, h⟩; omega
+
+def promote {cs : List Checker} {T : Prop} {α : Authority}
+    (L : Ledger) (rev : Revocations)
+    (c : Claim cs T α) (α' : Authority)
+    (_hle : α ≤ α') (hv : α' ≤ c.verifier.auth)
+    (_hfree : ¬ Hold L rev c.cid) : Claim cs T α' :=
+  Claim.mk c.cid c.proof c.verifier c.ctx hv c.inTheta
+
+/-- Direction check: a held dependent does NOT taint its dependency. -/
+example : ∃ (L : Ledger) (rev : Revocations),
+    Hold L rev 1 ∧ ¬ Hold L rev 0 := by
+  let L : Ledger :=
+    ⟨fun c => if c = 1 then [0] else [], fun c => c, fun _ => 5⟩
+  let rev : Revocations := fun v => if v = 1 then some 0 else none
+  refine ⟨L, rev, ?_, ?_⟩
+  · exact Hold.direct (t := 0) (by simp [rev, L]) (by simp [L])
+  · intro h
+    cases h with
+    | direct h1 _  => simp [rev, L] at h1
+    | taint hd _   => simp [L] at hd
+
+end VCore
+```
+
+---
+
+Appendix B — Full Proofs with Commentary
+
+B.1 Authority Poset
+
+Lemma B.1.1 (Injectivity of toNat). For each sub-poset X \in \{\mathrm{Formal}, \mathrm{Empirical}, \mathrm{Repro}\}, x.\mathrm{toNat} = y.\mathrm{toNat} \Rightarrow x = y.
+
+Proof. By exhaustive case analysis on the finite enumeration. In Lean, cases x <;> cases y <;> simp_all [X.toNat] closes all nine goals (three values each). \square
+
+Theorem B.1.2 (Partial order). (\mathcal{A}, \le) is a partial order.
+
+Reflexivity. Componentwise Nat.le_refl.
+Transitivity. Componentwise Nat.le_trans.
+Antisymmetry. Suppose a \le b and b \le a. Then a.\mathrm{formal}.\mathrm{toNat} \le b.\mathrm{formal}.\mathrm{toNat} and b.\mathrm{formal}.\mathrm{toNat} \le a.\mathrm{formal}.\mathrm{toNat}, so by Nat.le_antisymm the toNats are equal, and by Lemma B.1.1 the Formal values are equal. Repeat for empirical and repro, then cases a; cases b; simp_all. \square
+
+Theorem B.1.3 (Lub). a.sup b is the least upper bound of a, b.
+
+Proof. Componentwise on the three finite chains. For each component X, X.sup a b = if a.toNat ≤ b.toNat then b else a. Then:
+
+· a \le a \sqcup b: if a.toNat ≤ b.toNat the value is b.toNat and a.toNat ≤ b.toNat holds; otherwise the value is a.toNat and Nat.le_refl closes.
+· b \le a \sqcup b: symmetric.
+· a \le c \wedge b \le c \Rightarrow a \sqcup b \le c: in each case, the if branch's value is either a.toNat or b.toNat, both \le c.\mathrm{toNat}.
+
+Formally in Lean, cases ha : a.formal <;> cases hb : b.formal <;> simp [...] closes each goal. \square
+
+B.2 Checker Framework
+
+Theorem B.2.1 (Diversity). If \exists c \in cs.\ \mathrm{Sound}(c), then for any p : \mathrm{Proof}(cs, T), we have T.
+
+Proof. Destructure the hypothesis to obtain c, hc : c \in cs, hs : \mathrm{Sound}(c). Then p.\mathrm{accepted}\ c\ hc : c.\mathrm{accepts}(p.\mathrm{bytes}, T), and hs\ p.\mathrm{bytes}\ T applied to that yields T. \square
+
+Corollary B.2.2 (No false proof). Under the same hypothesis, \neg\,\mathrm{Nonempty}(\mathrm{Proof}(cs, \mathrm{False})).
+
+Proof. Immediate from B.2.1 with T := \mathrm{False}. \square
+
+Design note. The theorem is diversity-monotone: adding more checkers to cs cannot weaken the soundness guarantee (the existential ∃ c is not weakened), and can only strengthen it. This is what motivates the multi-checker TCB: an attacker must corrupt every sound checker simultaneously.
+
+B.3 Lineage and No-Escalation
+
+Lemma B.3.1 (Descends.mem_le). If \mathrm{Descends}(a, L) and x \in L, then a \le x.
+
+Proof. Structural induction on L.
+
+· L = [\,]: x \in [\,] is impossible; cases hx closes the goal.
+· L = p :: ps: x \in p :: ps gives x = p or x \in ps.
+  · x = p: Descends(a, p :: ps) gives a \le p, i.e. a \le x.
+  · x \in ps: Descends(a, p :: ps) gives a \le p and Descends(p, ps); induction gives p \le x; transitivity gives a \le x. \square
+
+Theorem B.3.2 (No-escalation). For any verifier v, v.\mathrm{auth} \le x for every x in v.\mathrm{lineage}.
+
+Proof. Immediate from B.3.1 with a := v.\mathrm{auth} and L := v.\mathrm{lineage}, using v.\mathrm{descends}. \square
+
+Theorem B.3.3 (Issuance bound). For any parent p, child c = p.\texttt{issue}\ \mathrm{id}\ a\ h, c.\mathrm{auth} \le p.\mathrm{auth}.
+
+Proof. Unfold Verifier.issue: the new auth is a, and the hypothesis is h : a ≤ p.auth. \square
+
+Theorem B.3.4 (Full ancestor bound). Any issued verifier's authority is bounded by every ancestor's authority.
+
+Proof. For c = p.\texttt{issue}\ \mathrm{id}\ a\ h, the lineage of c is p.\mathrm{auth} :: p.\mathrm{lineage}. For x in this list:
+
+· x = p.\mathrm{auth}: apply B.3.3.
+· x \in p.\mathrm{lineage}: apply B.3.3 then B.3.2 for p.
+
+Both are instances of Authority.le_trans h (no_escalation p x hx). \square
+
+Remark B.3.5 (Correction to v10.0). v10.0 stated \alpha_i \preceq \alpha_{i+1} as the issuance hypothesis, which permitted escalation. The correct hypothesis, a \le p.\mathrm{auth}, is embedded in the type of Verifier.issue. The induction on Descends closes over arbitrary finite chains, because Descends is a List-structural predicate, not a fixed-length one.
+
+B.4 Claim Invariants
+
+Theorem B.4.1 (Field-carried bound). Any c : \mathrm{Claim}(cs, T, \alpha) satisfies \alpha \le c.\mathrm{verifier}.\mathrm{auth} and c.\mathrm{verifier}.\mathrm{id} \in c.\mathrm{ctx}.\mathrm{caps}.
+
+Proof. These are exactly the fields authBound and inTheta. Because Verifier and Claim both use private mk ::, no other construction path exists outside the module; but even if there were, the fields are part of the type, so the invariant holds for any value of the type. \square
+
+Theorem B.4.2 (Claim soundness). If some checker in cs is sound, then for any c : \mathrm{Claim}(cs, T, \alpha), we have T.
+
+Proof. c.proof : Proof cs T, and Theorem B.2.1 applies. \square
+
+Theorem B.4.3 (Ancestor bound). Any c : \mathrm{Claim}(cs, T, \alpha) satisfies \alpha \le x for every x \in c.\mathrm{verifier}.\mathrm{lineage}.
+
+Proof. Combine c.authBound : α ≤ c.verifier.auth with no_escalation c.verifier x hx : c.verifier.auth ≤ x. \square
+
+Corollary B.4.4. A claim sealed at authority \alpha cannot be promoted above the authority of any ancestor of its verifier, even with all promotion predicates satisfied.
+
+B.5 Ledger and HOLD
+
+Definition B.5.1 (HOLD, structural). Hold L rev c is the least predicate closed under:
+
+· (H-direct) \mathrm{rev}(L.\mathrm{signer}(c)) = \mathrm{some}\ t \wedge t \le L.\mathrm{sealedAt}(c) \Rightarrow \mathrm{HOLD}(c);
+· (H-taint) d \in L.\mathrm{deps}(c) \wedge \mathrm{HOLD}(d) \Rightarrow \mathrm{HOLD}(c).
+
+Lemma B.5.2 (Monotonicity in the dependency graph). If DepStar L c d and Hold L rev d, then Hold L rev c.
+
+Proof. Induction on the TransGen derivation.
+
+· Base (single hcd): d \in L.\mathrm{deps}(c), apply H-taint.
+· Step (tail _ hbc ih): the derivation has c \to^{*} b \to d with DepStar L b d and d ∈ L.deps c. By induction hypothesis, Hold L rev b from Hold L rev d; apply H-taint with d ∈ L.deps c and Hold L rev b to obtain Hold L rev c. \square
+
+Theorem B.5.3 (Pre-compromise survival). If L.\mathrm{sealedAt}(c) < t and \mathrm{rev}(L.\mathrm{signer}(c)) = \mathrm{some}\ t, then the H-direct clause cannot fire.
+
+Proof. H-direct requires t \le L.\mathrm{sealedAt}(c), contradicting L.\mathrm{sealedAt}(c) < t. \square
+
+Remark B.5.4 (Taint still applies). Pre-compromise survival concerns only the H-direct clause. A pre-compromise claim may still be held via H-taint if one of its dependencies is held.
+
+B.6 Promotion
+
+Theorem B.6.1 (Correct guard). A claim with a held dependency is itself held.
+
+Proof. Apply H-taint to hdep : d ∈ L.deps c and hd : Hold L rev d. \square
+
+Correction B.6.2. v10.0 blocked a claim when a dependent was revoked. This is the wrong direction: revocation of a dependent does not taint its dependency, because dependencies flow from a claim to its prerequisites, not vice versa. The direction is enforced in the module by an explicit example:
+
+```lean
+example : ∃ (L : Ledger) (rev : Revocations),
+    Hold L rev 1 ∧ ¬ Hold L rev 0
+```
+
+where claim 1 depends on claim 0 and the signer of 1 is compromised. Claim 1 is held; claim 0 is not. This witness would fail under v10.0's reversed rule.
+
+---
+
+Appendix C — Architecture Specification
+
+C.1 Layer Model
+
+```
+   ┌─────────────────────────────────────────────────────────────┐
+   │ L4  Freshness       NISTIR 8213 draft v2 beacon combination │
+   │     Attest(claim, pulse) → SignedAttestation                │
+   ├─────────────────────────────────────────────────────────────┤
+   │ L3  Capability      Cerisier (PLDI 2026)                    │
+   │     Capability[α], versioned points-to, sentry caps         │
+   ├─────────────────────────────────────────────────────────────┤
+   │ L2  Execution       EviBound / MLflow + provenance binding  │
+   │     Candidate → Artifact → VerifiedArtifact                 │
+   ├─────────────────────────────────────────────────────────────┤
+   │ L1  Ontology        Eigenius / EigenTT                     │
+   │     Claim cs T α, Proof cs T, Witness, Reform               │
+   └─────────────────────────────────────────────────────────────┘
+```
+
+Interfaces. Each layer exposes a typed boundary:
+
+Layer Provides Requires
+L1 Claim cs T α, sealClaim, promote Proof cs T from L2, Capability[α] from L3
+L2 VerifiedArtifact, in-toto attestation Runner key sk_runner
+L3 Unforgeable capability tokens Host isolation
+L4 Freshness nonces Beacon public keys
+
+C.2 Message Formats
+
+VerifiedArtifact (L2 → L1).
+
+```
+message VerifiedArtifact {
+  string  run_id;
+  bytes   artifact_hash;      // SHA-256 of artifact bytes
+  bytes   provenance;         // DSSE-wrapped SLSA predicate
+  bytes   runner_signature;   // Sign_{sk_runner}(...)
+  uint64  sealed_at;          // ledger timestamp
+}
+```
+
+Attestation (L4 → L1).
+
+```
+message Attestation {
+  uint64  epoch;
+  bytes   beacon_output;      // SHA-512 combination per §2.3
+  bytes   precommitment;      // SHA-512(local_random)
+  bytes   verifier_signature; // Sign_{sk_α}(...)
+}
+```
+
+C.3 Configuration Invariants
+
+· I1 (Checker non-empty). Every Proof cs T satisfies cs ≠ [] by the nonempty field.
+· I2 (Hash domain separation). H used in Compat is domain-separated from any other hash use; enforced at the L2/L1 boundary.
+· I3 (Provenance monotonicity). L.deps is append-only; no entry is removed once written.
+· I4 (Signer permanence). L.signer c is fixed at sealing and never rewritten.
+· I5 (Effective-time monotone). For a fixed verifier, rev(v) is either none or some t; if some t, no later reassignment occurs.
+
+---
+
+Appendix D — Protocol Specifications
+
+D.1 SEAL Protocol
+
+```
+Inputs:
+  ctx        : Context
+  cid        : Nat
+  producer   : Nat
+  v          : Verifier
+  α          : Authority
+  p          : Proof cs T
+  w          : Witness
+  r          : Reform P T
+
+Preconditions:
+  (a) Compat(H, p, w) = true
+  (b) v.id ∈ ctx.caps
+  (c) α ≤ v.auth
+  (d) r.formalizerId ≠ producer
+  (e) ∃ c ∈ cs. Sound(c)        -- external TCB assumption
+
+Output: Claim cs T α
+
+Postconditions:
+  (P1) c.proof = p
+  (P2) c.verifier = v
+  (P3) c.authBound = (c)
+  (P4) c.inTheta = (b)
+  (P5) Sound-assumption ⇒ T
+```
+
+D.2 Promotion Protocol
+
+```
+Inputs:
+  L      : Ledger
+  rev    : Revocations
+  c      : Claim cs T α
+  α'     : Authority
+
+Preconditions:
+  (a) α ≤ α'
+  (b) α' ≤ c.verifier.auth
+  (c) ¬ Hold L rev c.cid
+
+Output: Claim cs T α'
+
+Postconditions:
+  (P1) The new claim retains c.cid, c.proof, c.verifier, c.ctx.
+  (P2) authBound updated to (b).
+  (P3) T unchanged; φ unchanged.
+```
+
+Soundness. By (b), the new authority is bounded by the verifier's auth, and by Appendix B.4.3, by every ancestor. By (c), the promotion cannot proceed if the claim is held.
+
+D.3 Revocation Protocol
+
+```
+Inputs:
+  v      : Verifier id
+  t_eff  : Nat          -- effective (compromise) time
+
+Actions:
+  1. Set rev(v) := some t_eff.
+  2. For each c with L.signer(c) = v:
+       if t_eff ≤ L.sealedAt(c) then mark HOLD(c) directly.
+  3. Propagate HOLD forward along L.deps:
+       if HOLD(d) and d ∈ L.deps(c) then HOLD(c).
+  4. Log the revocation and the resulting HOLD set externally.
+
+Postconditions:
+  (P1) Pre-compromise claims (sealedAt < t_eff) survive H-direct.
+  (P2) Claims transitively depending on HOLD claims become HOLD.
+  (P3) Promotion is blocked for every HOLD claim.
+```
+
+D.4 Beacon Combination Protocol
+
+```
+Every period T:
+  A[T].local_random   ← random
+  A[T].precommit      ← SHA512(A[T].local_random)
+  publish A[T].precommit
+
+After both beacons publish outputs at T-1:
+  Z ← SHA512( A[T-1].output ∥ B[T-1].output
+            ∥ A[T].local_random ∥ B[T].local_random )
+```
+
+Freshness guarantee. If at least one of A, B is honest, the combined output is unpredictable before T.
+
+Non-guarantee. Beacon combination provides freshness, not unforgeability or verifier-soundness.
+
+---
+
+Appendix E — Threat Model Elaboration
+
+E.1 Adversary Classes
+
+Class Description V-Core layer
+\mathcal{A}_1 External network attacker L4
+\mathcal{A}_2 Compromised host/runtime L3
+\mathcal{A}_3 Malicious runner L2
+\mathcal{A}_4 Compromised verifier key L1
+\mathcal{A}_5 Corrupted genesis Constitutional
+\mathcal{A}_6 Correlated formalizer error Meta
+
+E.2 Attack Trees
+
+E.2.1 Forge a claim at authority \alpha. Attacker must:
+
+1. Produce Proof cs T accepted by every c \in cs, or
+2. Produce a Claim with authBound : α ≤ v.auth for some legitimate v, or
+3. Break the private-constructor discipline.
+
+Path (1): requires breaking every sound checker, mitigated by Theorem B.2.1 (diversity) and Annex G.
+Path (2): requires an unchecked Verifier, blocked by private mk :: and Assumption 5.4.
+Path (3): a module-boundary attack; the only residual architectural risk.
+
+E.2.2 Bypass revocation. Attacker must:
+
+1. Show that a claim's signer was not revoked, or
+2. Show that the claim predates the effective time, or
+3. Show that no dependency was held.
+
+Path (1): if the signer is revoked with effective time t and the claim was sealed at \ge t, H-direct fires.
+Path (2): the claim survives only if it is genuinely pre-compromise.
+Path (3): H-taint fires transitively (Theorem B.5.2).
+
+E.2.3 Launder a false proposition through reformalization. Attacker must defeat \phi(c) = \mathrm{yes}, i.e., obtain a Reform P T with a false T. Path blocked by Assumption 6.4 (independence) and by the external-checker discipline: the producing system cannot supply the Reform.
+
+E.3 Residual Risks (Unmitigated by V-Core Itself)
+
+· Correlated formalizer error. If the independent formalizer shares a misconception with the producer, \phi = \mathrm{yes} can be wrong. This is outside the mechanized fragment.
+· Export-format defects. The multi-checker TCB reduces but does not eliminate this risk; see Annex G.
+· Genesis capture. If the constitutional quorum is compromised, no theorem in Appendix B helps.
+
+---
+
+Appendix F — Design Rationale and Rejected Alternatives
+
+F.1 Why Checker-Parameterised Proofs, Not an Uninterpreted TCB
+
+Alternative A. axiom check : String → Prop → Bool and axiom check_sound : check b T = true → T.
+
+Rejected. An axiom is invisible to a reader and unbounded in scope. Parameterising Proof by an explicit List Checker makes the TCB a first-class object: which checkers are trusted is a value in the module, and any theorem consuming a proof names the specific checker it trusts.
+
+F.2 Why Lineage, Not Nested Verifier
+
+Alternative B. inductive Verifier where | mk : Verifier → Authority → Verifier.
+
+Rejected. Lean's kernel rejects non-uniform nested inductives of this shape. The lineage encoding is equivalent for the no-escalation theorem and avoids the kernel limitation.
+
+F.3 Why Reform as Data, Not a Predicate
+
+Alternative C. def Faithful (P : String) (T : Prop) : Prop := ....
+
+Rejected. A predicate without a witness is unfalsifiable and cannot be mechanized. Reform as a structure forces the producer to supply an actual T ↔ T' proof and a formalizer identity, which is a checkable artifact.
+
+F.4 Why a Global Ledger, Not Per-Claim Dependents
+
+Alternative D. def Dependents {T α κ σ π τ φ} (c : Claim T α κ σ π τ φ) : Set (...) := { d | c.proofRef ∈ d.proofRef ∨ ... }.
+
+Rejected. Forces every dependent to have the same type parameters as c, excludes cross-proposition dependencies, and uses String ∈ String which is not a membership relation. The ledger formulation (deps : Nat → List Nat) is heterogeneous and transitive.
+
+F.5 Why Effective-Time Revocation
+
+Alternative E. Boolean revocation: revoked : Nat → Bool.
+
+Rejected. Boolean revocation retroactively invalidates pre-compromise claims, which is too strong. An effective time t allows pre-compromise claims to survive unless tainted through a dependency.
+
+F.6 Why the Promotion Guard Is on Dependencies
+
+Alternative F. Block c if a dependent of c is revoked.
+
+Rejected. Deps point from a claim to its prerequisites, not from a prerequisite to its dependents. Revoking a dependent does not affect the truth of the dependency; only the reverse direction matters. The corrected rule is Theorem B.6.1.
+
+---
+
+Appendix G — TCB Enumeration and Export Format
+
+G.1 Proof-Checking TCB
+
+Component Role Failure mode Mitigation
+Lean kernel Type-checker Kernel unsoundness Axiom audit
+Lean4Lean Kernel reimplementation Divergence from kernel Independent implementation
+nanoda_lib @ pinned commit External checker Trusts exporter Multi-checker TCB
+Export format .export binary Malformed streams Comparator binding
+Axiom whitelist permitted_axioms Unwanted axioms Enumerated; audited
+
+G.2 Prior Art on Export-Format Risk
+
+· FLT repository double-checks with Comparator + nanoda on lean4export, under permitted_axioms.
+· nanocomparator ports Comparator to Rust on nanoda; binds a proof to a reference statement.
+· unsorry uses two independent autoformalizations, normalises and diffs them, flags disagreements. Known weakness: correlated formalizer error (Assumption 6.4).
+· con-leche reports checkers accepting export streams the official kernel rejects on metadata fields.
+
+G.3 Axiom Whitelist
+
+The V-Core module imports core Lean 4 only. Its proofs may use:
+
+· propext, Quot.sound, Classical.choice — if the caller's policy permits.
+· Nat.le_refl, Nat.le_trans, Nat.le_antisymm, omega — arithmetic.
+
+No sorryAx appears. The audit is:
+
+```
+#print axioms VCore.Authority.le_antisymm
+#print axioms VCore.Authority.sup_le
+#print axioms VCore.no_proof_of_false
+#print axioms VCore.no_escalation
+#print axioms VCore.issue_bounded_by_all_ancestors
+#print axioms VCore.Claim.bounded_by_ancestors
+#print axioms VCore.hold_of_depStar
+#print axioms VCore.pre_compromise_not_direct
+```
+
+G.4 Export-Format Integrity Protocol
+
+1. Produce. Emit a .export stream from the Lean producer.
+2. Bind. nanocomparator binds the proof to the reference statement (the formal half of Reform).
+3. Check. Run both the official kernel and nanoda_lib on the bound stream.
+4. Compare. If the two disagree, flag the stream; refuse to seal.
+5. Audit. Log both checker outputs and the permitted_axioms list.
+
+---
+
+Appendix H — Build, Audit, and CI
+
+H.1 Build
+
+```bash
+lake build
+lake exe cache get      # if using Mathlib-dependent packages
+```
+
+H.2 Audit Script
+
+```bash
+lean --run scripts/audit.lean | tee audit.log
+```
+
+Expected output: no sorryAx; only propext, Quot.sound, Classical.choice (if permitted by policy).
+
+H.3 CI Gate
+
+1. lake build must succeed.
+2. #print axioms on each mechanized theorem must not report sorryAx.
+3. nanocomparator must bind every emitted proof.
+4. nanoda_lib must accept every .export stream the official kernel accepts.
+5. The permitted_axioms list must not have grown since the last commit.
+
+H.4 Reproducibility Checklist
+
+· Pinned nanoda_lib commit hash.
+· Pinned Lean toolchain (lean-toolchain).
+· Recorded lake-manifest.json.
+· SHA-256 of every emitted .export.
+· SHA-512 of every beacon output used.
+
+---
+
+Appendix I — Glossary and Notation
+
+Symbol Meaning
+\mathcal{A} Authority poset \mathcal{A}_\mathrm{formal} \times \mathcal{A}_\mathrm{emp} \times \mathcal{A}_\mathrm{repro}
+\alpha \le \beta Product order: componentwise toNat comparison
+cs Non-empty list of checkers
+T Proposition; a Lean Prop
+P Informal statement (a String)
+H Hash function String → String
+\mathrm{Compat}(H, p, w) Meta equality and witness-hash equality
+\mathrm{Sound}(c) TCB hypothesis: c.\mathrm{accepts}(b, T) \Rightarrow T
+\mathrm{Reform}(P, T) Independent reformalisation data
+\phi(c) Faithfulness predicate; yes iff Reform exists with independent formalizer
+L Ledger deps, signer, sealedAt
+\mathrm{rev} Effective-time revocation map Nat → Option Nat
+\mathrm{HOLD}(L, \mathrm{rev}, c) Structural predicate (H-direct, H-taint)
+\mathrm{DepStar}(L, c, d) Relation.TransGen on deps
+
+---
+
+Appendix J — Open Obligations and Roadmap
+
+J.1 Not Yet Mechanized
+
+Obligation Reference Status
+\equiv_\mathrm{reform} decision procedure Def 6.2 Defined; decider deferred
+newEvidence, gapsClosed Def 8.8 Defined; mechanization deferred
+Beacon combination §2.3 Specified; mechanization deferred
+in-toto/SLSA provenance binding §9.4 Specified
+Runner-side signing §9.4 Specified
+Multi-checker export agreement Appendix G.4 Specified
+Anchor consistency Def 10.1 Design constraint
+Lean → Cerisier refinement §9.3 Motivation only
+
+J.2 Named Assumptions
+
+· A1 (Sole constructor). Only Genesis.root and Verifier.issue construct Verifier (Assumption 5.4).
+· A2 (Checker soundness). At least one checker in each cs is sound (Theorem B.2.1).
+· A3 (Formalizer independence). The Reform witness is produced by a formalizer independent of the producer (Assumption 6.4).
+· A4 (Hash collision resistance). H has no exploitable collisions (implicit in Compat).
+· A5 (Constitutional quorum). The genesis set is externally agreed (Definition 5.3, Corollary 10.2).
+
+J.3 Suggested Order of Next Work
+
+1. Mechanize \equiv_\mathrm{reform} decision procedure over a normalizing fragment.
+2. Mechanize newEvidence / gapsClosed and connect to Authority.sup.
+3. Formalize the multi-checker export-agreement property in a separate module.
+4. Specify and prove the runner-side signing binding as a game-based security statement.
+5. Formalize the constitutional separation constraint over \mathcal{U}_\mathrm{const}.
+
+J.4 Explicitly Not in Scope
+
+· Truth of T beyond the Sound hypothesis.
+· Elimination of hallucination.
+· Empirical benchmarking (separate work).
+· Machine-checked Cerisier refinement.
+
+Final Bibliography for V-Core v11.0
+
+
+Peer-Reviewed Publications
+
+[C2026] Rousseau, J., Carnier, D., Van Strydonck, T., Keuchel, S., Devriese, D., and Birkedal, L. (2026). Cerisier: A Program Logic for Attestation in a Capability Machine. Proceedings of the ACM on Programming Languages, 10(PLDI), Article 209, pp. 1004–1028. DOI: 10.1145/3808287. Published June 2026. Artifact: Zenodo (v1, 2026-03-13).
+
+[C2024] Georges, A. L., Guéneau, A., Van Strydonck, T., Timany, A., Trieu, A., Devriese, D., and Birkedal, L. (2024). Cerise: Program Verification on a Capability Machine in the Presence of Untrusted Code. Journal of the ACM, 71(1), Article 3, pp. 3.1–3.59. Published 11 February 2024. DOI: 10.1145/3623510. Mechanized in the Iris separation logic and the Coq proof assistant.
+
+---
+
+Preprints
+
+[E2026] Will, H.-M., Brown, A. L., Jr., and Fuchs, M. (2026). Eigenius: A Typed Knowledge-Graph DBMS with Epistemic Stratification and Institution-Mediated Reasoning. arXiv:2608.04457 [cs.DB], submitted 5 August 2026. Enforces epistemic status (declared/observed/derived/verified) as a strict commit-time invariant; embeds an in-process Lean 4 term checker for formal mathematical proofs.
+
+[Evi2026] Chen, R. (2026). Evidence-Bound Autonomous Research (EviBound): A Governance Framework for Eliminating False Claims. arXiv:2511.05524 [cs.AI], 10 August 2026 (v1: 11 November 2025). Cornell University. Dual governance gates (Approval Gate + Verification Gate) requiring machine-checkable evidence; evaluated on 8 benchmark tasks with MLflow artifacts.
+
+[AAR2026] Rasheed, R. A., Banerjee, S., Mukherjee, A., and Hazra, R. (2026). From Fluent to Verifiable: Claim-Level Auditability for Deep Research Agents. arXiv:2602.13855v1 [cs.AI, cs.IR, cs.MA], 14 February 2026. Affiliations: Indian Institute of Science; IIT Kharagpur; Cisco Systems; TCG CREST. Introduces the Auditable Autonomous Research (AAR) standard: provenance coverage, provenance soundness, contradiction transparency, audit effort.
+
+---
+
+Specifications and Standards
+
+[NISTIR8213] Kelsey, J., Brandão, L. T. A. N., Peralta, R., and Booth, H. (2019). NISTIR 8213 (Initial Public Draft): A Reference for Randomness Beacons — Format and Protocol Version 2. National Institute of Standards and Technology, May 2019. DOI: 10.6028/NIST.IR.8213-draft. Defines pulse format, beacon operations protocol, hash-chaining, skiplists, and precommitment-based beacon combination. Correction: v10.0 cited "NIST SP 1276 v3 (2024)"; the correct reference for the construction used is NISTIR 8213 draft v2.
+
+[SLSA2023] SLSA Framework. (2023). SLSA v1.0: Build Provenance Predicate. in-toto attestation framework. Predicate type: https://slsa.dev/provenance/v1. RECOMMENDED format for SLSA v1.0 provenance requirements. Defines buildDefinition for build inputs and records build invocation, materials, and builder identity.
+
+[IntotoAttest] in-toto. Attestation Framework. Statement layer specification with predicate types; envelope format compatible with DSSE wrapping and Sigstore signing. Used by SLSA v1.0 and V-Core §9.4 for provenance binding.
+
+---
+
+Tooling and Prior Art
+
+[FLT2026] Anthropic. (2026). Fermat's Last Theorem — Lean 4 Formalisation Repository. GitHub: anthropics/fermats-last-theorem. Complete machine-checked proof of FLT in Lean 4 (29,511 theorems). Verified against Lean's three standard axioms (propext, Classical.choice, Quot.sound) with no added axioms, sorry, native_decide, unsafe, extern, implemented_by, partial def, or #eval. Double-checked with Comparator (v4.33.0; ~14h46m) and nanoda 0.4.13 (independent Rust kernel; 1,052,234 declarations across 152,000 declarations / 60,475 modules).
+
+[Comparator] Lean FRO. (2026). Comparator: A Trustworthy Judge for Lean Proofs. GitHub: leanprover/comparator. Sandboxes the build, replays proof terms, and optionally cross-checks against an independently-implemented Rust kernel (nanoda). Binds a proof to a reference statement — the formal half of V-Core's Reform (§6). Environment variables: COMPARATOR_LANDRUN, COMPARATOR_LEAN4EXPORT, COMPARATOR_NANODA.
+
+[nanocomparator] GanjinZero. (2026). nanocomparator — A Pure-Rust Reimplementation of Lean's Comparator Built on nanoda. GitHub. Binds a proof to a reference statement; formalises statement-binding as a mechanism, which V-Core abstracts as Reform (§6, Remark 6.5).
+
+[nanoda] ammkrn. nanoda_lib — Library Implementing Type Inference/Checking Functionality Based on the Lean Theorem Prover. GitHub: ammkrn/nanoda_lib. Independent Rust kernel. Latest version: 0.4.13. Reads a slightly modified lean4export format (branch format2024). V-Core pins a specific commit; the tracker contains live issues (one recently fixed regarding projection checking, backed by a regression corpus rather than a proof). Correction: v10.0 quoted 0.4.10-beta; the current release is 0.4.13.
+
+[Lean4Lean] Carneiro, M. (digama0). Lean4Lean — Lean 4 Kernel / External Checker Written in Lean 4. GitHub: digama0/lean4lean. Independent reimplementation of the Lean 4 typechecker in Lean itself. Contains a complete implementation of inductive types including nested and mutual inductives. Command-line frontend validates compiled .olean files. Used as a co-gate in V-Core's proof-checking TCB (Appendix G.1).
+
+[unsorry] agenticsnz. unsorry — Distributed Swarm of Autonomous AI Agents Turning Lean 4 sorrys into Kernel-Verified Proofs. GitHub: agenticsnz/unsorry. Statement-fidelity gate: two independent autoformalizations are normalised and diffed; disagreements flagged. ADR-003 (AISP Coordination Format) and SPEC-003-C define the dual-translation fidelity pipeline. Known weakness: correlated formalizer errors, named as Assumption 6.4 in V-Core.
+
+[con-leche] Breitner, J., et al. (Lean FRO). con-leche — A Consistent Lean Checker. GitHub: leanprover/con-leche. External Lean checker proven (in Lean) to be consistent: it does not accept a proof of False. Compromises on checker implementation (annotations, fuel-bounded reduction, memo-dependent behaviour) in exchange for a semantic invariant. Reports checkers accepting export streams the official kernel rejects on metadata fields; motivates V-Core's multi-checker TCB (§2.2, Appendix G.2).
+
+[AuditClosed] Audit-Closed Protocol. Repository. Tier 3 (specification) source for V-Core's claim-level auditability standard (AAR) integration (§11).
+
+---
+
+Security Advisories
+
+[CVE2026] CVE-2026-69146. MLflow Missing Authorization in mlflow/server/auth. Published 17–18 August 2026. Affects MLflow 3.13.0–3.15.0: LogInputs is absent from BEFORE_REQUEST_HANDLERS in the mlflow/server/auth package, allowing any authenticated user to call POST /api/2.0/mlflow/runs/log-inputs for another user's run_id and inject attacker-controlled DatasetInput records into the dataset_inputs lineage metadata without UPDATE permission. Fixed in version 3.15.0. CWE-269 (Improper Privilege Assignment). Architectural lesson: cryptographic provenance binding replaces a mutable tracking server as the root of trust (V-Core §9.5).
+
+---
+
+Internal / Project References
+
+[ProofProtocol] Proof Protocol v1.0. Tier 4 (vocabulary) source. Provides the vocabulary used in V-Core's Proof structure (§4) and Meta record.
+
+[KernelSolver] Kernel–Solver Thesis. Tier 4 (vocabulary) source. Provides the separation between kernel-level checking and solver-level reasoning that motivates V-Core's checker-parameterised proof design (§4, Appendix F.1).
+
+[UnsorryReview] Unsorry Project. Soundness Review — nanoda_lib @ f58f2f6 (0.4.10-beta). Cited in v10.0. Status: the unsorry project exists and maintains a distributed proof-swarm; however, the specific soundness review at commit f58f2f6 with the conclusion "qualified yes" could not be independently located in the current public repository. V-Core v11.0 cites this entry only as a referenced-in-v10.0 item and does not assert its content. The nanoda_lib version quoted (0.4.10-beta) is superseded by 0.4.13; the tracker contains live issues.
+
+---
+
+Summary Table of Citation Corrections (v10.0 → v11.0)
+
+v10.0 citation v11.0 correction Reason
+NIST SP 1276 v3 (2024) NISTIR 8213 draft v2 (2019) SP 1276 v3 could not be located; the beacon construction used matches NISTIR 8213 draft v2.
+nanoda_lib @ f58f2f6, 0.4.10-beta nanoda_lib 0.4.13, pinned commit in repo Version superseded; live tracker issues documented.
+"Unsorry soundness review, 'qualified yes'" Cited as referenced-in-v10.0 only; content not independently verified Review could not be located; quote only what can be linked.
+Implicit single-checker TCB Multi-checker TCB (Comparator + nanoda + Lean4Lean + con-leche) con-leche reports export-format divergences; V-Core §2.2, Appendix G.
+Faithfulness as Faithfulness.yes = rfl Reform structure with independent formalizer (unsorry's diff-of-formalisations as prior art) v10.0 premise was vacuous; v11.0 §6.
+
+ASCII Diagrams :
+
+
+1. Layer Stack and Trust Boundary
+
+```
+ ┌───────────────────────────────────────────────────────────────────────┐
+ │  L4  FRESHNESS                    NISTIR 8213 draft v2               │
+ │  ┌─────────────────────────────────────────────────────────────────┐  │
+ │  │  Attest(claim, pulse) ──► SignedAttestation                     │  │
+ │  │  Z ← SHA512(A[T-1].out ∥ B[T-1].out ∥ A[T].r ∥ B[T].r)          │  │
+ │  └─────────────────────────────────────────────────────────────────┘  │
+ │        ▲                                                              │
+ │        │ beacon output (freshness, not unforgeability)                │
+ ├────────┼──────────────────────────────────────────────────────────────┤
+ │  L3    │ CAPABILITY               Cerisier (PLDI 2026)               │
+ │  ┌─────┴───────────────────────────────────────────────────────────┐  │
+ │  │  Capability[α]   versioned points-to   sentry caps              │  │
+ │  │  unforgeable tokens, local enclave attestation                  │  │
+ │  └─────────────────────────────────────────────────────────────────┘  │
+ │        ▲                                                              │
+ │        │ cap(v) ∈ Θ                                                   │
+ ├────────┼──────────────────────────────────────────────────────────────┤
+ │  L2    │ EXECUTION                EviBound / MLflow / SLSA v1.0      │
+ │  ┌─────┴───────────────────────────────────────────────────────────┐  │
+ │  │  Candidate ──► Artifact ──► VerifiedArtifact                    │  │
+ │  │  in-toto DSSE attestation, Sigstore-wrapped                     │  │
+ │  │  Sign_{sk_runner}(Hash(T) ∥ run_id ∥ artifact_hashes ∥ SLSA)    │  │
+ │  └─────────────────────────────────────────────────────────────────┘  │
+ │        ▲                                                              │
+ │        │ Proof cs T  ·  Witness  ·  Reform P T                        │
+ ├────────┼──────────────────────────────────────────────────────────────┤
+ │  L1    │ ONTOLOGY                 Eigenius / EigenTT                │
+ │  ┌─────┴───────────────────────────────────────────────────────────┐  │
+ │  │  Claim cs T α   ──►   sealClaim  ──►  promote                  │  │
+ │  │  Proof cs T, Witness, Reform, Verifier, Ledger, HOLD            │  │
+ │  └─────────────────────────────────────────────────────────────────┘  │
+ └───────────────────────────────────────────────────────────────────────┘
+
+ TRUST BOUNDARY (multi-checker TCB):  [Lean kernel] ∧ [Lean4Lean]
+                                    ∧ [nanoda_lib pinned] ∧ [Comparator]
+                                    ∧ [con-leche] ∧ [permitted_axioms]
+```
+
+---
+
+2. Authority Poset as a Product of Three Chains
+
+```
+                FORMAL                     EMPIRICAL                 REPRO
+          declared(0)                  untested(0)             unverified(0)
+              │                            │                       │
+              ▼                            ▼                       ▼
+          derived(1)                   observed(1)             traceable(1)
+              │                            │                       │
+              ▼                            ▼                       ▼
+          verified(2)                  replicated(2)          reproducible(2)
+
+   Product:  A = Formal × Empirical × Repro
+
+                       (2,2,2)  ◄── top
+                      /  |  \
+        (2,1,2) ────┘   │   └──── (2,2,1)
+             \          │          /
+              \         │         /
+        (2,1,1) ─── (2,2,0) ─ (2,1,0)   ...   (0,0,0)  ◄── bottom
+
+   Ordering:  (a1,b1,c1) ≤ (a2,b2,c2)  ⟺  a1≤a2 ∧ b1≤b2 ∧ c1≤c2
+
+   Well-formedness:  a.emp ≥ observed  ⟹  a.repro ≥ traceable
+                     ┌──────────────────────────────────┐
+                     │  (·,untested,·)  always WF        │
+                     │  (·,observed,·)  ⟹ repro≥trace   │
+                     │  (·,replicated,·)⟹ repro≥trace   │
+                     └──────────────────────────────────┘
+```
+
+---
+
+3. Type Structure of Claim, Proof, Verifier, Reform
+
+```
+  ┌────────────────────────────────────────────────────────────────────┐
+  │  Checker                                                           │
+  │    name    : String                                                │
+  │    accepts : String → Prop → Prop                                  │
+  │                                                                    │
+  │  Sound(c) := ∀ bytes T,  c.accepts bytes T  →  T       ◄── TCB     │
+  └────────────────────────────────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌────────────────────────────────────────────────────────────────────┐
+  │  Proof (cs : List Checker) (T : Prop)                              │
+  │    bytes       : String                                            │
+  │    meta        : Meta      { usage, scope, epoch }                 │
+  │    witnessHash : String                                            │
+  │    nonempty    : cs ≠ []                                           │
+  │    accepted    : ∀ c, c ∈ cs → c.accepts bytes T                   │
+  │                                                                    │
+  │  ─────────────────────────────────────────────────────────────     │
+  │  Proof.sound :   (∃ c ∈ cs, Sound c)  →  T                         │
+  └────────────────────────────────────────────────────────────────────┘
+                                   │
+                ┌──────────────────┼──────────────────┐
+                ▼                  ▼                  ▼
+  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────┐
+  │ Witness          │  │ Verifier         │  │ Reform P T           │
+  │  artifact: String│  │  id     : Nat    │  │  formalizerId : Nat  │
+  │  meta    : Meta  │  │  auth   : A      │  │  T'           : Prop │
+  └──────────────────┘  │  lineage: [A]    │  │  equiv        : T↔T' │
+         │              │  descends: ...   │  └──────────────────────┘
+         │              │  (private mk)    │            │
+         │              └──────────────────┘            │
+         │                      │                        │
+         └───── Compat ────────┼────────────────────────┘
+                               ▼
+  ┌────────────────────────────────────────────────────────────────────┐
+  │  Claim (cs : List Checker) (T : Prop) (α : Authority)              │
+  │    cid       : Nat                                                 │
+  │    proof     : Proof cs T                                          │
+  │    verifier  : Verifier                                            │
+  │    ctx       : Context  { caps : List Nat }                        │
+  │    authBound : α ≤ verifier.auth          ◄── proof-carrying       │
+  │    inTheta   : verifier.id ∈ ctx.caps     ◄── proof-carrying       │
+  │    (private mk)                                                    │
+  │                                                                    │
+  │  ─────────────────────────────────────────────────────────────     │
+  │  Claim.sound              : (∃ k ∈ cs, Sound k)  →  T              │
+  │  Claim.bounded_by_ancestors :  ∀ x ∈ verifier.lineage, α ≤ x       │
+  └────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+4. SEAL Rule as a Diagram
+
+```
+        Γ ; Π ; Θ  ⊢  v : Verifier                ┌──────────────────┐
+        Γ ; Π ; Θ  ⊢  p : Proof cs T              │  TCB Hypothesis  │
+        Γ ; Π ; Θ  ⊢  w : Witness                 │  ∃ c ∈ cs.       │
+        Compat(H, p, w)                           │      Sound c     │
+        cap(v) ∈ Θ                                └────────┬─────────┘
+        α ≤ v.auth                                         │
+        r : Reform P T                                     │
+        r.formalizerId ≠ producer                          │
+        ────────────────────────────────────────           │
+                          │                                │
+                          ▼                                ▼
+              ┌───────────────────────────────────────────────────┐
+              │   sealClaim(H, ctx, cid, producer, v, α, p, w, r) │
+              │                       :                           │
+              │            Claim cs T α                           │
+              └───────────────────────────┬───────────────────────┘
+                                          │
+                                          ▼
+              ┌───────────────────────────────────────────────────┐
+              │  Postconditions (all mechanized)                  │
+              │   • c.proof      = p                              │
+              │   • c.verifier   = v                              │
+              │   • c.authBound  : α ≤ v.auth                     │
+              │   • c.inTheta    : v.id ∈ ctx.caps                │
+              │   • Sound(cs) ⟹ T                                 │
+              └───────────────────────────────────────────────────┘
+```
+
+---
+
+5. Verifier Lineage and No-Escalation
+
+```
+     Genesis (external, constitutional)
+        │
+        │   root : (id, a) ∈ g.roots
+        ▼
+   ┌─────────────────────────┐
+   │  v0  auth = (2,2,2)     │   lineage = []
+   │  descends = trivial     │
+   └────────────┬────────────┘
+                │  issue id=1  a=(2,1,2)   h : (2,1,2) ≤ (2,2,2)
+                ▼
+   ┌─────────────────────────────────────┐
+   │  v1  auth = (2,1,2)                 │   lineage = [(2,2,2)]
+   │  descends = ⟨ h, trivial ⟩          │
+   └────────────┬────────────────────────┘
+                │  issue id=2  a=(1,1,2)   h : (1,1,2) ≤ (2,1,2)
+                ▼
+   ┌───────────────────────────────────────────────┐
+   │  v2  auth = (1,1,2)                           │
+   │  lineage = [(2,1,2), (2,2,2)]                 │
+   │  descends = ⟨ h1, ⟨ h2, trivial ⟩ ⟩           │
+   └───────────────────────────────────────────────┘
+
+   THEOREM (no_escalation):   ∀ x ∈ v.lineage,  v.auth ≤ x
+
+        v2.auth=(1,1,2)   ≤   (2,1,2)   = v1.auth   ✓
+        v2.auth=(1,1,2)   ≤   (2,2,2)   = v0.auth   ✓
+        v2.auth=(1,1,2)   ≤   (1,1,2)   = v2.auth   ✓
+
+   CORRECTION from v10.0:
+     WRONG:  h : α_i ⪯ α_{i+1}      (permits escalation)
+     RIGHT:  h : a ≤ p.auth          (parent bounds child)
+```
+
+---
+
+6. Faithfulness Pipeline (Reform)
+
+```
+     informal P : String
+              │
+       ┌──────┴───────┐
+       ▼              ▼
+  Producer        Independent
+  formalizer      formalizer
+   (id = k)        (id = m ≠ k)
+       │              │
+       ▼              ▼
+   T : Prop        T' : Prop
+       │              │
+       │      ┌───────┘
+       │      │
+       ▼      ▼
+   ┌─────────────────────────────────────┐
+   │  Reform P T                         │
+   │    formalizerId = m                 │
+   │    T'           = T'                │
+   │    equiv        : T ↔ T'            │
+   └─────────────────────────────────────┘
+                    │
+                    ▼
+         φ(c) = yes   ⟺   ∃ r : Reform P T.
+                            r.formalizerId ≠ producer
+
+  ┌────────────────────────────────────────────────────────────────┐
+  │  NAMED ASSUMPTION 6.4 (Formalizer Independence)                │
+  │  Prior art (unsorry): two formalisations by CORRELATED          │
+  │  formalizers may share errors.  V-Core cannot check             │
+  │  independence; it is an external stipulation.                   │
+  └────────────────────────────────────────────────────────────────┘
+
+  Connection to Comparator / nanocomparator:
+     Comparator binds a proof to a REFERENCE STATEMENT.
+     That binding is the FORMAL HALF of Reform.
+     V-Core keeps:  informal → formal  as external data.
+```
+
+---
+
+7. Ledger, HOLD, and Transitive Taint
+
+```
+   LEDGER L
+   ┌─────────────────────────────────────────────────────────────┐
+   │  deps     : Nat → List Nat     (claim c depends on these)   │
+   │  signer   : Nat → Nat          (verifier that sealed c)     │
+   │  sealedAt : Nat → Nat          (timestamp of sealing)       │
+   └─────────────────────────────────────────────────────────────┘
+
+   DEPENDENCY GRAPH  (arrows point from dependent → dependency)
+
+        c4 ────► c3 ────► c2 ────► c1 ────► c0
+        │        │        │        │
+        │        │        │        └── sealed by v1
+        │        │        └── sealed by v2
+        │        └── sealed by v2
+        └── sealed by v3
+
+   REVOCATIONS  rev : Nat → Option Nat
+        rev(v1) = some t1     (compromise time t1)
+        rev(v2) = none
+        rev(v3) = none
+
+   ─────────────────────────────────────────────────────────────
+   HOLD (least predicate closed under H-direct and H-taint)
+
+     H-direct:   rev(signer c) = some t  ∧  t ≤ sealedAt c
+                 ──────────────────────────────────────────────
+                                 Hold c
+
+     H-taint:    d ∈ deps c   ∧   Hold d
+                 ──────────────────────────
+                            Hold c
+
+   ─────────────────────────────────────────────────────────────
+   PROPAGATION (assume sealedAt c0 < t1, others ≥ t1)
+
+        HOLD c0    ←   direct (sealed before compromise, survives)
+        HOLD c1    ←   direct (sealed after compromise, held)
+        HOLD c2    ←   taint via c1
+        HOLD c3    ←   taint via c2
+        HOLD c4    ←   taint via c3
+
+   THEOREM 8.5 (hold_of_depStar):
+        DepStar L c d  ∧  Hold L rev d   ⟹   Hold L rev c
+```
+
+---
+
+8. Direction Check: Promotion Guard
+
+```
+   WRONG DIRECTION (v10.0)
+   ────────────────────────
+        c   ────────►  d          (c depends on d)
+        │
+        │   "block c if d is revoked"     ← CORRECT
+        │
+        │   "block c if a DEPENDENT of c is revoked"   ← WRONG
+
+        Revoking d  ✓  affects c
+        Revoking a dependent e of c  ✗  does NOT affect c
+
+
+   CORRECT DIRECTION (v11.0, Theorem 8.9)
+   ──────────────────────────────────────
+
+              e  ────► c  ────► d
+                       ▲
+                       │  promotion blocked iff  Hold c
+                       │
+                       │  Hold c  holds if:
+                       │    • c sealed after signer compromise
+                       │    • ∃ d ∈ deps c with Hold d
+
+       Witness (Lean `example`):
+         L.deps(1) = [0]
+         L.signer = id
+         L.sealedAt = 5
+         rev(1) = some 0
+
+         Hold L rev 1     ✓   (direct: 0 ≤ 5, signer 1 revoked at 0)
+         ¬ Hold L rev 0   ✓   (0 has no dependencies, signer 0 not revoked)
+```
+
+---
+
+9. Revocation Timeline and Effective Time
+
+```
+   t=0        t=1        t=2        t=3        t=4        t=5        t=6
+    │          │          │          │          │          │          │
+    │          │          │          │          │          │          │
+    │          │   seal c0│          │          │   seal c1│          │
+    │          │   (v1)   │          │          │   (v1)   │          │
+    │          │          │          │          │          │          │
+    │          │          │          │  rev(v1) │          │          │
+    │          │          │          │ = some 3 │          │          │
+    │          │          │          │          │          │          │
+    │          │          │          │          │          │          │
+    ▼          ▼          ▼          ▼          ▼          ▼          ▼
+
+   c0:  sealedAt = 1  <  t_eff = 3     →  pre-compromise, survives H-direct
+   c1:  sealedAt = 4  ≥  t_eff = 3     →  HOLD directly
+
+   ─────────────────────────────────────────────────────────────
+   THEOREM 8.7 (pre_compromise_not_direct)
+
+        sealedAt c < t  ∧  rev(signer c) = some t
+        ─────────────────────────────────────────────
+            ¬ (rev(signer c) = some t  ∧  t ≤ sealedAt c)
+
+   NOTE: pre-compromise survival concerns only H-direct.
+         H-taint may still hold a pre-compromise claim through
+         a held dependency.
+```
+
+---
+
+10. Attack Surface and Countermeasures
+
+```
+   ┌─────────────────────────────────────────────────────────────────┐
+   │                        ADVERSARY                                │
+   │  ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐          │
+   │  │  A1  │ │  A2  │ │  A3  │ │  A4  │ │  A5  │ │  A6  │          │
+   │  │ net  │ │ host │ │runner│ │ ver. │ │ gen. │ │ form.│          │
+   │  └──┬───┘ └──┬───┘ └──┬───┘ └──┬───┘ └──┬───┘ └──┬───┘          │
+   └─────┼────────┼────────┼────────┼────────┼────────┼──────────────┘
+         │        │        │        │        │        │
+         ▼        ▼        ▼        ▼        ▼        ▼
+   ┌─────────────────────────────────────────────────────────────────┐
+   │                        V-CORE DEFENSES                          │
+   │                                                                 │
+   │  L4 beacon combination  ──── A1 network                          │
+   │  L3 Cerisier caps       ──── A2 host                             │
+   │  L2 runner-side signing ──── A3 runner                           │
+   │  L1 effective-time rev. ──── A4 verifier key                     │
+   │  Constitutional quorum  ──── A5 genesis                          │
+   │  Reform + Assumption 6.4 ── A6 formalizer correlation            │
+   │                                                                 │
+   │  Multi-checker TCB      ──── export-format defects               │
+   │  Field-carried bounds   ──── constructor discipline              │
+   └─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+11. Promotion Flowchart
+
+```
+                    c : Claim cs T α
+                           │
+                           ▼
+        ┌──────────────────────────────────────┐
+        │  α' : Authority  with  α ≤ α'         │
+        └──────────────────┬───────────────────┘
+                           │
+                           ▼
+        ┌──────────────────────────────────────┐
+        │  α' ≤ c.verifier.auth      ?         │── no ──► REJECT
+        └──────────────────┬───────────────────┘
+                          yes
+                           │
+                           ▼
+        ┌──────────────────────────────────────┐
+        │  ¬ Hold L rev c.cid        ?         │── no ──► REJECT (HOLD)
+        └──────────────────┬───────────────────┘
+                          yes
+                           │
+                           ▼
+        ┌──────────────────────────────────────┐
+        │  (optional)  newEvidence,            │── no ──► REJECT
+        │              gapsClosed,             │
+        │              regimeStable, μ-inv     │
+        └──────────────────┬───────────────────┘
+                          yes
+                           │
+                           ▼
+        ┌──────────────────────────────────────┐
+        │  promote(L, rev, c, α')              │
+        │    = Claim.mk cid proof verifier     │
+        │              ctx  α'≤v.auth  inΘ     │
+        └──────────────────┬───────────────────┘
+                           │
+                           ▼
+                    c' : Claim cs T α'
+```
+
+---
+
+12. TCB Composition (Boolean AND)
+
+```
+              ┌─────────────────────────────────────────────┐
+              │              TCB_proof                      │
+              │                                             │
+              │   ┌───────────────┐                         │
+              │   │  Lean kernel  │──┐                      │
+              │   └───────────────┘  │                      │
+              │   ┌───────────────┐  │                      │
+              │   │  Lean4Lean    │──┤                      │
+              │   └───────────────┘  │                      │
+              │   ┌───────────────┐  ├──►   AND   ──► OK    │
+              │   │  nanoda_lib   │──┤                      │
+              │   │  @ pinned     │  │                      │
+              │   └───────────────┘  │                      │
+              │   ┌───────────────┐  │                      │
+              │   │  Comparator   │──┤                      │
+              │   └───────────────┘  │                      │
+              │   ┌───────────────┐  │                      │
+              │   │  con-leche    │──┤                      │
+              │   └───────────────┘  │                      │
+              │   ┌───────────────┐  │                      │
+              │   │permitted_axioms│─┘                      │
+              │   └───────────────┘                         │
+              └─────────────────────────────────────────────┘
+
+   DIVERSITY THEOREM (Proof.sound):
+        ∃ c ∈ cs. Sound c   ⟹   every Proof cs T yields T
+
+        Any ONE sound checker suffices.
+        An attacker must corrupt EVERY sound checker simultaneously.
+```
+
+---
+
+13. Export-Format Integrity Pipeline
+
+```
+   Lean 4 producer
+        │
+        │  compiles proof term
+        ▼
+   ┌──────────────────┐
+   │  .lean source    │
+   └────────┬─────────┘
+            │
+            ▼
+   ┌──────────────────────────────┐
+   │  lean4export  (format2024)   │
+   │  emits binary .export stream │
+   └──────────────┬───────────────┘
+                  │
+        ┌─────────┼─────────┐
+        ▼         ▼         ▼
+   ┌────────┐ ┌────────┐ ┌──────────────┐
+   │ Lean   │ │nanoda  │ │ Comparator   │
+   │ kernel │ │_lib    │ │ + nanocomp.  │
+   └───┬────┘ └───┬────┘ └──────┬───────┘
+       │          │             │
+       │          │             │  binds proof
+       │          │             │  to reference
+       │          │             │  statement
+       ▼          ▼             ▼
+   ┌──────────────────────────────────────┐
+   │  MULTI-CHECKER AGREEMENT (Appendix G)│
+   │   • if all accept        → seal       │
+   │   • if disagreement       → flag      │
+   │   • log permitted_axioms             │
+   └──────────────────────────────────────┘
+```
+
+---
+
+14. Constitutional Boundary (Separation Constraint)
+
+```
+   ┌─────────────────────────────────────────────────────────────┐
+   │                  CONSTITUTIONAL LAYER                       │
+   │  (external, logged, human-stipulated)                       │
+   │                                                             │
+   │     M   : measurement parameters                            │
+   │     R   : admissibility rules                               │
+   │     μ   : measurement parameter function                    │
+   │     V_0 : genesis verifier set                              │
+   │     beacon public keys                                      │
+   │     checker whitelist  (permitted_axioms)                   │
+   └─────────────────────────┬───────────────────────────────────┘
+                             │
+                             │  stipulation
+                             ▼
+   ┌─────────────────────────────────────────────────────────────┐
+   │                    CLAIM LAYER (V-Core)                     │
+   │                                                             │
+   │     Claim cs T α                                            │
+   │     Proof cs T                                              │
+   │     Verifier (lineage)                                      │
+   │     Ledger, HOLD                                            │
+   │                                                             │
+   │   ▲                                                         │
+   │   │                                                         │
+   │   └── CANNOT self-certify its own consistency (Gödel II)    │
+   └─────────────────────────────────────────────────────────────┘
+
+   DESIGN CONSTRAINT 10.1:
+        Anchor consistency (V_0, M, R) is NOT provable from
+        within the claim layer.
+```
+
+---
+
+15. AAR Metric Mapping
+
+```
+   ┌───────────────────────────┐         ┌───────────────────────────┐
+   │      AAR METRIC           │         │     V-CORE COUNTERPART    │
+   │  (Rasheed et al. 2026)    │         │                           │
+   ├───────────────────────────┤         ├───────────────────────────┤
+   │  Provenance coverage      │ ──────► │  fraction of claims with  │
+   │  PCov                     │         │  full deps-chain to root  │
+   ├───────────────────────────┤         ├───────────────────────────┤
+   │  Provenance soundness     │ ──────► │  Compat(H,p,w) ∧ φ(c)=yes │
+   ├───────────────────────────┤         ├───────────────────────────┤
+   │  Contradiction            │ ──────► │  V(c)=FAIL surfaced in    │
+   │  transparency             │         │  ledger                   │
+   ├───────────────────────────┤         ├───────────────────────────┤
+   │  Audit effort             │ ──────► │  cost of independent      │
+   │                           │         │  Reform + witness re-run  │
+   └───────────────────────────┘         └───────────────────────────┘
+```
+
+---
+
+16. Red-Team Loop (Design)
+
+```
+          ┌────────────────────────────────────────────┐
+          │   Seed failure modes                       │
+          │   ① bad benchmark choice                   │
+          │   ② data leakage                           │
+          │   ③ metric misuse                          │
+          │   ④ positive-result bias                   │
+          └────────────────────┬───────────────────────┘
+                               │
+                               ▼
+          ┌────────────────────────────────────────────┐
+          │   Publish protocol as artifact             │
+          │   (before execution)                       │
+          └────────────────────┬───────────────────────┘
+                               │
+                               ▼
+          ┌────────────────────────────────────────────┐
+          │   Run candidate system                     │
+          │   Capture: Verified-but-Wrong Rate  VWR    │
+          └────────────────────┬───────────────────────┘
+                               │
+                               ▼
+          ┌────────────────────────────────────────────┐
+          │   Adjudicate each VWR case against ledger  │
+          │   Update assumptions A1..A5 as needed      │
+          └────────────────────┬───────────────────────┘
+                               │
+                               └──────►  loop
+```
+
+---
+
+17. End-to-End Claim Lifecycle
+
+```
+   CONSTITUTION           PRODUCE            VERIFY            PROMOTE
+   ────────────           ───────            ──────            ───────
+                                                              
+   (M,R,μ,V_0)  ──►   Candidate  ──►   Artifact  ──►   Claim  ──►   Claim
+   stipulate          execute          bind           seal          promote
+                                          │             │              │
+                                          ▼             ▼              ▼
+                                     runner sig    Proof.sound    ¬ Hold c
+                                     in-toto       Compat         α ≤ α'
+                                     SLSA          Reform         α' ≤ v.auth
+
+   TRUST:        external         MLflow +       multi-         ledger
+                 (constitutional) runner key     checker TCB    checks
+
+   FAILURE:      capture          injection      checkers       HOLD
+                 anchor                            reject         
+```
+
