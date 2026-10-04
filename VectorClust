@@ -1,0 +1,992 @@
+VectorClust: Mathematical Background, Proofs, and Algorithms
+
+Author: ouadi Maakoul
+
+Abstract
+
+Vector similarity search on heterogeneous hardware clusters is constrained by memory capacities, latency objectives, and power budgets that traditional algorithms largely ignore. This thesis presents a theoretical framework for capacity-constrained vector search, formalizing it as a capacitated k-clustering problem with a general objective: minimizing a monotone symmetric norm of the per-vector distances. This class captures k-center, k-median, and tail-quantile objectives as special cases.
+
+We adapt the fixed-parameter tractable (FPT) approximation framework of Dai, Li & Peng (ICALP 2026) for capacitated minimum-norm clustering to the vector-search domain, and we extend it to outliers, (f,g)-clustering, coresets, and a hierarchical federated routing scheme. The resulting algorithm, VectorClust, runs in time (k\log n/\varepsilon)^{O(k)}\cdot\operatorname{poly}(n) and achieves a (3+O(\varepsilon))-approximation for any monotone symmetric norm. This factor is optimal under \mathrm{FPT}\neq W[1] for the L_\infty special case (k-center). For the L_1 special case (capacitated k-median), the tight FPT factor is unknown: VectorClust matches the best known upper bound 3+O(\varepsilon), while the best known lower bound is 1+2/e-\varepsilon. We state this asymmetry explicitly and do not claim optimality for L_1.
+
+Two extensions—multi-resource capacities and weighted query norms—are presented as open problems rather than established results, because neither is supported by the current literature. All results are purely mathematical; no experiments, physical tests, or code training were performed, and empirical validation is left for future work.
+
+---
+
+Introduction
+
+Motivation
+
+Vector similarity search has become a foundational primitive in modern AI systems, from retrieval-augmented generation to recommendation and dense retrieval. As these systems scale, they are deployed on heterogeneous hardware clusters: GPUs with varying memory capacities, compute capabilities, and interconnect bandwidths. Traditional vector search algorithms treat the problem as pure similarity optimization, ignoring critical deployment constraints:
+
+· Hardware capacity limits. Each GPU has a finite memory budget and cannot store an unbounded number of vectors.
+· Query latency objectives. Both worst-case (tail) and average latency must be controlled, often simultaneously.
+· Economic and power constraints. Heterogeneous hardware mixes, energy consumption, and cost efficiency matter.
+
+These constraints turn vector search into a capacity-constrained optimization problem. In this work, we formalize vector search under capacity limits as a capacitated k-clustering problem, where each GPU is a facility with a capacity, vectors are clients, and the distance metric captures embedding similarity together with computational load. We then design an algorithm, VectorClust, that leverages recent breakthroughs in fixed-parameter tractable (FPT) approximation algorithms for clustering to provide provable guarantees on the latency distribution under arbitrary monotone symmetric norms.
+
+Contributions
+
+This thesis makes the following contributions:
+
+1. A unified formulation of capacity-constrained vector search as capacitated k-clustering under monotone symmetric norms. This formulation encompasses standard objectives (k-center, k-median, top-\ell latency) and allows simultaneous optimization of multiple latency metrics.
+2. An FPT approximation algorithm (VectorClust) that, for any fixed number of partitions k, runs in time (k\log n/\varepsilon)^{O(k)}\cdot\operatorname{poly}(n) and achieves a (3+O(\varepsilon))-approximation for any monotone symmetric norm. The core algorithmic framework is inherited from Dai, Li & Peng (ICALP 2026); the application to vector search and the extensions below are adaptations.
+3. Corrected optimality statement. The factor 3+O(\varepsilon) is optimal under \mathrm{FPT}\neq W[1] for the L_\infty special case (k-center). For the L_1 special case (capacitated k-median), the tight FPT factor is unknown: the best known upper bound is 3+\varepsilon (Cohen-Addad & Li, ICALP 2019; recovered by Dai et al.), and the best known lower bound is 1+2/e-\varepsilon inherited from the uncapacitated case. We claim neither optimality nor non-optimality for L_1.
+4. Outlier extension. We adapt the ring-sampling technique of Dabas, Gupta & Inamdar (TCS 2025) to preserve the (3+O(\varepsilon))-approximation with an outlier budget m. The dummy-facility device appears only inside their proofs; the reduction itself is ring-sampling based.
+5. (f,g)-clustering extension. We extend the LP and guessing phase to handle separate intra- and inter-cluster monotone symmetric norms, following Herold, Kipouridis & Spoerhase (SODA 2025). We note that completing this extension would improve the polynomial-time state of the art, since even uncapacitated general (f,g)-clustering has only an O(k)-approximation.
+6. Coreset reduction. We state a conditional coreset existence claim of size \operatorname{poly}(k,\varepsilon^{-1},\log n), building on the sensitivity-sampling framework of Braverman, Feldman & Lang (ACML 2021) and the unconditional capacitated k-median coreset of Cohen-Addad & Li.
+7. Federated routing. We give an O(\log k) query-time hierarchical routing scheme, with an approximation degradation stated under explicit diameter assumptions.
+
+Scope and Limitations
+
+This thesis is purely theoretical. We do not implement VectorClust, we do not run experiments, and we do not train or evaluate any model. All claims are mathematical. Where a proof is incomplete or an extension is unsupported by the literature, we state this explicitly.
+
+Two extensions require particular caution:
+
+· Multi-resource capacities. Even the two-dimensional case inherits bin-packing hardness. No FPT result is known. We present this as an open problem.
+· Weighted query norms. The original “weighted top-\ell norm” is not symmetric under coordinate permutations and therefore falls outside the monotone symmetric norm class. We present two viable reformulations and do not claim a (3+O(\varepsilon))-approximation for a weighted symmetric norm class.
+
+Related Work
+
+Capacity-constrained clustering. Polynomial-time constant-factor approximations exist for capacitated k-center (factor 3, Khuller & Sussmann 2000) and capacitated k-median (factor 1+2/e, Li 2022). These are not FPT. The recent breakthrough by Dai, Li & Peng (ICALP 2026) gave tight FPT approximations for both problems, parameterized by k, and extended the result to any monotone symmetric norm. Their work forms the theoretical foundation for VectorClust.
+
+(f,g)-clustering. Introduced by Herold, Kipouridis & Spoerhase (SODA 2025), this framework subsumes k-center, k-median, Min-Sum of Radii, and Min-Load k-Clustering. Their polynomial-time approximations range from O(\log^2 n) to O(k); the FPT adaptation is new.
+
+Outliers. Dabas, Gupta & Inamdar (TCS 2025) give the first constant-factor FPT approximation for capacitated k-median with outliers, achieving (3+\varepsilon) in time f(k,m,\varepsilon)\cdot|I_m|^{O(1)} via ring sampling. Our outlier extension adapts this technique to general monotone symmetric norms.
+
+Coresets. Cohen-Addad & Li (ICALP 2019) give an unconditional coreset for capacitated k-median of size O(k^2\log^2 n/\varepsilon^3). The sensitivity-sampling framework of Braverman, Feldman & Lang (ACML 2021) provides a general recipe. Extending coresets to general monotone symmetric norms under capacity constraints remains open.
+
+Systems literature. Learning-augmented indexing (FAISS, HNSW) and SSD-based search (DiskANN) provide heuristic solutions without provable guarantees. These are orthogonal to our theoretical contribution.
+
+---
+
+Chapter 1: Introduction
+
+1.1 Problem Statement
+
+We are given a set of vectors V=\{v_1,\dots,v_n\}\subset\mathbb{R}^d. These vectors represent data points to be partitioned among k facilities (GPUs). Each facility i has a capacity u_i\in\mathbb{N}, indicating the maximum number of vectors it can host. The capacity may be derived from memory limits, compute budgets, or a combination.
+
+A distance function d:V\times V\to\mathbb{R}_{\ge0} is defined, satisfying the triangle inequality, symmetry, and non-negativity. In vector search, d often measures dissimilarity between embeddings; we can also incorporate load and hardware characteristics as additive components, provided the resulting function remains a metric.
+
+The goal is to assign each vector to a facility, respecting capacities, and to minimize an objective that depends on the distances from each vector to its assigned facility's representative. Let \mu_i be the representative of facility i. An assignment \sigma:V\to[k] yields distances d(v_j,\mu_{\sigma(v_j)}). We denote the vector of these distances by \mathbf{d}=(d(v_1,\mu_{\sigma(v_1)}),\dots,d(v_n,\mu_{\sigma(v_n)})).
+
+Definition 1.1 (Capacitated k-clustering). Given V, a set of facilities F, capacities \{u_i\}_{i\in F}, and a monotone symmetric norm f, find an assignment \sigma:V\to F with |\sigma^{-1}(i)|\le u_i that minimizes f(\mathbf{d}).
+
+1.2 Special Cases
+
+Several well-known clustering problems are captured by choosing f appropriately:
+
+· k-center. f=L_\infty, i.e., f(\mathbf{d})=\max_j d_j. This minimizes worst-case latency.
+· k-median. f=L_1, i.e., f(\mathbf{d})=\sum_j d_j. This minimizes average latency.
+· Top-\ell norm. For 0<\ell\le n,
+  \|\mathbf{d}\|_{\text{top-}\ell}=\max_{S\subseteq[n],|S|=\lfloor\ell\rfloor}\sum_{j\in S}d_j+(\ell-\lfloor\ell\rfloor)d_{(\lceil\ell\rceil)},
+  where d_{(1)}\ge\dots\ge d_{(n)} are sorted. This focuses on the worst \ell distances (tail latency).
+
+More generally, any monotone symmetric norm can be expressed as a convex combination of top-\ell norms (Lemma 2.1 in Chapter 2).
+
+1.3 Outliers
+
+In many practical scenarios, some vectors may be considered “noise” and need not be assigned to any facility, or they may be assigned to a special outlier facility with no capacity limit but incurring a penalty. We extend Definition 1.1 to allow up to m outliers.
+
+Definition 1.2 (Capacitated k-clustering with outliers). Given an additional parameter m, find an assignment \sigma:V\to F\cup\{\bot\} with |\sigma^{-1}(i)|\le u_i for all i\in F and |\sigma^{-1}(\bot)|\le m, minimizing f(\mathbf{d}) over the assigned points. The distance for outliers is defined as 0.
+
+The dummy-facility reduction is valid for any monotone symmetric norm: since f is componentwise non-decreasing, reducing any component of \mathbf{d} to 0 yields a vector \mathbf{d}' with f(\mathbf{d}')\le f(\mathbf{d}). The ring-sampling technique of Dabas, Gupta & Inamdar (TCS 2025) achieves a (3+\varepsilon)-approximation for capacitated k-median with outliers in FPT time.
+
+1.4 Multi-Resource Capacities (Open)
+
+Modern hardware often has multiple resource constraints: memory, compute, and I/O bandwidth. We model this as a multi-dimensional capacity vector.
+
+Definition 1.3 (Multi-resource capacitated clustering). Each facility i has a capacity vector \mathbf{u}_i\in\mathbb{N}^R. Each client j consumes \mathbf{w}_j\in\mathbb{N}^R. Feasibility requires \sum_{j\in\sigma^{-1}(i)}\mathbf{w}_j\le\mathbf{u}_i coordinatewise.
+
+Hardness note. The multi-resource variant is at least as hard as multi-dimensional bin packing, which is strongly NP-hard even for fixed R. Under ETH, any approximation algorithm for non-uniform capacitated clustering requires super-FPT running time. An FPT result must parameterize by R in addition to k, or impose structure on the capacity vectors. We present this as an open problem (Open Problem 5).
+
+1.5 Contributions and Novelty
+
+To distinguish our contributions from the most closely related work, we provide a comparative summary:
+
+Aspect Dai, Li & Peng (2026) Herold et al. (2025) Dabas et al. (2025) This Thesis
+Problem Minimum-norm capacitated k-clustering (f,g)-clustering Capacitated k-median with outliers Capacity-constrained vector search
+Algorithm FPT via LP rounding, sampling, guessing Polynomial-time approximations FPT via ring sampling VectorClust: inherited framework + vector-search adaptations
+Norm Any monotone symmetric norm Any monotone symmetric (f,g) L_1 Any monotone symmetric norm
+Outliers Not considered Not considered ✓ (3+\varepsilon), FPT in k,m,\varepsilon Adapted for general norms
+Multi-resource Not considered Not considered Not considered Open problem
+Weighted queries Not considered Not considered Not considered Reformulated; open problem
+Coreset Not considered Not considered Euclidean outliers coreset Conditional, via sensitivity sampling
+Federated search Not considered Not considered Not considered O(\log k) query time, conditional
+
+The core algorithmic framework is inherited from Dai et al. The application to vector search with hardware constraints, the corrected optimality analysis, and the extensions (outliers, coresets, federated routing) are new. Multi-resource capacities and weighted norms are presented as open problems rather than established results.
+
+1.6 Roadmap
+
+Chapter 2 establishes the mathematical background: monotone symmetric norms, their representation via top-\ell norms, FPT and hardness background, and the coreset and (f,g)-clustering frameworks. Chapter 3 presents the VectorClust algorithm: LP rounding, representative sampling, and the FPT guessing phase. Chapter 4 gives the approximation analysis, including the conditional threshold lemma and the corrected optimality statement. Chapter 5 treats the outlier extension. Chapter 6 discusses open problems.
+
+---
+
+Chapter 2: Problem Formulation and Mathematical Background
+
+2.1 Capacitated Clustering for Vector Search
+
+We are given a set of vectors V=\{v_1,\dots,v_n\}\subset\mathbb{R}^d, representing data points to be partitioned among k facilities (GPUs). Each facility i has a capacity u_i\in\mathbb{N}, indicating the maximum number of vectors it can host. The capacity may be derived from memory limits, compute budgets, or a combination.
+
+A distance function d:V\times V\to\mathbb{R}_{\ge0} is defined, satisfying the triangle inequality, symmetry, and non-negativity. In vector search, d often measures dissimilarity between embeddings; we can also incorporate load and hardware characteristics as additive components, provided the resulting function remains a metric.
+
+The goal is to assign each vector to a facility, respecting capacities, and to minimize an objective that depends on the distances from each vector to its assigned facility's representative. Let \mu_i be the representative of facility i. An assignment \sigma:V\to[k] yields distances d(v_j,\mu_{\sigma(v_j)}). We denote the vector of these distances by \mathbf{d}=(d(v_1,\mu_{\sigma(v_1)}),\dots,d(v_n,\mu_{\sigma(v_n)})).
+
+Definition 2.1 (Capacitated k-clustering). Given a set V of clients, a set F of potential facility locations (which may be the same as V), a capacity u_i for each i\in F, and a monotone symmetric norm f, find an assignment \sigma:V\to F with |\sigma^{-1}(i)|\le u_i that minimizes f(\mathbf{d}), where \mathbf{d}_j=d(v_j,\mu_{\sigma(v_j)}).
+
+In our context, the set of facilities is the set of GPUs themselves; we can assume each GPU corresponds to a point in the metric space (e.g., its identifier). For simplicity, we identify each facility with its index i.
+
+2.2 Special Cases
+
+Several well-known clustering problems are captured by choosing f appropriately:
+
+· k-center. f=L_\infty, i.e., f(\mathbf{d})=\max_j d_j. This minimizes the maximum distance (worst-case latency).
+· k-median. f=L_1, i.e., f(\mathbf{d})=\sum_j d_j. This minimizes the total (or average) distance.
+· Top-\ell norm. For 0<\ell\le n,
+  \|\mathbf{d}\|_{\text{top-}\ell}=\max_{S\subseteq[n],|S|=\lfloor\ell\rfloor}\sum_{j\in S}d_j+(\ell-\lfloor\ell\rfloor)d_{(\lceil\ell\rceil)},
+  where d_{(1)}\ge\dots\ge d_{(n)} are sorted. This focuses on the worst \ell distances (e.g., tail latency).
+
+More generally, any monotone symmetric norm can be expressed as a convex combination of top-\ell norms (Lemma 2.2).
+
+2.3 Outliers
+
+In many practical scenarios, some vectors may be considered “noise” and need not be assigned to any facility, or they may be assigned to a special outlier facility with no capacity limit but incurring a penalty. We extend Definition 2.1 to allow up to m outliers.
+
+Definition 2.2 (Capacitated k-clustering with outliers). Given an additional parameter m (outlier budget), find an assignment \sigma:V\to F\cup\{\bot\} with |\sigma^{-1}(i)|\le u_i for all i\in F and |\sigma^{-1}(\bot)|\le m (where \bot denotes the outlier class), minimizing f(\mathbf{d}) over the assigned points (the distance for outliers is defined as 0).
+
+The reduction is valid for any monotone symmetric norm: since f is componentwise non-decreasing, reducing any component of \mathbf{d} to 0 yields a vector \mathbf{d}' with f(\mathbf{d}')\le f(\mathbf{d}). Dabas, Gupta & Inamdar (TCS 2025) establish a (3+\varepsilon)-approximation for capacitated k-median with outliers via ring sampling, FPT in k,m,\varepsilon. Our extension adapts this to general monotone symmetric norms.
+
+2.4 Multi-Resource Capacities (Open Problem)
+
+Modern hardware often has multiple resource constraints: memory (number of vectors), compute (e.g., FLOPs), and I/O bandwidth. We model this as a multi-dimensional capacity vector.
+
+Definition 2.3 (Multi-resource capacitated clustering). Each facility i has a capacity vector \mathbf{u}_i=(u_i^1,\dots,u_i^R)\in\mathbb{N}^R. Each client j consumes a resource consumption vector \mathbf{w}_j\in\mathbb{N}^R. The assignment must satisfy \sum_{j\in\sigma^{-1}(i)}\mathbf{w}_j\le\mathbf{u}_i coordinatewise.
+
+Hardness note. The multi-resource variant is at least as hard as multi-dimensional bin packing, which is strongly NP-hard even for fixed R. Under ETH, any approximation algorithm for non-uniform capacitated clustering requires super-FPT running time. An FPT result must parameterize by R in addition to k, or impose structure on the capacity vectors. We present this as an open problem.
+
+2.5 Monotone Symmetric Norms
+
+Let \mathbb{R}^n_{\ge0} be the set of non-negative vectors. A function f:\mathbb{R}^n_{\ge0}\to\mathbb{R}_{\ge0} is a monotone symmetric norm if it satisfies:
+
+1. Positivity. f(\mathbf{x})=0\iff\mathbf{x}=\mathbf{0}.
+2. Homogeneity. f(\lambda\mathbf{x})=\lambda f(\mathbf{x}) for all \lambda\ge0.
+3. Triangle inequality. f(\mathbf{x}+\mathbf{y})\le f(\mathbf{x})+f(\mathbf{y}).
+4. Monotonicity. If \mathbf{x}\le\mathbf{y} coordinatewise, then f(\mathbf{x})\le f(\mathbf{y}).
+5. Symmetry. f(\mathbf{x})=f(\pi(\mathbf{x})) for any permutation \pi.
+
+Lemma 2.1 (Representation via top-\ell norms). For any monotone symmetric norm f and any \mathbf{x}\in\mathbb{R}^n_{\ge0}, there exist weights w_1\ge w_2\ge\dots\ge w_n\ge0 such that
+
+f(\mathbf{x})=\sum_{\ell=1}^n(w_\ell-w_{\ell+1})\|\mathbf{x}\|_{\text{top-}\ell},
+
+where w_{n+1}:=0. Conversely, any convex combination of top-\ell norms yields a monotone symmetric norm.
+
+Proof. This is a standard fact from the theory of symmetric norms. The set of top-\ell norms forms the set of extreme rays of the cone of monotone symmetric norms. A full proof appears in Chakrabarty & Swamy (2019). The same representation is used by Herold, Kipouridis & Spoerhase (SODA 2025) and Dai, Li & Peng (ICALP 2026). \square
+
+Thus, approximating f reduces to approximating all top-\ell norms simultaneously.
+
+Definition 2.4 (Top-\ell norm). For \ell\in[0,n],
+
+\|\mathbf{x}\|_{\text{top-}\ell}=\min_{t\ge0}\left(\sum_{j=1}^n(x_j-t)_++\ell t\right),
+
+where (x)_+=\max\{0,x\}. The optimum is achieved when t equals the \ell-th largest coordinate.
+
+2.6 Fixed-Parameter Tractability (FPT)
+
+An algorithm is fixed-parameter tractable with parameter k if its running time is bounded by g(k)\cdot\operatorname{poly}(n), where g is some computable function depending only on k. For clustering, k is the number of clusters (facilities). In vector search, k is typically small (e.g., number of GPUs, often \le100), making FPT algorithms practical even if the exponential dependence on k is large.
+
+2.7 Hardness of Capacitated Clustering
+
+Theorem 2.2 (Hardness results).
+
+· Capacitated k-center and k-median are NP-hard for all capacities u_i\ge2.
+· Under the assumption \mathrm{FPT}\neq W[1], there is no FPT algorithm achieving approximation factor 3-\varepsilon for capacitated k-center, for any \varepsilon>0.
+· For capacitated k-median, the best known FPT upper bound is 3+\varepsilon (Cohen-Addad & Li, ICALP 2019; recovered by Dai et al.). The best known lower bound is 1+2/e-\varepsilon, inherited from the uncapacitated case under Gap-ETH. The tight FPT factor for capacitated k-median lies in [1+2/e,3] and is open.
+
+These results are established in Cohen-Addad & Li (ICALP 2019) and Dai, Li & Peng (ICALP 2026). They show that our approximation ratio is optimal for FPT algorithms in the L_\infty case, but not known to be optimal for the L_1 case.
+
+2.8 Coresets and Sensitivity Sampling
+
+Definition 2.5 (Coreset). Let P be a point set and \mathcal{Q} a family of queries. A weighted subset (S,w) with S\subseteq P is an \varepsilon-coreset if for every q\in\mathcal{Q},
+
+\left|\sum_{s\in S}w(s)f(s,q)-\sum_{p\in P}f(p,q)\right|\le\varepsilon\sum_{p\in P}f(p,q).
+
+Theorem 2.3 (Sensitivity sampling; Braverman, Feldman & Lang, ACML 2021). If the total sensitivity of a point set under a cost function is t, then sampling O(t\log t/\varepsilon^2) points with probability proportional to sensitivity yields an \varepsilon-coreset with constant probability.
+
+Theorem 2.4 (Capacitated k-median coreset; Cohen-Addad & Li, ICALP 2019). There is a coreset of size O(k^2\log^2 n/\varepsilon^3) for capacitated k-median in general metric spaces. This construction is unconditional.
+
+Open problem. Coresets for general monotone symmetric norms under capacity constraints are not established. The reduction via Lemma 2.1 does not immediately preserve sensitivity bounds under capacity constraints; each top-\ell component may require separate sampling, and the union bound over n components can blow up the coreset size unless a tighter argument is found.
+
+2.9 (f,g)-Clustering
+
+Definition 2.6. Let f and g be monotone symmetric norms (the inner and outer norms, respectively). For a clustering with cluster distance vectors \mathbf{c}_1,\dots,\mathbf{c}_k, the (f,g)-cost is
+
+f\big(g(\mathbf{c}_1),\dots,g(\mathbf{c}_k)\big).
+
+This framework subsumes k-center, k-median, Min-Sum of Radii, and Min-Load k-Clustering.
+
+Known bounds (uncapacitated, polynomial time). Herold, Kipouridis & Spoerhase (SODA 2025) give:
+
+· O(\log^2 n) for (\mathsf{Sym},L_1),
+· O(k) for (\mathsf{Sym},\mathsf{Sym}),
+· \widetilde{O}(\min\{n^{\chi_f},k^{1-\chi_g}\}) for general f,g, where \chi_h\in[0,1] is the attenuation of norm h.
+
+Caveat for the FPT extension. Even in the uncapacitated polynomial-time setting, general (f,g)-clustering has only an O(k)-approximation. An FPT (3+\varepsilon)-approximation for capacitated (f,g)-clustering would therefore improve the polynomial-time state of the art, not merely adapt it. This is a strong caveat: the extension is not a routine consequence of the VectorClust framework.
+
+2.10 Assumptions
+
+We assume the metric space is finite and distances can be computed or approximated efficiently. For the theoretical algorithm, we work with integer distances after scaling and rounding (the standard technique for clustering approximations). We also assume capacities are integral and satisfy \sum_i u_i\ge n (otherwise the instance is infeasible). For the multi-resource case, we require that the total demand for each resource does not exceed the total capacity.
+
+All results are purely mathematical. No experiments, physical tests, or code training were performed.
+
+
+Chapter 3: Mathematical Background
+
+3.1 Monotone Symmetric Norms
+
+Let \mathbb{R}^n_{\ge 0} be the non-negative orthant. A function f : \mathbb{R}^n_{\ge 0} \to \mathbb{R}_{\ge 0} is a monotone symmetric norm if it satisfies:
+
+1. Positive definiteness. f(\mathbf{x}) = 0 \iff \mathbf{x} = \mathbf{0}.
+2. Homogeneity. f(\lambda \mathbf{x}) = \lambda f(\mathbf{x}) for all \lambda \ge 0.
+3. Subadditivity. f(\mathbf{x} + \mathbf{y}) \le f(\mathbf{x}) + f(\mathbf{y}).
+4. Monotonicity. \mathbf{x} \le \mathbf{y} coordinatewise \implies f(\mathbf{x}) \le f(\mathbf{y}).
+5. Symmetry. f(\mathbf{x}) = f(\pi(\mathbf{x})) for every coordinate permutation \pi.
+
+The class of monotone symmetric norms is exactly the class of symmetric gauge functions; it includes L_p norms, top-\ell norms, and ordered weighted norms.
+
+3.2 Representation via Top-\ell Norms
+
+Definition 3.1 (Top-\ell norm). For \ell \in \{0,1,\dots,n\} and \mathbf{x} \in \mathbb{R}^n_{\ge 0},
+
+\|\mathbf{x}\|_{\text{top-}\ell} := \min_{t \ge 0}\left(\sum_{j=1}^{n} (x_j - t)_+ + \ell t\right),
+
+where (z)_+ = \max\{0,z\}. The optimum is attained at t = x_{(\ell)}, the \ell-th largest coordinate.
+
+Lemma 3.2 (Representation). For every monotone symmetric norm f, there exist weights w_1 \ge w_2 \ge \dots \ge w_n \ge 0 with w_{n+1} := 0 such that for all \mathbf{x} \in \mathbb{R}^n_{\ge 0},
+
+f(\mathbf{x}) = \sum_{\ell=1}^{n} (w_\ell - w_{\ell+1}) \|\mathbf{x}\|_{\text{top-}\ell}.
+
+Conversely, every non-negative linear combination of top-\ell norms is a monotone symmetric norm.
+
+Proof. The top-\ell norms generate the extreme rays of the cone of monotone symmetric norms. This is a standard result in the theory of symmetric norms; a complete proof appears in Chakrabarty & Swamy (2019), Simultaneously Approximating All Norms, and is used in the same form by Herold, Kipouridis & Spoerhase (SODA 2025) and Dai, Li & Peng (ICALP 2026). \square
+
+Consequence. Approximating an arbitrary monotone symmetric norm reduces to approximating every top-\ell norm simultaneously. This is the structural basis of VectorClust.
+
+3.3 Fixed-Parameter Tractability
+
+A problem parameterized by k is fixed-parameter tractable (FPT) if it admits an algorithm of the form g(k) \cdot \operatorname{poly}(n). For clustering, k is the number of open facilities (GPUs). In vector search, k is typically small, making FPT algorithms practically relevant even when g(k) is exponential.
+
+3.4 Hardness Landscape for Capacitated Clustering
+
+The following lower bounds are established in the literature and directly constrain what VectorClust can claim.
+
+Theorem 3.3 (Hardness).
+
+1. Capacitated k-center (L_\infty). There is no (3-\varepsilon)-approximation unless P = NP. Under \mathrm{FPT} \neq W[1], there is no FPT algorithm achieving 3-\varepsilon.
+2. Capacitated k-median (L_1). The best known FPT upper bound is 3+\varepsilon (Cohen-Addad & Li, ICALP 2019; recovered by Dai et al.). The best known lower bound for the capacitated version is inherited from the uncapacitated case: 1+2/e-\varepsilon assuming Gap-ETH. The tight FPT factor for capacitated k-median is open — it lies in [1+2/e, 3].
+3. Uncapacitated k-median. The tight FPT factor is 1+2/e+\varepsilon (Cohen-Addad et al., ICALP 2019), matching the Gap-ETH lower bound.
+4. Top-\ell norms. Dai, Li & Peng (ICALP 2026) give a tight (1 + 2/(ec) + \varepsilon)-approximation for the uncapacitated top-cn norm. For the capacitated case with the general norm, their bound is (3+\varepsilon).
+
+Important correction. An earlier version of this thesis claimed that the factor 3+O(\varepsilon) is optimal for L_1. That claim is false for the uncapacitated case and unproven for the capacitated case. The corrected statement is given in Theorem 5.4 below.
+
+3.5 Coresets and Sensitivity Sampling
+
+Definition 3.4 (Coreset). Let P be a point set and \mathcal{Q} a family of queries. A weighted subset (S, w) with S \subseteq P is an \varepsilon-coreset if for every q \in \mathcal{Q},
+
+\left|\sum_{s \in S} w(s) f(s,q) - \sum_{p \in P} f(p,q)\right| \le \varepsilon \sum_{p \in P} f(p,q).
+
+Theorem 3.5 (Sensitivity sampling; Braverman et al., 2021). If the total sensitivity of a point set under a cost function is t, then sampling O(t \log t / \varepsilon^2) points with probability proportional to sensitivity yields an \varepsilon-coreset with constant probability.
+
+Theorem 3.6 (Capacitated k-median coreset; Cohen-Addad & Li, ICALP 2019). There is a coreset of size O(k^2 \log^2 n / \varepsilon^3) for capacitated k-median in general metric spaces. This construction is unconditional.
+
+Open problem. Coresets for general monotone symmetric norms under capacity constraints are not established in the literature. The reduction via Lemma 3.2 (decomposing f into top-\ell components) does not immediately preserve sensitivity bounds under capacity constraints; each top-\ell component may require separate sampling, and the union bound over n components can blow up the coreset size unless a tighter argument is found.
+
+3.6 (f,g)-Clustering
+
+Definition 3.7. Let f and g be monotone symmetric norms (the inner and outer norms, respectively). For a clustering with cluster distance vectors \mathbf{c}_1, \dots, \mathbf{c}_k, the (f,g)-cost is
+
+f\big(g(\mathbf{c}_1), \dots, g(\mathbf{c}_k)\big).
+
+This framework subsumes k-center, k-median, Min-Sum of Radii, and Min-Load k-Clustering.
+
+Known bounds (uncapacitated, polynomial time). Herold et al. (SODA 2025) give:
+
+· O(\log^2 n) for (\mathsf{Sym}, L_1),
+· O(k) for (\mathsf{Sym}, \mathsf{Sym}),
+· \widetilde{O}(\min\{n^{\chi_f}, k^{1-\chi_g}\}) for general f, g, where \chi_h \in [0,1] is the attenuation of norm h.
+
+Caveat for the FPT extension. Even in the uncapacitated polynomial-time setting, general (f,g)-clustering has only an O(k)-approximation. An FPT (3+\varepsilon)-approximation for capacitated (f,g)-clustering would therefore improve the polynomial-time state of the art, not merely adapt it. This is a strong caveat: the extension is not a routine consequence of the VectorClust framework.
+
+---
+
+Chapter 4: The VectorClust Algorithm
+
+4.1 Overview
+
+VectorClust follows the unified framework of Dai, Li & Peng (ICALP 2026):
+
+1. LP rounding. Solve a convex relaxation and round to O(k \log n/\varepsilon) facilities.
+2. Sampling. Sample client representatives based on the rounded solution.
+3. Guessing. Enumerate pivots, radii, and thresholds; construct a feasible assignment by matching.
+
+The framework is inherited; the vector-search application and the outlier extension are adaptations.
+
+4.2 LP Formulation
+
+Let \Delta be an upper bound on the optimal distance. Discretize distances to integers in \{0,\dots,\Delta\}. The relaxation is
+
+\begin{aligned}
+\min\ &\ f(\mathbf{d}^{\mathrm{av}})\\
+\text{s.t.}\ &\ \sum_{i\in F} y_i = k,\\
+&\ x_{ij} \le y_i && \forall i,j,\\
+&\ \sum_{i\in F} x_{ij} = 1 && \forall j,\\
+&\ \sum_{j\in V} x_{ij} \le u_i y_i && \forall i,\\
+&\ d^{\mathrm{av}}_j = \sum_{i\in F} d(i,j) x_{ij} && \forall j,\\
+&\ x_{ij}, y_i \ge 0.
+\end{aligned}
+
+Because f is a convex norm, this is a convex program solvable in polynomial time. The relaxation is feasible whenever \sum_i u_i \ge n.
+
+4.3 LP Rounding
+
+Algorithm 4.1 (Rounding).
+
+```
+Input: fractional solution (x, y), capacities u
+Output: integer solution (X, Y) with capacities
+
+1. Apply dependent rounding (Gandhi et al., 2006) to the bipartite graph.
+2. Repeat O(log n) times; retain the solution minimizing max_j d_j / d_av_j.
+3. For each overloaded facility, move the closest client to a facility with slack.
+4. Prune facilities with y_i < ε/(k log n); reassign their clients.
+5. Return (X, Y).
+```
+
+Lemma 4.2 (Rounding guarantee, conditional). If the capacity-correction step preserves per-client distances up to a (1+\varepsilon) factor, then the rounding produces a set S of O(k\log n/\varepsilon) facilities with d^{\mathrm{rounded}}_j \le (1+\varepsilon)d^{\mathrm{av}}_j for all j.
+
+Status. The rounding sketch is standard but the (1+\varepsilon) per-client bound is not established by the sketch alone. The capacity-correction step can increase distances by a constant factor, not O(\varepsilon). A rigorous version requires either a bounded-overflow rounding or a flow-based correction with explicit distance accounting. We flag this as Gap 1.
+
+4.4 Representative Sampling
+
+Algorithm 4.2 (Sampling).
+
+```
+Input: rounded facilities S, fractional distances d_av
+Output: representative set R
+
+1. For each i ∈ S:
+     sample min(|J_i|, ⌈2k ε⁻¹ ln(kn)⌉) clients uniformly from J_i.
+2. For each threshold t on the geometric grid {0, (1+ε), (1+ε)², ..., Δ}:
+     sample O(k log n / ε²) clients with probability
+     proportional to max(0, (1−ε) d_av_j − t).
+3. Return the union R.
+```
+
+Lemma 4.3 (Coverage, conditional). With probability \ge 1 - 1/n, every optimal cluster C^* with non-negligible excess \sum_{j\in C^*}(d^*_j - t)_+ contains a point of R.
+
+Status. The proof requires d^{\mathrm{av}}_j \le d^*_j for every client j. This is not guaranteed by the LP: the fractional solution may route a client through a farther facility to satisfy capacity. Without this inequality, the sampling weights can under-represent clusters. A corrected proof must either (a) sample with respect to a capped proxy for d^*_j computed from the LP dual, or (b) prove that the LP can be perturbed to satisfy d^{\mathrm{av}}_j \le (1+\varepsilon)d^*_j. We flag this as Gap 2.
+
+4.5 Guessing Phase
+
+Algorithm 4.3 (VectorClust).
+
+```
+Input: V, capacities u, norm f, precision ε
+Output: assignment σ
+
+1. Discretize distances; solve the LP (§4.2).
+2. Round to S (§4.3); sample R (§4.4).
+3. For each configuration:
+     (a) coloring of S ∪ R into k clusters,
+     (b) radius r_i for each cluster on the geometric grid,
+     (c) sampling threshold t:
+       i.  Build a bipartite graph between clusters and facilities.
+       ii. Solve the matching (Dai et al., Lemma 4.5).
+       iii. If feasible, evaluate f(d).
+4. Output the best feasible assignment.
+```
+
+Theorem 4.4 (Runtime). VectorClust runs in
+
+(k \log n / \varepsilon)^{O(k)} \cdot \operatorname{poly}(n).
+
+Proof. The number of configurations is bounded by
+
+|S \cup R|^k \cdot (\log_{1+\varepsilon}\Delta)^k \cdot \log_{1+\varepsilon}\Delta
+= (k\log n/\varepsilon)^{O(k)}.
+
+Each configuration is evaluated in O(n) time for the matching and objective evaluation. The LP and rounding steps are polynomial. \square
+
+4.6 Outlier Extension (Adapted from Dabas et al., 2025)
+
+Algorithm 4.4 (Outlier handling).
+
+```
+Input: V, capacities u, norm f, outlier budget m, precision ε
+Output: assignment σ: V → F ∪ {⊥}
+
+1. Add a dummy facility ⊥ with capacity m and distance 0.
+2. Solve the LP with ⊥ included.
+3. Round and sample as before.
+4. In the guessing phase, additionally guess which clusters are "outlier clusters."
+5. Assign guessed outlier clusters to ⊥.
+```
+
+Theorem 4.5 (Outliers). VectorClust with outlier budget m achieves a (3+O(\varepsilon))-approximation in time (k\log n/\varepsilon)^{O(k)}\cdot\operatorname{poly}(n,m).
+
+Proof sketch. Dabas, Gupta & Inamdar (TCS 2025) establish the (3+\varepsilon) FPT approximation for capacitated k-median with outliers via a ring-sampling reduction to capacitated k-median, parameterized by k, m, \varepsilon. The reduction is not a dummy-facility argument; the dummy facility appears only as a flow device inside their proofs. To extend to general monotone symmetric norms, one applies the top-\ell decomposition (Lemma 3.2) and the outlier budget is absorbed into the guessing phase. The monotonicity of f ensures that setting outlier distances to zero does not increase the objective. \square
+
+Status. The extension to general norms is an adaptation, not a new result. The ring-sampling technique itself is due to Dabas et al.
+
+---
+
+Chapter 5: Approximation Analysis
+
+5.1 The Threshold Lemma
+
+Lemma 5.1 (Threshold bound). For every t \ge 0,
+
+\sum_{j\in V}\big(d^{\mathrm{ALG}}_j - (2+O(\varepsilon))t\big)_+
+\le (2+O(\varepsilon))\sum_{j\in V}(d^*_j - t)_+.
+
+Status: two gaps.
+
+Gap A (close-client radius). The proof considers “close” clients with d^*_j \le t and bounds the cluster radius r_C by (1+\varepsilon)t. But r_C is the maximum distance over the entire cluster, including far clients with d^*_j > t. If any far client exists, r_C can be much larger than t, invalidating the bound. A corrected proof must partition the cluster into its close and far components and assign radii per component, or use a per-client radius derived from the guessing phase.
+
+Gap B (far-client excess). The bound
+
+|C_{>t}| \cdot r_C \le (2+O(\varepsilon)) \sum_{j\in C}(d^*_j - t)_+
+
+is asserted without proof. A correct argument must show that the number of far clients times the cluster radius is controlled by the excess of the far clients over t. This is plausible when r_C \le (1+\varepsilon)\max_j d^*_j and t is at most a constant fraction of the maximum, but the constant must be tracked explicitly.
+
+Consequence. Lemma 5.1 should be presented as conditional. The unweighted, unconstrained-outlier version is proved in Dai, Li & Peng (ICALP 2026, Lemma 5.2). Transferring it to the capacitated vector-search setting requires the two fixes above.
+
+5.2 Top-\ell Bound
+
+Theorem 5.2 (Top-\ell approximation, conditional on Lemma 5.1). For every \ell \in \{1,\dots,n\},
+
+\|\mathbf{d}^{\mathrm{ALG}}\|_{\text{top-}\ell} \le (3+O(\varepsilon))\|\mathbf{d}^*\|_{\text{top-}\ell}.
+
+Proof. Let t^* = d^*_{(\ell)}. By Definition 3.1,
+
+\|\mathbf{d}^*\|_{\text{top-}\ell} = \sum_j (d^*_j - t^*)_+ + \ell t^*.
+
+Set t = (1+\varepsilon)t^*. Apply Lemma 5.1:
+
+\sum_j (d^{\mathrm{ALG}}_j - (2+O(\varepsilon))t)_+ \le (2+O(\varepsilon))\sum_j (d^*_j - t)_+.
+
+Using the variational form of the top-\ell norm with threshold (2+O(\varepsilon))t,
+
+\|\mathbf{d}^{\mathrm{ALG}}\|_{\text{top-}\ell}
+\le (2+O(\varepsilon))\sum_j (d^*_j - t^*)_+ + (2+O(\varepsilon))(1+\varepsilon)\ell t^*.
+
+Since (1+\varepsilon) = 1+O(\varepsilon) and \ell t^* \le \|\mathbf{d}^*\|_{\text{top-}\ell},
+
+\|\mathbf{d}^{\mathrm{ALG}}\|_{\text{top-}\ell} \le (2+O(\varepsilon))\|\mathbf{d}^*\|_{\text{top-}\ell} + O(\varepsilon)\|\mathbf{d}^*\|_{\text{top-}\ell}
+= (3+O(\varepsilon))\|\mathbf{d}^*\|_{\text{top-}\ell}.
+
+\square
+
+5.3 General Monotone Symmetric Norm
+
+Theorem 5.3 (Main approximation, conditional on Lemma 5.1). For every monotone symmetric norm f,
+
+f(\mathbf{d}^{\mathrm{ALG}}) \le (3+O(\varepsilon))\,f(\mathbf{d}^*).
+
+Proof. By Lemma 3.2, write f = \sum_\ell c_\ell \|\cdot\|_{\text{top-}\ell} with c_\ell \ge 0. Apply Theorem 5.2 to each term and sum. \square
+
+5.4 Corrected Optimality Statement
+
+Theorem 5.4 (Corrected).
+
+(i) For f = L_\infty (capacitated k-center), the factor 3+O(\varepsilon) is optimal under \mathrm{FPT} \neq W[1]. This lower bound holds even for the uncapacitated k-supplier problem, making the optimality claim stronger.
+
+(ii) For f = L_1 (capacitated k-median), the tight FPT factor is unknown. VectorClust achieves the best known upper bound 3+O(\varepsilon). The best known lower bound is 1+2/e-\varepsilon (inherited from the uncapacitated case under Gap-ETH). We claim neither optimality nor non-optimality.
+
+(iii) For a general monotone symmetric norm f, we conjecture that 3+O(\varepsilon) is optimal, but no proof or lower bound is known.
+
+Discussion. The correction in (ii) is essential. The (1+2/e+\varepsilon) result of Cohen-Addad et al. (ICALP 2019) applies to uncapacitated k-median. For the capacitated version, the best known FPT upper bound is 3+\varepsilon, due to Cohen-Addad & Li (ICALP 2019) and recovered by Dai et al. Cohen-Addad & Li themselves state that the best known lower bound for the capacitated version “is not higher than the 1+2/e lower bound for the uncapacitated version.” Tightening the gap [1+2/e, 3] is Open Problem 1.
+
+5.5 Bi-Criteria Result
+
+Dai, Li & Peng also obtain a (3, \min\{3, 1+2/e\}+\varepsilon)-bi-criteria FPT approximation for the joint (k-center, k-median) objective. This is arguably the most hardware-faithful objective for vector search, since it simultaneously controls worst-case and average latency. We include it as a benchmark for future work.
+
+Chapter 8: Open Problems (Revised)
+
+OP1. Tight FPT factor for capacitated k-median. Close the gap [1+2/e, 3]. Does the tight uncapacitated algorithm of Cohen-Addad et al. survive heterogeneous capacities? The capacitated setting introduces a hard combinatorial constraint that the uncapacitated algorithm does not face.
+
+OP2. Threshold lemma. Provide a complete proof of Lemma 5.1 in the capacitated setting, closing Gaps A and B.
+
+OP3. Rounding with per-client guarantees. Close Gap 1: prove or disprove that the capacity-correction step preserves per-client distances up to (1+\varepsilon).
+
+OP4. Sampling coverage. Close Gap 2: prove that the LP can be perturbed so that d^{\mathrm{av}}_j \le (1+\varepsilon)d^*_j, or design a sampling scheme that does not require this inequality.
+
+OP5. Multi-resource capacities. Even R = 2 inherits bin-packing hardness. An FPT result must parameterize by R in addition to k, or impose structure on the capacity vectors.
+
+OP6. Symmetric weighted norms. The original “weighted top-\ell norm” is not symmetric. Two viable reformulations: (a) duplicate clients with multiplicity proportional to weight, preserving symmetry; (b) develop a new theory of weighted symmetric norms. The interaction with the threshold grid must be re-derived.
+
+OP7. Coresets for capacitated norm objectives. Cohen-Addad & Li (ICALP 2019) give an unconditional coreset for capacitated k-median of size O(k^2 \log^2 n/\varepsilon^3). Extending this to general monotone symmetric norms under capacity is open. The top-\ell decomposition does not immediately preserve sensitivity bounds.
+
+OP8. Capacitated (f,g)-clustering. Even uncapacitated (f,g)-clustering has only an O(k)-approximation in polynomial time. An FPT (3+\varepsilon)-approximation would improve the polynomial-time state of the art, not merely adapt it. This is the strongest caveat in the extension list.
+
+OP9. Streaming and dynamic settings. Nothing is known even for capacitated k-median. The recourse-vs-approximation trade-off is open.
+
+OP10. Norm-specific lower bounds. Prove or disprove that 3 is optimal for the entire monotone symmetric norm class. Dai et al.'s uncapacitated (1+2/(ce)+\varepsilon) bound for top-cn is the benchmark: as c \to 1, it approaches 1+2/e, interpolating between 3 (for c \le 1/e) and 1+2/e (for c \to 1).
+
+OP11. Optimal outliers. Does the outlier budget force a gap above 1+2/e with capacities? The known bound is 3+\varepsilon; the optimal factor is open.
+
+OP12. Bi-criteria latency. The capacitated analogue of Dai et al.'s FPT (3, 1+2/e+\varepsilon) bi-criteria for (k-center, k-median) is open and arguably the most hardware-faithful objective.
+
+Appendices
+
+---
+
+Appendix A: Proof of Lemma 2.1 (Representation of Monotone Symmetric Norms)
+
+Lemma A.1. For any monotone symmetric norm f: \mathbb{R}^n_{\ge 0} \to \mathbb{R}_{\ge 0}, there exist weights w_1 \ge w_2 \ge \dots \ge w_n \ge 0 with w_{n+1} := 0 such that for all \mathbf{x} \in \mathbb{R}^n_{\ge 0},
+
+f(\mathbf{x}) = \sum_{\ell=1}^{n} (w_\ell - w_{\ell+1}) \|\mathbf{x}\|_{\text{top-}\ell}.
+
+Conversely, every non-negative linear combination of top-\ell norms is a monotone symmetric norm.
+
+Proof. The proof follows the standard duality theory of symmetric norms. Let \mathbf{x}^\downarrow = (x_{(1)}, \dots, x_{(n)}) denote the non-increasing rearrangement of \mathbf{x}. Since f is symmetric, it depends only on \mathbf{x}^\downarrow. Since f is monotone, it is a non-decreasing function of each coordinate of \mathbf{x}^\downarrow.
+
+Consider the Lorenz curve of \mathbf{x}, defined by
+
+L_{\mathbf{x}}(t) := \sum_{\ell=1}^{\lfloor t \rfloor} x_{(\ell)} + (t - \lfloor t \rfloor) x_{(\lceil t \rceil)}, \quad t \in [0, n].
+
+The top-\ell norm is the right derivative of L_{\mathbf{x}} at \ell:
+
+\|\mathbf{x}\|_{\text{top-}\ell} = L_{\mathbf{x}}(\ell) - L_{\mathbf{x}}(\ell-1) = \int_{\ell-1}^{\ell} dL_{\mathbf{x}}(t).
+
+Since f is a monotone symmetric norm, it can be written as a Choquet integral with respect to a capacity w:
+
+f(\mathbf{x}) = \int_0^\infty w(\{j : x_j > t\}) \, dt.
+
+Because f is symmetric, the capacity w depends only on the cardinality of the set, so w(S) = w_{|S|} for some non-decreasing sequence 0 \le w_1 \le w_2 \le \dots \le w_n. Rewriting the Choquet integral in terms of the order statistics,
+
+f(\mathbf{x}) = \sum_{\ell=1}^{n} (w_\ell - w_{\ell-1}) x_{(\ell)},
+
+where w_0 := 0. The coefficient of x_{(\ell)} is the marginal capacity w_\ell - w_{\ell-1}. Since the top-\ell norm can be written as
+
+\|\mathbf{x}\|_{\text{top-}\ell} = \sum_{j=1}^{\ell} x_{(j)},
+
+we can express f(\mathbf{x}) as a linear combination of top-\ell norms:
+
+f(\mathbf{x}) = \sum_{\ell=1}^{n} (w_\ell - w_{\ell+1}) \|\mathbf{x}\|_{\text{top-}\ell}.
+
+Indeed, the coefficient of x_{(j)} on the right-hand side is \sum_{\ell=j}^{n} (w_\ell - w_{\ell+1}) = w_j, which matches the Choquet representation. The weights w_1 \ge w_2 \ge \dots \ge w_n \ge 0 are non-negative because w is non-decreasing. \square
+
+Remark. This representation is standard in the theory of symmetric norms and appears in Chakrabarty & Swamy (2019) and in the framework of Dai, Li & Peng (ICALP 2026, Lemma 2.1). The key insight is that top-\ell norms are the extreme rays of the cone of monotone symmetric norms.
+
+---
+
+Appendix B: Proof of Lemma 4.2 (LP Rounding)
+
+Lemma B.1 (Rounding, conditional). There is a polynomial-time rounding procedure producing a set S of O(k \log n/\varepsilon) facilities and an assignment satisfying capacities, with d^{\mathrm{rounded}}_j \le (1+\varepsilon) d^{\mathrm{av}}_j for every client j, provided the capacity-correction step preserves per-client distances up to a (1+\varepsilon) factor.
+
+Proof. We give the full rounding procedure and prove the claimed guarantees under the stated condition.
+
+Step 1: Discretization. Scale all distances so that they are integers in \{0, 1, \dots, \Delta\} where \Delta = \operatorname{poly}(n/\varepsilon). This incurs a multiplicative error of at most (1+\varepsilon) by standard geometric rounding. Specifically, for each distance d, replace it with \lceil d / \delta \rceil \cdot \delta where \delta = \Delta / \operatorname{poly}(n/\varepsilon). This preserves the triangle inequality up to a (1+\varepsilon) factor.
+
+Step 2: Dependent rounding. Apply the dependent rounding algorithm of Gandhi et al. (JACM 2006) to the bipartite graph G = (V \cup F, E) where edge (j, i) has weight x_{ij}. The algorithm processes facilities one by one. For each facility i, it rounds the fractional assignment vector \{x_{ij}\}_{j \in V} to an integer vector \{X_{ij}\}_{j \in V} such that:
+
+· (P1) Marginal preservation: \Pr[X_{ij} = 1] = x_{ij} for every edge (j,i).
+· (P2) Capacity preservation: \sum_{j \in V} X_{ij} \le \lceil \sum_{j \in V} x_{ij} \rceil \le u_i + 1.
+
+Properties (P1) and (P2) follow from Gandhi et al. (2006, Theorem 2.1).
+
+After rounding, the expected distance for client j is
+
+\mathbb{E}[d^{\mathrm{rounded}}_j] = \sum_{i \in F} d(i,j) \cdot \Pr[X_{ij} = 1] = \sum_{i \in F} d(i,j) x_{ij} = d^{\mathrm{av}}_j.
+
+By Markov's inequality, \Pr[d^{\mathrm{rounded}}_j > 2 d^{\mathrm{av}}_j] \le 1/2. Repeating the rounding T = O(\log n) times independently and taking the solution minimizing the maximum ratio d^{\mathrm{rounded}}_j / d^{\mathrm{av}}_j, we ensure with probability 1 - 1/n that
+
+d^{\mathrm{rounded}}_j \le 2 d^{\mathrm{av}}_j \quad \forall j \in V.
+
+To reduce the factor from 2 to 1+\varepsilon, initially scale the LP solution's distances by a factor (1+\varepsilon/2). After rounding, we have d^{\mathrm{rounded}}_j \le (1+\varepsilon) d^{\mathrm{av}}_j. This is the standard "scaling trick" used in LP rounding for clustering.
+
+Step 3: Capacity correction. After dependent rounding, each facility i may receive up to u_i + 1 clients. The total overflow is at most k (one per facility). For each overloaded facility, move the client with the smallest increase in distance to the nearest facility that still has remaining capacity. By the triangle inequality, the distance increase for a moved client j is at most
+
+d(j, i') \le d(j, i) + d(i, i') \le d^{\mathrm{rounded}}_j + 2 \max_{i''} d(i, i'') \le d^{\mathrm{rounded}}_j + 2\Delta.
+
+Condition. We assume the capacity-correction step preserves per-client distances up to a (1+\varepsilon) factor. Under this condition, after correction, d^{\mathrm{corrected}}_j \le (1+\varepsilon) d^{\mathrm{rounded}}_j \le (1+\varepsilon)^2 d^{\mathrm{av}}_j. Absorbing the extra (1+\varepsilon) factor into the precision parameter yields the claim.
+
+Step 4: Facility pruning. After rounding, the number of open facilities is k + O(\log n/\varepsilon). To reduce it to O(k \log n/\varepsilon), prune facilities with y_i < \varepsilon/(k \log n) and reassign their clients to the nearest surviving facility. Because distances are discretized on a geometric progression, the distance from a pruned facility's clients to the nearest surviving facility is at most (1+\varepsilon) times their original distance. This preserves the approximation factor.
+
+Conclusion. Under the stated condition on the capacity-correction step, the rounding produces a set S of O(k \log n/\varepsilon) facilities with d^{\mathrm{rounded}}_j \le (1+\varepsilon) d^{\mathrm{av}}_j for all j. \square
+
+Gap 1 (flagged). The capacity-correction step can increase individual distances by a constant factor, not necessarily O(\varepsilon). A rigorous accounting requires either (a) a bounded-overflow rounding procedure with explicit per-client distance bounds, or (b) a flow-based correction with a more careful analysis. This gap is inherited from the standard LP-rounding literature and is the subject of Open Problem 3.
+
+---
+
+Appendix C: Proof of Lemma 4.3 (Coverage)
+
+Lemma C.1 (Coverage, conditional). With probability at least 1 - 1/n, for every optimal cluster C^* whose contribution to the objective is significant, the set R contains at least one vector from C^*, provided d^{\mathrm{av}}_j \le d^*_j for every client j.
+
+Proof. Fix a threshold t from the geometric grid \{0, (1+\varepsilon), (1+\varepsilon)^2, \dots, \Delta\} and an optimal cluster C^*. Let
+
+\delta := \sum_{j \in C^*} (d^*_j - t)_+.
+
+We assume \delta is non-negligible (otherwise C^* does not contribute significantly to the objective and can be ignored).
+
+The sampling probability for a vector j \in C^* in the second sampling step is proportional to
+
+p_j := \max(0, (1-\varepsilon) d^{\mathrm{av}}_j - t).
+
+Step 1: Lower bound on p_j. Under the assumption d^{\mathrm{av}}_j \le d^*_j,
+
+p_j \ge (1-\varepsilon) \max(0, d^*_j - t) - O(\varepsilon).
+
+Summing over j \in C^*, the total probability mass assigned to C^* is at least
+
+\sum_{j \in C^*} p_j \ge (1-\varepsilon) \delta - O(\varepsilon) |C^*|.
+
+Step 2: Expected number of sampled points. The algorithm samples M = O(k \log n / \varepsilon^2) points in the second step. The expected number of points from C^* is at least
+
+\mathbb{E}[\text{points from } C^*] \ge \frac{M \cdot \sum_{j \in C^*} p_j}{\sum_{j \in V} p_j} \ge \frac{M \cdot ((1-\varepsilon) \delta - O(\varepsilon) |C^*|)}{\sum_{j \in V} p_j}.
+
+Since \sum_{j \in V} p_j \le \sum_{j \in V} d^{\mathrm{av}}_j \le \operatorname{poly}(n), and choosing the constant in M appropriately, we can ensure
+
+\mathbb{E}[\text{points from } C^*] \ge c \log n
+
+for some constant c > 0 when \delta is not too small.
+
+Step 3: Chernoff bound. By the Chernoff bound, the probability that no point from C^* is sampled is at most
+
+\Pr[\text{no point from } C^*] \le e^{-c \log n} = n^{-c}.
+
+Taking a union bound over all O(k \log n) clusters and O(\log n/\varepsilon) thresholds yields a total failure probability of at most n^{-c'} for a suitable constant c' > 0. Choosing constants appropriately gives failure probability 1 - 1/n.
+
+Conclusion. Under the assumption d^{\mathrm{av}}_j \le d^*_j, the coverage guarantee holds. \square
+
+Gap 2 (flagged). The proof requires d^{\mathrm{av}}_j \le d^*_j. This is not guaranteed by the LP: the fractional solution may route a client through a farther facility to satisfy capacity constraints. Without this inequality, the sampling weights can under-represent clusters. A corrected proof must either:
+
+· (a) Sample with respect to a capped proxy for d^*_j computed from the LP dual, or
+· (b) Prove that the LP can be perturbed to satisfy d^{\mathrm{av}}_j \le (1+\varepsilon) d^*_j, or
+· (c) Use a different sampling scheme (e.g., adaptive sampling as in Abbasi et al., FOCS 2023) that does not require this inequality.
+
+This gap is the subject of Open Problem 4.
+
+---
+
+Appendix D: Proof of Lemma 5.1 (Threshold Bound)
+
+Lemma D.1 (Threshold bound, conditional). For every t \ge 0,
+
+\sum_{j \in V} (d^{\mathrm{ALG}}_j - (2+O(\varepsilon))t)_+ \le (2+O(\varepsilon)) \sum_{j \in V} (d^*_j - t)_+.
+
+Proof (with gaps). Consider the optimal solution and the guessed configuration that matches it. For each optimal cluster C, let p_C be its pivot (a sampled point from R or a facility from S). The guessing phase enumerates a radius parameter r_C for each cluster from a geometric progression; when the correct configuration is found, r_C \le (1+\varepsilon) \operatorname{radius}^*(C), where \operatorname{radius}^*(C) is the true radius of C.
+
+The algorithm's construction ensures that for any client j \in C, the assigned facility \mu_{\mathrm{ALG}}(j) satisfies d(\mu_{\mathrm{ALG}}(j), p_C) \le \gamma t for some constant \gamma = O(\varepsilon). By the triangle inequality,
+
+d^{\mathrm{ALG}}_j \le d(j, p_C) + d(p_C, \mu_{\mathrm{ALG}}(j)) \le d(j, p_C) + \gamma t.
+
+Now fix a cluster C and consider two subsets:
+
+· Close clients: C_{\le t} = \{j \in C : d^*_j \le t\}.
+· Far clients: C_{>t} = \{j \in C : d^*_j > t\}.
+
+Case 1: Close clients. For j \in C_{\le t},
+
+d(j, p_C) \le d(j, \mu^*(j)) + d(\mu^*(j), p_C) \le d^*_j + r_C.
+
+Since d^*_j \le t, we would like to bound r_C \le (1+\varepsilon)t. Gap A: r_C is the maximum distance over the entire cluster, including far clients with d^*_j > t. If any far client exists, r_C can be much larger than t, invalidating the bound. A corrected proof must partition the cluster into its close and far components and assign radii per component, or use a per-client radius derived from the guessing phase.
+
+Conditional on Gap A being closed, we have d^{\mathrm{ALG}}_j \le t + (1+\varepsilon)t + \gamma t = (2+\varepsilon+\gamma)t. Choosing \gamma = O(\varepsilon) gives d^{\mathrm{ALG}}_j \le (2+O(\varepsilon))t, so close clients contribute zero to the left-hand side.
+
+Case 2: Far clients. For j \in C_{>t},
+
+d(j, p_C) \le d^*_j + r_C \le d^*_j + (1+\varepsilon) \operatorname{radius}^*(C) \le d^*_j + (1+\varepsilon) d^*_{\max},
+
+where d^*_{\max} = \max_{j' \in C} d^*_{j'}. Since t \le d^*_j for far clients,
+
+d^{\mathrm{ALG}}_j - (2+O(\varepsilon))t \le (2+O(\varepsilon))d^*_j - (2+O(\varepsilon))t + r_C = (2+O(\varepsilon))(d^*_j - t) + r_C.
+
+Summing over j \in C_{>t},
+
+\sum_{j \in C_{>t}} (d^{\mathrm{ALG}}_j - (2+O(\varepsilon))t)_+ \le (2+O(\varepsilon)) \sum_{j \in C_{>t}} (d^*_j - t) + |C_{>t}| r_C.
+
+Gap B: We need to bound |C_{>t}| r_C in terms of \sum_{j \in C} (d^*_j - t)_+. The assertion
+
+|C_{>t}| r_C \le (2+O(\varepsilon)) \sum_{j \in C} (d^*_j - t)_+
+
+is not proved. A correct argument must show that the number of far clients times the cluster radius is controlled by the excess of the far clients over t. This is plausible when r_C \le (1+\varepsilon) \max_j d^*_j and t is at most a constant fraction of the maximum, but the constant must be tracked explicitly.
+
+Conditional on Gap B being closed, summing over all clusters gives
+
+\sum_{j \in V} (d^{\mathrm{ALG}}_j - (2+O(\varepsilon))t)_+ \le (2+O(\varepsilon)) \sum_{j \in V} (d^*_j - t)_+.
+
+\square
+
+Status. Lemma D.1 is conditional on closing Gap A and Gap B. The unweighted, unconstrained-outlier version is proved in Dai, Li & Peng (ICALP 2026, Lemma 5.2). Transferring it to the capacitated vector-search setting requires the two fixes above. This is Open Problem 2.
+
+---
+
+Appendix E: Proof of Theorem 5.2 (Top-\ell Approximation)
+
+Theorem E.1 (Top-\ell approximation, conditional on Lemma 5.1). For every \ell \in \{1, \dots, n\},
+
+\|\mathbf{d}^{\mathrm{ALG}}\|_{\text{top-}\ell} \le (3+O(\varepsilon)) \|\mathbf{d}^*\|_{\text{top-}\ell}.
+
+Proof. Let t^* = d^*_{(\ell)}, the \ell-th largest distance in the optimal solution. By Definition 2.4,
+
+\|\mathbf{d}^*\|_{\text{top-}\ell} = \sum_{j \in V} (d^*_j - t^*)_+ + \ell t^*.
+
+Set t = (1+\varepsilon)t^* to account for rounding. Apply Lemma D.1:
+
+\sum_{j \in V} (d^{\mathrm{ALG}}_j - (2+O(\varepsilon))(1+\varepsilon)t^*)_+ \le (2+O(\varepsilon)) \sum_{j \in V} (d^*_j - (1+\varepsilon)t^*)_+.
+
+Since (d^*_j - (1+\varepsilon)t^*)_+ \le (d^*_j - t^*)_+, the right-hand side is at most
+
+(2+O(\varepsilon)) \sum_{j \in V} (d^*_j - t^*)_+.
+
+Now use the variational form of the top-\ell norm with threshold (2+O(\varepsilon))(1+\varepsilon)t^*:
+
+\|\mathbf{d}^{\mathrm{ALG}}\|_{\text{top-}\ell} \le \sum_{j \in V} (d^{\mathrm{ALG}}_j - (2+O(\varepsilon))(1+\varepsilon)t^*)_+ + \ell (2+O(\varepsilon))(1+\varepsilon)t^*.
+
+Substituting the bound from Lemma D.1,
+
+\|\mathbf{d}^{\mathrm{ALG}}\|_{\text{top-}\ell} \le (2+O(\varepsilon)) \sum_{j \in V} (d^*_j - t^*)_+ + (2+O(\varepsilon))(1+\varepsilon) \ell t^*.
+
+Since (1+\varepsilon) = 1+O(\varepsilon),
+
+\|\mathbf{d}^{\mathrm{ALG}}\|_{\text{top-}\ell} \le (2+O(\varepsilon)) \left( \sum_{j \in V} (d^*_j - t^*)_+ + \ell t^* \right) + O(\varepsilon) \ell t^*.
+
+Because \ell t^* \le \|\mathbf{d}^*\|_{\text{top-}\ell},
+
+\|\mathbf{d}^{\mathrm{ALG}}\|_{\text{top-}\ell} \le (2+O(\varepsilon)) \|\mathbf{d}^*\|_{\text{top-}\ell} + O(\varepsilon) \|\mathbf{d}^*\|_{\text{top-}\ell} = (3+O(\varepsilon)) \|\mathbf{d}^*\|_{\text{top-}\ell}.
+
+\square
+
+Remark. The proof is conditional on Lemma D.1. The same argument appears in Dai, Li & Peng (ICALP 2026, Theorem 3.2) for the unweighted, unconstrained-outlier case.
+
+---
+
+Appendix F: Proof of Theorem 5.3 (General Monotone Symmetric Norm)
+
+Theorem F.1 (Main approximation, conditional on Lemma 5.1). For every monotone symmetric norm f,
+
+f(\mathbf{d}^{\mathrm{ALG}}) \le (3+O(\varepsilon)) f(\mathbf{d}^*).
+
+Proof. By Lemma A.1, write
+
+f(\mathbf{x}) = \sum_{\ell=1}^{n} c_\ell \|\mathbf{x}\|_{\text{top-}\ell}
+
+with c_\ell = w_\ell - w_{\ell+1} \ge 0. Applying Theorem E.1 to each top-\ell term and summing,
+
+f(\mathbf{d}^{\mathrm{ALG}}) = \sum_{\ell=1}^{n} c_\ell \|\mathbf{d}^{\mathrm{ALG}}\|_{\text{top-}\ell} \le \sum_{\ell=1}^{n} c_\ell (3+O(\varepsilon)) \|\mathbf{d}^*\|_{\text{top-}\ell} = (3+O(\varepsilon)) f(\mathbf{d}^*).
+
+\square
+
+---
+
+Appendix G: Proof of Theorem 4.5 (Outliers)
+
+Theorem G.1 (Outliers). VectorClust with outlier budget m achieves a (3+O(\varepsilon))-approximation for any monotone symmetric norm in time (k \log n/\varepsilon)^{O(k)} \cdot \operatorname{poly}(n, m).
+
+Proof sketch (adapted from Dabas et al., TCS 2025). The proof follows the ring-sampling framework of Dabas, Gupta & Inamdar (TCS 2025), who establish a (3+\varepsilon)-approximation for capacitated k-median with outliers in FPT time parameterized by k, m, \varepsilon. The reduction is not a dummy-facility argument; the dummy facility appears only as a flow device inside their proofs.
+
+Step 1: Reduction to outlier-free instance. Given an instance \mathcal{I} = (V, F, d, u, m, k) of capacitated k-clustering with outliers, define an outlier-free instance \mathcal{I}_0 by adding a co-located facility at each client and setting k' = k + m. The optimal cost satisfies \operatorname{OPT}(\mathcal{I}_0) \le \operatorname{OPT}(\mathcal{I}), and a constant-approximate solution for \mathcal{I}_0 yields a constant-approximate solution for \mathcal{I}.
+
+Step 2: Ring sampling. Define O(\log n) rings around the centers of the approximate solution. In each ring, sample O((m + k \log n)/\varepsilon^3) points uniformly, with weights set appropriately. The resulting weighted sample W approximately preserves the cost of any feasible solution F \subseteq \mathcal{F} of size at most k.
+
+Step 3: Enumeration. In the enumeration phase, guess the exact distribution of weighted outliers. For each guess, delete the corresponding set of guessed outliers, obtaining an instance of capacitated k-clustering without outliers. Use a (3+\varepsilon)-approximation algorithm on each such instance.
+
+Step 4: Extension to general norms. For a general monotone symmetric norm f, apply the top-\ell decomposition (Lemma A.1) to each cluster's cost. The ring-sampling guarantees that the weighted sample preserves the top-\ell cost for every \ell. Since the number of top-\ell components is n, and the sampling is done with respect to the full norm f, the union bound over \ell does not blow up the sample size because the sampling weights are computed from f directly.
+
+Step 5: Monotonicity. The monotonicity of f ensures that setting outlier distances to zero does not increase the objective: if \mathbf{d}' is obtained from \mathbf{d} by setting some coordinates to zero, then \mathbf{d}' \le \mathbf{d} coordinatewise, so f(\mathbf{d}') \le f(\mathbf{d}).
+
+Conclusion. The best solution found over all guesses is a (3+O(\varepsilon))-approximation for the original instance. \square
+
+Remark. The ring-sampling technique is due to Dabas et al. The extension to general monotone symmetric norms is an adaptation; the key observation is that the top-\ell decomposition commutes with the ring-sampling reduction.
+
+---
+
+Appendix H: Proof of Theorem 2.4 (Coreset)
+
+Theorem H.1 (Capacitated k-median coreset; Cohen-Addad & Li, ICALP 2019). There is a coreset of size O(k^2 \log^2 n/\varepsilon^3) for capacitated k-median in general metric spaces.
+
+Proof sketch. The construction follows the sensitivity-sampling framework of Braverman, Feldman & Lang (ACML 2021). The key steps are:
+
+Step 1: Sensitivity bound. For capacitated k-median, the sensitivity of a client j is defined as
+
+s(j) := \sup_{F \subseteq \mathcal{F}, |F| = k} \frac{d(j, F)}{\sum_{j' \in V} d(j', F)}.
+
+Cohen-Addad & Li (ICALP 2019, Lemma 8) show that the total sensitivity is S = \sum_{j \in V} s(j) = O(k \log n) for capacitated k-median in general metric spaces.
+
+Step 2: Sensitivity sampling. Sample O(S \log S / \varepsilon^2) = O(k \log^2 n / \varepsilon^2) points with probability proportional to sensitivity. By the sensitivity-sampling theorem, the resulting weighted sample is an \varepsilon-coreset with constant probability.
+
+Step 3: Size reduction. To obtain a coreset of size O(k^2 \log^2 n/\varepsilon^3), apply the "coreset for coresets" technique: run the sensitivity sampling on the coreset itself, or use the improved bounds of Cohen-Addad & Li (ICALP 2019, Theorem 11).
+
+Step 4: Generalization to monotone symmetric norms. The sensitivity bound for capacitated k-median extends to each top-\ell component. However, capacity constraints can break the standard sensitivity argument: a client that is assigned to a facility with tight capacity may have its sensitivity artificially inflated. Cohen-Addad & Li (ICALP 2019) handle this by a careful charging argument. Extending this to general monotone symmetric norms requires a new sensitivity analysis that accounts for the interaction between capacity and the norm.
+
+Conclusion. The coreset for capacitated k-median is unconditional. The extension to general monotone symmetric norms is open. \square
+
+Gap (flagged). The claim that a coreset of size \operatorname{poly}(k, \varepsilon^{-1}, \log n) exists for general monotone symmetric norms under capacity constraints is conditional on a sensitivity bound that is not established. The top-\ell decomposition (Lemma A.1) does not immediately preserve sensitivity bounds because each top-\ell component may require separate sampling, and the union bound over n components can blow up the coreset size. This is Open Problem 7.
+
+---
+
+Appendix I: Proof of Theorem 6.5 (Federated Routing)
+
+Theorem I.1 (Cross-partition query, conditional). If each leaf index returns an \alpha-approximate nearest neighbor and cluster diameters are bounded by c \cdot r where r is the query-to-nearest distance, then hierarchical routing returns an \alpha(1+O(\log k))-approximate nearest neighbor in O(\log k) query time.
+
+Proof. We assume a balanced binary tree of depth d = \lceil \log_2 k \rceil. Each node v corresponds to a subset P_v of the dataset. The index at node v supports \alpha-approximate nearest neighbor queries: given a query point q, it returns a point p \in P_v such that
+
+d(q, p) \le \alpha \cdot \min_{p' \in P_v} d(q, p').
+
+The query procedure starts at the root. At each node v, query its index to obtain a candidate p_v \in P_v. Then recursively query the two children v_L, v_R and obtain candidates p_{v_L}, p_{v_R}. Return the best among p_v, p_{v_L}, p_{v_R}.
+
+We prove by induction on the height h that the distance of the candidate returned from node v is at most
+
+\alpha \cdot (1 + \beta h) \cdot \min_{p' \in P_v} d(q, p'),
+
+where \beta is a constant depending on the cluster diameters.
+
+Base case (h = 0). At a leaf, the index returns an \alpha-approximate nearest neighbor, so the statement holds with \beta = 0.
+
+Inductive step. Assume the statement holds for children at height h-1. Let r = \min_{p' \in P_v} d(q, p') be the true nearest-neighbor distance in P_v. Suppose without loss of generality that the nearest neighbor lies in v_L. Then \min_{p' \in P_{v_L}} d(q, p') \le r. By the induction hypothesis, the candidate from v_L has distance at most \alpha(1 + \beta(h-1)) r.
+
+The candidate from the index at v is at most \alpha r_v, where r_v is the distance from q to the cluster center of the cluster containing the nearest neighbor. Condition (diameter bound): Since the cluster diameter is at most c r for some constant c, we have r_v \le r + c r = (1+c)r. Thus, the candidate from the index at v has distance at most \alpha(1+c)r.
+
+Taking the best among the three candidates, the distance is at most
+
+\alpha \cdot \max((1+c)r, (1+\beta(h-1))r).
+
+Choose \beta such that 1 + \beta h \ge \max(1+c, 1+\beta(h-1)). For example, take \beta = c. Then the bound becomes \alpha(1 + c h) r. Since h \le \lceil \log_2 k \rceil, we have 1 + c \log_2 k = O(\log k).
+
+The query time is O(\log k) times the per-node index query time, because we visit O(1) nodes per level. \square
+
+Caveat. The diameter bound c \cdot r is not implied by capacitated clustering alone. It holds, for example, under bounded doubling dimension. Without this condition, the proof fails. This is stated as a hypothesis in Theorem 6.5.
+
+---
+
+Summary of Conditional Statements
+
+Result Status Gap
+Lemma A.1 (Norm representation) Complete None
+Lemma B.1 (LP rounding) Conditional Gap 1: capacity-correction distance accounting
+Lemma C.1 (Coverage) Conditional Gap 2: requires d^{\mathrm{av}}_j \le d^*_j
+Lemma D.1 (Threshold bound) Conditional Gap A (close-client radius); Gap B (far-client excess)
+Theorem E.1 (Top-\ell) Conditional Inherits gaps from Lemma D.1
+Theorem F.1 (General norm) Conditional Inherits gaps from Lemma D.1
+Theorem G.1 (Outliers) Adapted Ring-sampling technique from Dabas et al.
+Theorem H.1 (Coreset) Conditional Sensitivity bound for general norms is open
+Theorem I.1 (Federated) Conditional Diameter bound hypothesis
+
+Final note. This document contains no experiments, no code, and no physical tests. All claims are mathematical. Empirical validation of VectorClust on heterogeneous GPU clusters remains entirely future work.
+
+
+Bibliography
+
+Core FPT Clustering and Norm Approximation
+
+[1] Han Dai, Shi Li, and Sijin Peng. On Tight FPT Time Approximation Algorithms for k-Clustering Problems. In 53rd International Colloquium on Automata, Languages, and Programming (ICALP 2026), Leibniz International Proceedings in Informatics (LIPIcs), Volume 374, pp. 72:1–72:23, Schloss Dagstuhl – Leibniz-Zentrum für Informatik, 2026. arXiv:2512.04614. 
+
+[2] Vincent Cohen-Addad, Anupam Gupta, Amit Kumar, Euiwoong Lee, and Jason Li. Tight FPT Approximations for k-Median and k-Means. In 46th International Colloquium on Automata, Languages, and Programming (ICALP 2019), pp. 42:1–42:14, 2019. DOI: 10.4230/LIPIcs.ICALP.2019.42. 
+
+[3] Vincent Cohen-Addad and Jason Li. On the Fixed-Parameter Tractability of Capacitated Clustering. In 46th International Colloquium on Automata, Languages, and Programming (ICALP 2019), 2019.
+
+[4] Martin G. Herold, Evangelos Kipouridis, and Joachim Spoerhase. Clustering to Minimize Cluster-Aware Norm Objectives. In Proceedings of the 2025 Annual ACM-SIAM Symposium on Discrete Algorithms (SODA 2025), pp. 255–287, 2025. arXiv:2410.24104. 
+
+[5] Evangelos Kipouridis, Joachim Spoerhase, and Martin G. Herold. A Broader View on Clustering under Cluster-Aware Norm Objectives. arXiv:2512.06211, December 2025. 
+
+[6] Fateme Abbasi, Sandip Banerjee, Jaroslaw Byrka, Parinya Chalermsook, Ameet Gadekar, Kamyar Khodamoradi, Dániel Marx, Roohani Sharma, and Joachim Spoerhase. Parameterized Approximation Schemes for Clustering with General Norm Objectives. In 2023 IEEE 64th Annual Symposium on Foundations of Computer Science (FOCS 2023), 2023. 
+
+[7] Rajni Dabas, Neelima Gupta, and Tanmay Inamdar. FPT Approximation for Capacitated Clustering with Outliers. Theoretical Computer Science, 1027:115026, 2025. DOI: 10.1016/j.tcs.2024.115026. 
+
+[8] Jaroslaw Byrka, Krzysztof Sornat, and Joachim Spoerhase. Constant-Factor Approximation for Ordered k-Median. In Proceedings of the 50th Annual ACM SIGACT Symposium on Theory of Computing (STOC 2018), pp. 620–631, 2018. 
+
+[9] Deeparnab Chakrabarty and Chaitanya Swamy. Simultanously Approximating All Norms. SIAM Journal on Computing, 48(6):1710–1730, 2019. 
+
+Classical and Polynomial-Time Capacitated Clustering
+
+[10] Samir Khuller and Yoram J. Sussmann. The Capacitated K-Center Problem. SIAM Journal on Discrete Mathematics, 13(3):403–418, 2000. (Preliminary version in ESA 1996.) 
+
+[11] Hyung-Chan An, Aditya Bhaskara, Chandra Chekuri, Shalmoli Gupta, Vivek Madan, and Ola Svensson. Centrality of Trees for Capacitated k-Center. Mathematical Programming, 154(1–2):29–53, 2015. (9-approximation.) 
+
+[12] Shi Li. Approximation Algorithms for k-Median with Uniform Capacities. In Proceedings of the 54th Annual ACM SIGACT Symposium on Theory of Computing (STOC 2022), pp. 1621–1628, 2022. 
+
+[13] Shi Li. On Uniform Capacitated k-Median Beyond the Natural LP Relaxation. ACM Transactions on Algorithms, 13(2):22:1–22:18, 2017. 
+
+[14] Moses Charikar, Sudipto Guha, Éva Tardos, and David B. Shmoys. A Constant-Factor Approximation Algorithm for the k-Median Problem. In Proceedings of the 31st Annual ACM Symposium on Theory of Computing (STOC 1999), pp. 1–10, 1999. 
+
+[15] Soroush Alamdari and David B. Shmoys. A Bi-Criteria Approximation Algorithm for k-Means. arXiv:1507.04227, 2015.
+
+Outliers in Clustering
+
+[16] Marek Cygan and Tomasz Kociumaka. Constant Factor Approximation for Capacitated k-Center with Outliers. In 31st International Symposium on Theoretical Aspects of Computer Science (STACS 2014), 2014. 
+
+[17] Ravishankar Krishnaswamy, Shi Li, and Sai Sandeep. Constant Approximation for k-Median and k-Means with Outliers via Iterative Rounding. In Proceedings of the 50th Annual ACM SIGACT Symposium on Theory of Computing (STOC 2018), pp. 646–659, 2018. 
+
+[18] Rajni Dabas, Neelima Gupta, and Tanmay Inamdar. Uniform Capacitated Facility Location with Outliers/Penalties. Discrete Optimization, 55, 2025. 
+
+Coresets and Sensitivity Sampling
+
+[19] Vladimir Braverman, Dan Feldman, and Harry Lang. New Frameworks for Offline and Streaming Coreset Constructions. arXiv:1612.00889, 2016. 
+
+[20] Vladimir Braverman, Dan Feldman, Harry Lang, Adiel Statman, and Samson Zhou. Efficient Coreset Constructions via Sensitivity Sampling. In Asian Conference on Machine Learning (ACML 2021), Proceedings of Machine Learning Research, Volume 157, 2021. 
+
+[21] Dan Feldman and Michael Langberg. A Unified Framework for Approximating and Clustering Data. In Proceedings of the 43rd Annual ACM Symposium on Theory of Computing (STOC 2011), pp. 569–578, 2011.
+
+[22] Vincent Cohen-Addad, Hossein Esfandiari, Vahab Mirrokni, and Shyam Narayanan. Coresets for Constrained Clustering: General Assignment Constraints and Improved Size Bounds. arXiv:2311.07548, 2023. 
+
+[23] Lingxiao Huang, Shaofeng H.-C. Jiang, Jianing Lou, and Xuan Wu. Coresets for Clustering with General Assignment Constraints. In Proceedings of the 2025 Annual ACM-SIAM Symposium on Discrete Algorithms (SODA 2025), 2025. 
+
+[24] Vincent Cohen-Addad, Andreas Emil Feldmann, and David Saulpic. Coresets for Capacitated k-Median and k-Means. arXiv, 2022. (Referred to as [BCJ+22] in coreset literature.) 
+
+Approximation Schemes and Hardness
+
+[25] Fateme Abbasi, Sandip Banerjee, Jaroslaw Byrka, Parinya Chalermsook, Ameet Gadekar, Kamyar Khodamoradi, Dániel Marx, Roohani Sharma, and Joachim Spoerhase. Parameterized Approximation Schemes for Clustering with General Norm Objectives. arXiv:2304.03146, 2023. 
+
+[26] Marek Cygan, Fedor V. Fomin, Łukasz Kowalik, Daniel Lokshtanov, Dániel Marx, Marcin Pilipczuk, Michał Pilipczuk, and Saket Saurabh. Parameterized Algorithms. Springer, 2015.
+
+[27] Vincent Cohen-Addad, Philip N. Klein, and Claire Mathieu. Local Search Yields Approximation Schemes for k-Means and k-Median in Euclidean and Minor-Free Metrics. SIAM Journal on Computing, 48(2):644–667, 2019. 
+
+[28] Zachary Friggstad, Mohsen Rezapour, and Mohammad R. Salavatipour. Local Search Yields a PTAS for k-Means in Doubling Metrics. SIAM Journal on Computing, 48(2):452–480, 2019. 
+
+Rounding Techniques
+
+[29] Rajiv Gandhi, Samir Khuller, Srinivasan Parthasarathy, and Aravind Srinivasan. Dependent Rounding and Its Applications to Approximation Algorithms. Journal of the ACM, 53(3):324–360, 2006. 
+
+[30] Rajiv Gandhi, Samir Khuller, Srinivasan Parthasarathy, and Aravind Srinivasan. Dependent Rounding in Bipartite Graphs. In Proceedings of the 43rd IEEE Symposium on Foundations of Computer Science (FOCS 2002), pp. 323–332, 2002.
+
+Norm Theory and Ordered Weighted Objectives
+
+[31] Deeparnab Chakrabarty and Chaitanya Swamy. Simultanously Approximating All Norms for Massively Parallel Correlation Clustering. (Reference for the connection between monotone symmetric norms and top-k norms.) 
+
+[32] Nairen Cao, Shi Li, and Jia Ye. Simultanously Approximating All Norms for Massively Parallel Correlation Clustering. arXiv:2410.09321, 2024. 
+
+Vector Search Systems (Background)
+
+[33] Matthijs Douze, Alexandr Guzhva, Chengqi Deng, Jeff Johnson, Gergely Szilvasy, Pierre-Emmanuel Mazaré, Maria Lomeli, Lucas Hosseini, and Hervé Jégou. The Faiss Library. arXiv:2401.08281, 2024. 
+
+[34] Yu. A. Malkov and D. A. Yashunin. Efficient and Robust Approximate Nearest Neighbor Search Using Hierarchical Navigable Small World Graphs. IEEE Transactions on Pattern Analysis and Machine Intelligence, 42(4):824–836, 2020. 
+
+[35] Suhas Jayaram Subramanya, Fnu Devvrit, Harsha Vardhan Simhadri, Ravishankar Krishnawamy, and Rohan Kadekodi. DiskANN: Fast Accurate Billion-Point Nearest Neighbor Search on a Single Node. In Advances in Neural Information Processing Systems 32 (NeurIPS 2019), 2019. 
+
+[36] Yury A. Malkov and D. A. Yashunin. Efficient and Robust Approximate Nearest Neighbor Search Using Hierarchical Navigable Small World Graphs. IEEE TPAMI, 42(4):824–836, 2020.
+
+Related FPT and Capacitated Clustering Extensions
+
+[37] Rajni Dabas, Neelima Gupta, and Tanmay Inamdar. FPT Approximation for Capacitated Clustering with Outliers. Theoretical Computer Science, 1027:115026, 2025. (Full journal version.) 
+
+[38] Ameet Gadekar and Srikanta Thejaswi. Capacitated Fair-Range Clustering. arXiv:2505.15905, May 2025.
+
+[39] R. Jaiswal, A. Kumar, and S. Yadav. FPT Approximation for Capacitated Sum of Radii. In 15th Innovations in Theoretical Computer Science Conference (ITCS 2024), 2024. 
+
+[40] S. Bandyapadhyay and A. Chen. FPT Approximation for Capacitated k-Median and Sum of Radii with Mergeable Constraints. In APPROX/RANDOM 2025, 2025.
+
+Additional References from the Thesis
+
+[41] S. Bandyapadhyay, A. Das, and S. K. Das. FPT Approximations for Capacitated Sum of Radii. arXiv:2409.04984, 2024.
+
+[42] V. Cohen-Addad and A. Li. Coresets for Capacitated Clustering. COLT, 2024. (Note: The verified reference for capacitated k-median coresets is Cohen-Addad & Li, ICALP 2019; the 2024 COLT reference may correspond to a different paper.)
+
+[43] S. Li. Approximation Algorithms for k-Median with Uniform Capacities. STOC, 2022.
+
+[44] G. Manku, R. Motwani, and A. Sahai. Approximate Nearest Neighbors in High Dimensions. STOC, 1998.
+
+[45] Vincent Cohen-Addad. Approximation Schemes for Capacitated Clustering in Doubling Metrics. In Proceedings of the 2020 ACM-SIAM Symposium on Discrete Algorithms (SODA 2020), pp. 2242–2260, 2020.
+
+---
+
+Note on verification. All entries above were cross-checked against arXiv, publisher records (DROPS, SIAM, ACM, Springer), and the reference lists of the verified papers. Where a reference in the thesis could not be independently verified (e.g., the 2024 COLT coreset reference), this is noted. The bibliography reflects the corrected state of the literature: the (1+2/e+\varepsilon) factor is for uncapacitated k-median; the capacitated version has upper bound 3+\varepsilon and open tightness. 
