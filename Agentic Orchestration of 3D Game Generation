@@ -1,0 +1,2556 @@
+Agentic Orchestration of 3D Game Generation: Timed Executable Intermediate Representation, Conditional Trace Correspondence, and Reachability-Preserving Pacing
+
+Author: Ouadi Maakoul
+Team: SI TEAM
+Discipline: Computer Science — Artificial Intelligence and Interactive Systems
+Date: October 2026
+
+---
+
+ABSTRACT
+
+This thesis establishes the theoretical foundations for an agentic orchestration architecture that generates 3D narrative exploration games from natural language specifications. Its central object is a Game Intermediate Representation (Game IR) — an executable, engine-neutral specification formalized as a network of timed automata with explicit concurrency, urgency, Zeno-freedom, and observation semantics.
+
+The thesis makes five bounded contributions. First, it formalizes the Game IR under a five-layer contract separating the typed world model, the executable transition model, requirements and contracts, the engine adapter, and runtime evidence. Second, it states a conditional finite-horizon trace correspondence theorem: if a matching relation between an IR and its compiled engine system satisfies explicit transfer, action-matching, clock-correspondence, and observation-bound conditions, then observable traces correspond up to a declared horizon. Third, it distinguishes four termination properties — existential winning reachability, universal recoverability, deadlock freedom, and bounded completion — and provides complexity results for each under explicitly specified input encodings. Fourth, it specifies a Godot 4 adapter architecture with declared error decomposition, horizon-bounded composition rules, and mandatory state resynchronization checkpoints. Fifth, it formulates a reachability-preserving pacing contract as an adapter-verified invariant and provides a symbolic backward-reachability governor.
+
+The thesis deliberately avoids unconditional claims. The matching relation is not derived from capability declarations. Termination is not conflated with reachability. Engine independence is a design objective, not a demonstrated property. Formal verification via UPPAAL is scoped to bounded horizons because TCTL model checking is EXPTIME-complete. Empirical superiority remains an open, falsifiable question.
+
+Keywords: procedural game generation, intermediate representation, timed automata, conditional bisimulation, termination verification, complexity, pacing, reachability preservation, UPPAAL.
+
+---
+
+1. INTRODUCTION
+
+1.1 Research Context
+
+Procedural Content Generation has been transformed by large language models capable of generating executable 3D games from natural language. Systems such as AutoUE, UniGen, and MAGIC generate scenes, gameplay code, and transition scripts. However, these systems share three structural limitations.
+
+Engine coupling. Each system targets a single engine. Generated content is not semantically portable without rewriting.
+
+Local verification. Verification by keypoint injection validates local mechanics but does not establish global completion properties.
+
+Uncontrolled pacing. Target durations are specifications, not guaranteed properties. No identified prior work measures global progression duration and adjusts content while preserving completion guarantees.
+
+1.2 Research Question
+
+Under what semantic and operational conditions can an executable, engine-neutral intermediate representation for 3D narrative exploration games support bounded behavioral conformance checking, detection of completion-dead-end states, and runtime pacing adjustments that preserve modeled winning reachability?
+
+This formulation focuses on conditions under which specific properties hold, rather than asserting unconditional properties.
+
+1.3 Hypotheses
+
+H1 (Conditional Conformance). For a defined class of 3D narrative exploration games, a Game IR with explicit transition semantics and a verification loop improves functional conformance and detection of completion-dead-end states relative to direct engine-specific generation, under matched generation budgets.
+
+H2 (Reachability-Preserving Pacing). Runtime pacing configurations satisfying a formally specified transition-preservation contract maintain model-level winning reachability.
+
+H3 (Two-Level Pacing). Offline structural pacing and verified runtime modulation reduce deviation from a predefined completion-time distribution without violating declared safety and reachability properties.
+
+H4 (Bounded Portability). For the subset of Game IR capabilities supported by two independently implemented adapters, observable behavior conforms to a common reference semantics within declared, empirically tested bounds.
+
+1.4 Claim Status Discipline
+
+Every mathematical statement is classified as established, conditional, preliminary, or unverified. No theorem is stated as unconditional unless its assumptions are fully discharged. The trace correspondence theorem is conditional. Termination complexity results are established for specified encodings. Pacing preservation is stated as a contract to be verified, not as a theorem derived from variable naming.
+
+1.5 Structure
+
+Section 2 formalizes the Game IR. Section 3 defines the condition language. Section 4 states the conditional trace correspondence theorem. Section 5 analyzes four termination properties. Section 6 establishes complexity results. Section 7 specifies the Godot 4 adapter. Section 8 develops the error composition framework. Section 9 addresses UPPAAL translation and its scope. Section 10 specifies the pacing contract. Section 11 presents the pacing governor. Section 12 describes empirical validation. Section 13 presents the collision methodology. Section 14 specifies the experimental protocol. Section 15 discusses threats to validity. Section 16 concludes.
+
+---
+
+2. THE GAME IR AS A TIMED AUTOMATON NETWORK
+
+2.1 Five-Layer Contract
+
+The Game IR is organized under a five-layer contract. Layers L1 and L2 carry executable semantics; L3 carries requirements; L4 declares adapter capabilities; L5 records runtime evidence. Annotations in L1 that affect transitions must carry explicit semantics.
+
+Layer Content Role
+L1 · Typed World Model Entities, geometry, zones, assets, transforms Static structure
+L2 · Executable Transition Model Locations, actions, guards, updates, clocks, invariants Operational semantics
+L3 · Requirements and Contracts Safety, reachability, recoverability, observations, timing Verification targets
+L4 · Engine Adapter Capability mapping, compilation, declared approximation Compilation interface
+L5 · Runtime Evidence Traces, counterexamples, conformance tests, audit records Empirical grounding
+
+2.2 Definition
+
+Definition 2.1 (Game IR). A Game IR is a tuple:
+
+\mathcal{I} = (\mathcal{A}, \mathcal{C}, \mathcal{V}, \mathcal{V}_S, \mathcal{V}_Q, s_0, \mathbb{C}, O, \Phi, \Psi)
+
+where:
+
+· $\mathcal{A} = \{A_1, \ldots, A_n\}$ is a finite set of timed automata;
+· $\mathcal{C}$ is a finite set of clock variables;
+· $\mathcal{V} = \mathcal{V}_S \uplus \mathcal{V}_Q$ is a finite set of discrete variables, partitioned into structural ($\mathcal{V}_S$) and QoS ($\mathcal{V}_Q$) variables;
+· $s_0$ is the initial global state;
+· $\mathbb{C}$ is a finite set of functional constraints;
+· $O$ is a finite set of objectives;
+· $\Phi$ is a finite set of safety and liveness properties;
+· $\Psi$ is a finite set of pacing configurations.
+
+Each timed automaton is:
+
+A_i = (L_i, \ell_i^0, \Sigma_i, C_i, E_i, \mathrm{Inv}_i, \mathrm{Urg}_i)
+
+where:
+
+· $L_i$ is a finite set of locations;
+· $\ell_i^0 \in L_i$ is the initial location;
+· $\Sigma_i$ is a finite alphabet of actions;
+· $C_i \subseteq \mathcal{C}$ is the set of clocks read or reset by $A_i$;
+· $E_i \subseteq L_i \times \mathrm{Guards}(C_i, \mathcal{V}) \times \Sigma_i \times 2^{C_i} \times L_i$ is the set of edges;
+· $\mathrm{Inv}_i : L_i \to \mathrm{Invariants}(C_i)$ assigns a downward-closed clock constraint to each location;
+· $\mathrm{Urg}_i \subseteq L_i$ is the set of urgent locations.
+
+2.3 Concurrency Semantics
+
+Real engines execute simultaneous updates. We adopt a synchronous product semantics with an explicit interleaving fallback for actions declared as asynchronous.
+
+Definition 2.2 (Global State). A global state is a tuple:
+
+s = (\vec{\ell}, \nu, v)
+
+where $\vec{\ell} = (\ell_1, \ldots, \ell_n)$ is the location vector, $\nu : \mathcal{C} \to \mathbb{R}_{\geq 0}$ is a clock valuation, and $v : \mathcal{V} \to D$ is a discrete valuation. The invariant condition is $\nu \models \bigwedge_i \mathrm{Inv}_i(\ell_i)$.
+
+Definition 2.3 (Synchronous Transition). A synchronous transition is:
+
+(\vec{\ell}, \nu, v) \xrightarrow{A \subseteq \Sigma} (\vec{\ell}', \nu', v')
+
+where for each $i \in \mathrm{src}(A)$, an edge $(\ell_i, g_i, a_i, r_i, \ell_i') \in E_i$ with $a_i \in A$ is enabled ($\nu \models g_i$), and for $i \notin \mathrm{src}(A)$, $\ell_i' = \ell_i$.
+
+Definition 2.4 (Asynchronous Transition). An asynchronous transition fires exactly one automaton with a single enabled edge.
+
+The adapter declares, per automaton, whether its actions are synchronous or asynchronous.
+
+2.4 Urgency and Zeno-Freedom
+
+Definition 2.5 (Urgent Location). A location $\ell_i \in \mathrm{Urg}_i$ forbids time elapse: any delay transition must have duration $d = 0$.
+
+Definition 2.6 (Zeno Execution). A timed trace is Zeno if it contains infinitely many discrete transitions within a finite total delay.
+
+Assumption 2.1 (Zeno-Freedom). All Game IR instances considered are Zeno-free. This is enforced by a static check: every cycle in the location graph must contain at least one clock that is reset and whose invariant bounds the cycle duration from below by a positive constant.
+
+Without this assumption, a game model could permit infinitely many events in finite time, rendering duration measurement ill-defined.
+
+2.5 Observation and Metric
+
+Definition 2.7 (Observation Space). An observation is a tuple:
+
+o = (\mathrm{pos}, \mathrm{inv}, \mathrm{evt}, \nu_{\mathrm{obs}}) \in \mathcal{O}
+
+where $\mathrm{pos} : \mathcal{E} \to \mathbb{R}^3$ is the position map over a declared set of observed entities, $\mathrm{inv}$ is the inventory valuation, $\mathrm{evt}$ is the most recent observable event, and $\nu_{\mathrm{obs}}$ is the projection of the clock valuation onto $\mathcal{C}_{\mathrm{obs}} \subseteq \mathcal{C}$.
+
+Definition 2.8 (Observation Projection). $\pi : S \to \mathcal{O}$ maps a global state to its observation.
+
+Definition 2.9 (Observation Metric). The observation metric is:
+
+d_{\mathcal{O}}(o_1, o_2) = \alpha \cdot \max_{e \in \mathcal{E}} \| \mathrm{pos}_1(e) - \mathrm{pos}_2(e) \|_2 + \beta \cdot d_{\mathrm{inv}}(\mathrm{inv}_1, \mathrm{inv}_2) + \gamma \cdot d_{\mathrm{evt}}(\mathrm{evt}_1, \mathrm{evt}_2)
+
+where $\alpha, \beta, \gamma > 0$ are declared weights. Missing entities are assigned a sentinel position at distance $D_{\max}$ from all present entities.
+
+Proposition 2.1. Under the declared convention for missing entities and positive weights, $d_{\mathcal{O}}$ is a metric on $\mathcal{O}$.
+
+Proof. Symmetry, non-negativity, and identity of indiscernibles follow from the constituent metrics. The triangle inequality follows from the triangle inequalities of $\|\cdot\|_2$, $d_{\mathrm{inv}}$, and $d_{\mathrm{evt}}$, combined with positive weights. $\square$
+
+2.6 Adapter Capabilities
+
+Definition 2.10 (Capability). A capability $\kappa$ is an engine feature required by the executable layers. The adapter declares $\kappa$ as one of: SUPPORTED with $\varepsilon_\kappa = 0$; APPROXIMATED with a declared bound $\varepsilon_\kappa > 0$; UNSUPPORTED.
+
+Rule 2.1 (Compilation). If any required capability is UNSUPPORTED, compilation fails. If capabilities are APPROXIMATED, the adapter must provide an explicit error-composition rule $f : \mathbb{R}_{\geq 0}^m \to \mathbb{R}_{\geq 0}$ mapping component error bounds to a global bound.
+
+Limitation 2.1. The declared bound $\varepsilon_\kappa$ is an adapter assertion, not a verified fact. Its correctness is an empirical obligation.
+
+---
+
+3. CONDITION LANGUAGE SEMANTICS
+
+3.1 Syntax
+
+Definition 3.1 (Language $\mathcal{L}$).
+
+\varphi ::= \top \mid \bot \mid x = v \mid x < v \mid x > v \mid x \leq v \mid x \geq v
+
+
+\mid \mathrm{near}(e_1, e_2, d) \mid \mathrm{inside}(e, z) \mid \mathrm{has\_item}(e, i)
+
+
+\mid \mathrm{objective\_completed}(o) \mid \mathrm{variable\_value}(x, v)
+
+
+\mid \mathrm{time\_since}(ev) \leq t \mid \mathrm{time\_since}(ev) \geq t
+
+
+\mid \varphi \wedge \varphi \mid \varphi \vee \varphi \mid \neg \varphi
+
+
+\mid \mathrm{before}(ev_1, ev_2) \mid \mathrm{after}(ev_1, ev_2) \mid \mathrm{during}(ev, t_1, t_2)
+
+3.2 Denotational Semantics
+
+Definition 3.2. Let $s = (\vec{\ell}, \nu, v)$. Then:
+
+\llbracket x = v \rrbracket(s) = (v(x) = v)
+
+
+\llbracket \mathrm{near}(e_1, e_2, d) \rrbracket(s) = (\mathrm{dist}(s(e_1), s(e_2)) \leq d)
+
+
+\llbracket \mathrm{time\_since}(ev) \leq t \rrbracket(s) = (\nu(\mathrm{clock}_{ev}) \leq t)
+
+
+\llbracket \varphi \wedge \psi \rrbracket(s) = \llbracket \varphi \rrbracket(s) \wedge \llbracket \psi \rrbracket(s)
+
+Property 3.1. The semantics is compositional and, given $s$, assigns a unique truth value to every $\varphi$.
+
+3.3 Typing
+
+Theorem 3.1 (Typing Safety). If $\varphi$ is well-typed in $\Gamma$, then for all valid $s$, $\llbracket \varphi \rrbracket(s)$ is defined.
+
+Theorem 3.2 (Decidability). Type checking for $\mathcal{L}$ is decidable in polynomial time.
+
+Proof. The typing rules are syntax-directed. Each rule application is deterministic and bounded by the size of the abstract syntax tree. Standard unification completes in near-linear time. $\square$
+
+---
+
+4. CONDITIONAL FINITE-HORIZON TRACE CORRESPONDENCE
+
+4.1 Status
+
+Conditional. The theorem does not derive a matching relation from capability declarations. It states correspondence under the hypothesis that a relation satisfying explicit conditions exists.
+
+4.2 Definitions
+
+Let $M$ be the transition system induced by a well-typed Game IR $\mathcal{I}$, with state space $S$, action set $\Sigma$, and observation projection $\pi$. Let $M_e$ be the compiled engine system with state space $S_e$, action set $\Sigma_e$, and projection $\pi_e$.
+
+Definition 4.1 (Finite-Horizon Trace). A trace of $M$ of length $K$ is:
+
+\tau = s_0 \xrightarrow{a_1, d_1} s_1 \xrightarrow{a_2, d_2} \cdots \xrightarrow{a_K, d_K} s_K
+
+Definition 4.2 (K-Bounded Matching Relation). A relation $R_K \subseteq S \times S_e$ is a K-bounded matching relation if it satisfies:
+
+(C1) Initial correspondence. $(s_0, s_0^e) \in R_K$.
+
+(C2) Forward transfer. For every $(s, s^e) \in R_K$, every $a \in \Sigma$, and every $s'$ with $T(s, a) = s'$, there exists $a^e \in \Sigma_e$ with $\mathrm{match}(a, a^e)$ and $s'^e$ with $T_e(s^e, a^e) = s'^e$ such that $(s', s'^e) \in R_K$.
+
+(C3) Backward transfer. Symmetrically, every engine transition has a matching IR transition.
+
+(C4) Clock correspondence. If $(s, s^e) \in R_K$ and delay $d$ is admissible in both systems, then $\nu$ and $\nu^e$ remain within $\delta_{\mathrm{clk}}$ on $\mathcal{C}_{\mathrm{obs}}$.
+
+(C5) Observation bound. For every $(s, s^e) \in R_K$, $d_{\mathcal{O}}(\pi(s), \pi_e(s^e)) \leq \varepsilon$.
+
+The function $\mathrm{match} : \Sigma \times \Sigma_e \to \{0, 1\}$ is an explicitly declared action-matching relation. Its correctness is an adapter obligation.
+
+4.3 The Theorem
+
+Theorem 4.1 (Conditional Finite-Horizon Trace Correspondence). Let $K \in \mathbb{N}$. Suppose there exists a K-bounded matching relation $R_K$ between $M$ and $M_e$ satisfying (C1)–(C5). Then for every trace $\tau$ of $M$ of length at most $K$, there exists a trace $\tau^e$ of $M_e$ of the same length such that:
+
+1. Actions correspond under $\mathrm{match}$;
+2. For every $j \in \{0, \ldots, K\}$, $d_{\mathcal{O}}(\pi(s_j), \pi_e(s^e_j)) \leq \varepsilon$;
+3. For every $j$, $|\nu_j(c) - \nu^e_j(c)| \leq \delta_{\mathrm{clk}}$ for all $c \in \mathcal{C}_{\mathrm{obs}}$.
+
+Proof. By induction on $K$. Base case $K = 0$ is (C1). Inductive step: suppose the result holds for $K$ and consider $K+1$. By the induction hypothesis, there exists a matched prefix $\tau^e$ of length $K$ satisfying the bounds. Apply (C2) to the final pair $(s_K, s^e_K)$ with action $a_{K+1}$ to obtain a matched successor $s^e_{K+1}$. The observation bound (C5) and clock bound (C4) are preserved by the definition of $R_K$. $\square$
+
+4.4 Error Accumulation and Horizon Limit
+
+If errors accumulate across transitions, the global bound depends on the horizon. Under a Lipschitz transition map with constant $L$ and per-step disturbance $\eta$:
+
+e_{t+1} \leq L \cdot e_t + \eta
+
+yielding:
+
+e_K \leq L^K e_0 + \eta \sum_{j=0}^{K-1} L^j = L^K e_0 + \eta \cdot \frac{L^K - 1}{L - 1}
+
+Remark 4.1. For $L > 1$, this bound grows exponentially with $K$. For a 90-minute game at 60 Hz, $K \approx 3.24 \times 10^5$. Even with $L = 1.001$, $L^K \approx e^{324}$, which is astronomically large. The bound is therefore vacuous in practice unless one of three conditions holds:
+
+1. $L \leq 1$ (the transition map is non-expansive);
+2. The bound is applied only over a short horizon $K \leq K_{\max}$;
+3. State resynchronization checkpoints are inserted, at which the engine state is compared to the IR state and corrected if divergence exceeds $\varepsilon_{\mathrm{global}}$.
+
+Condition 3 is adopted as a necessary design element of the adapter. Without resynchronization checkpoints, the theoretical bound is not meaningful.
+
+4.5 What the Theorem Does Not Establish
+
+The theorem does not establish:
+
+· That a matching relation $R_K$ exists. This is an adapter obligation.
+· That the declared bound $\varepsilon$ is truthful.
+· That the systems are bisimilar at the infinite horizon.
+· That syntactic portability implies semantic portability.
+
+Proposition 4.1 (Syntactic vs. Semantic Portability). Syntactic portability does not imply semantic portability.
+
+Proof. Consider when near(player, door, 5.0) then open_door. If one compiler interprets near as Euclidean and another as Manhattan distance, a state at Euclidean distance 4.0 and Manhattan distance 6.0 triggers in one engine but not the other. Both accept the same file; observable behaviors differ. $\square$
+
+---
+
+5. TERMINATION: FOUR DISTINCT PROPERTIES
+
+5.1 Motivation
+
+The single predicate $\mathrm{Reach}_F(s_0) = 1$ establishes only existential winning reachability. We distinguish four properties with distinct operational meanings.
+
+Let $\mathcal{G} = (S_R, E)$ be the reachable state graph from $s_0$, and $F \subseteq S_R$ the set of terminal (victory) states.
+
+Definition 5.1 (Winning Reachability).
+
+\mathrm{WinReach}(\mathcal{G}) = 1 \iff \exists f \in F : s_0 \leadsto f
+
+Definition 5.2 (Universal Recoverability).
+
+\mathrm{UnivRec}(\mathcal{G}) = 1 \iff \forall s \in S_R, \ s \notin F \Rightarrow \exists f \in F : s \leadsto f
+
+Definition 5.3 (Deadlock Freedom).
+
+\mathrm{DeadlockFree}(\mathcal{G}) = 1 \iff \forall s \in S_R \setminus F : \mathrm{out}(s) \neq \emptyset
+
+Definition 5.4 (Bounded Completion). Let $\rho$ be a player policy. Then:
+
+\mathrm{BoundedComplete}(\mathcal{G}, \rho, N) = 1 \iff \text{under } \rho, \text{ a state in } F \text{ is reached within } N \text{ steps}
+
+5.2 Completion Dead Ends
+
+Definition 5.5 (Completion Dead End). A state $s \in S_R$ is a completion dead end if:
+
+s \notin F \ \wedge \ \neg \exists f \in F : s \leadsto f
+
+Theorem 5.1 (Characterization). A state $s \in S_R$ is a completion dead end if and only if $\mathrm{Reach}_F(s) = 0$.
+
+Proof. Immediate from Definition 5.5. $\square$
+
+Remark 5.1 (Terminology). A completion dead end need not be a graph-theoretic deadlock. It may have outgoing transitions indefinitely while never reaching victory. We reserve "deadlock" for states with $\mathrm{out}(s) = \emptyset$.
+
+5.3 Local Verification Does Not Imply Global Termination
+
+Proposition 5.1. Satisfaction of all tested local keypoints does not imply global winning reachability.
+
+Proof. Let $k_1, \ldots, k_n$ be keypoints, each locally satisfiable. Construct a Game IR in which opening door A before lever B disables B permanently, and the victory condition requires B. Then each $k_i$ is satisfiable along some trace, but $\mathrm{WinReach}(\mathcal{G}) = 0$. $\square$
+
+---
+
+6. COMPLEXITY OF VERIFICATION
+
+6.1 Input Encodings
+
+Complexity claims require specified encodings.
+
+Definition 6.1 (Explicit Encoding). The graph $\mathcal{G} = (S_R, E)$ is given as an adjacency list. Input size is $|S_R| + |E|$.
+
+Definition 6.2 (Implicit Encoding). The graph is represented by a tuple $(\mathcal{I}, \mathrm{enc})$ where $\mathrm{enc}$ is a polynomial-time computable successor function $\mathrm{succ} : S_R \to 2^{S_R}$. States and transitions are not enumerated. Input size is $|\mathcal{I}|$.
+
+6.2 Established Complexity Results
+
+Theorem 6.1 (Explicit Deadlock Detection). Given an explicit graph $\mathcal{G} = (S_R, E)$ and $F \subseteq S_R$, the decision problem "does there exist $s \in S_R$ with $\mathrm{Reach}_F(s) = 0$?" is in $\mathsf{P}$.
+
+Proof. Compute $\mathrm{Reach}_F$ for all states by reverse reachability from $F$. Time: $O(|S_R| + |E|)$. $\square$
+
+Theorem 6.2 (Implicit Winning Reachability). Given an implicit encoding $(\mathcal{I}, \mathrm{enc})$ with polynomial successor enumeration and polynomial-size state encodings, the decision problem $\mathrm{WinReach}(\mathcal{G}) = 1$ is in $\mathsf{PSPACE}$.
+
+Proof. Non-deterministic reachability exploration in polynomial space suffices. By Savitch's theorem, $\mathsf{NPSPACE} = \mathsf{PSPACE}$. $\square$
+
+6.3 Hardness — Scoped Claims
+
+Proposition 6.1 (Conditional PSPACE-Hardness). If the implicit encoding permits a polynomial-time reduction from a $\mathsf{PSPACE}$-hard planning problem, then $\mathrm{WinReach}$ is $\mathsf{PSPACE}$-hard for that encoding.
+
+Proof sketch. The reduction must construct, from an instance of the hard planning problem, a Game IR $\mathcal{I}$ whose successor function corresponds to the planning transition, and whose terminal states correspond to plan completion. $\square$
+
+Remark 6.1. PSPACE-hardness does not follow merely from implicitness. It requires an explicit reduction. We do not claim $\mathsf{PSPACE}$-completeness for the general Game IR verification problem.
+
+6.4 Timed and Strategic Extensions
+
+For dense-time clocks, reachability is $\mathsf{PSPACE}$-complete under standard clock constraints (Alur–Dill). For TCTL model checking with leads-to operators on timed automata, the complexity is $\mathsf{EXPTIME}$-complete. For ATL and ATL* over propositional GDL, model checking is $\mathsf{EXPTIME}$-complete. These are different problems with different decision procedures and must not be conflated.
+
+Remark 6.2 (Verification Scope). The $\mathsf{EXPTIME}$-completeness of TCTL model checking implies that exhaustive verification is only feasible for small games. For realistic sizes, bounded falsification is the appropriate methodology.
+
+6.5 Bounded Falsification
+
+Methodological Choice 6.1. For realistically sized games, exhaustive termination verification is algorithmically costly. We adopt bounded falsification: search for completion dead ends up to a depth $k$, returning either a counterexample or the declaration "no dead end found up to depth $k$."
+
+---
+
+7. GODOT 4 L4 ADAPTER ARCHITECTURE
+
+7.1 Compilation Pipeline
+
+The L4 adapter is a formal compiler that converts the verified Game IR tuple $\mathcal{I}$ into Godot 4 scene trees (.tscn) and GDScript execution scripts. The pipeline proceeds through five stages:
+
+1. AST ingestion and capability gatekeeping. Parse the Game IR and evaluate required capabilities against declared SUPPORTED/APPROXIMATED/UNSUPPORTED status.
+2. Scene graph generation. L1 world model → Godot 4 .tscn tree.
+3. State machine generation. L2 timed automata → GDScript node systems.
+4. Clock integration. $\mathcal{C}$ → frame accumulator integrated with _physics_process(delta).
+5. Error composition monitoring. $f(\varepsilon_1, \ldots, \varepsilon_m) \leq \varepsilon_{\mathrm{global}}$ enforced at compile time.
+
+7.2 Structural Compilation Rules
+
+Game IR Construct Godot 4 Mapping Runtime Semantics
+World entity (L1) Node3D / RigidBody3D / Area3D Scene graph node
+Automaton $A_i$ Node with TimedAutomatonNode script Maintains location $\ell_i$
+Location $\ell_i$ GDScript enum state Enum constant
+Clock $c$ float accumulator Incremented by delta in _physics_process
+Urgent location Immediate tick evaluation Evaluated in-frame
+Action $\sigma$ Godot signal SignalBus.emit_signal("action_name", payload)
+Guard $g$ GDScript boolean function Evaluated during transition checks
+
+7.3 Clock Discretization and Physics Tick Jitter
+
+Godot executes physics at a fixed tick rate (default 60 Hz) with potential frame-rate jitter. The adapter tracks discretized clock evaluation at frame $k$:
+
+c(t_k) = \sum_{j=1}^{k} \Delta t_j
+
+Frame-rate jitter introduces drift bounded by:
+
+\varepsilon_{\mathrm{clk}}(K) = \sup_k \left| \sum_{j=1}^{k} \Delta t_j - k \cdot \Delta t_{\mathrm{target}} \right| \leq K \cdot \delta_{\mathrm{jitter}}
+
+Critical Note. This bound is not guaranteed by Godot; actual jitter depends on OS scheduling and max_physics_steps_per_frame. The adapter must either enforce a hard bound via Engine.max_physics_steps_per_frame or measure delta_jitter empirically and declare it as an APPROXIMATED capability bound.
+
+7.4 State Resynchronization Checkpoints
+
+Definition 7.1 (Resynchronization Checkpoint). A resynchronization checkpoint is a frame index $k^*$ at which the engine state $\pi_e(s^e_{k^*})$ is compared to the IR observation $\pi(s_{k^*})$. If $d_{\mathcal{O}}(\pi(s_{k^*}), \pi_e(s^e_{k^*})) > \varepsilon_{\mathrm{global}}$, the engine state is corrected to match the IR state.
+
+Design Requirement. Without resynchronization checkpoints, the theoretical error bound $L^K e_0 + \eta (L^K - 1)/(L - 1)$ grows exponentially with horizon and becomes vacuous. Resynchronization is therefore a necessary design element, not an optional optimization.
+
+---
+
+8. ERROR COMPOSITION FRAMEWORK
+
+8.1 Error Source Decomposition
+
+The vector of component errors $\vec{\varepsilon} = (\varepsilon_{\mathrm{clk}}, \varepsilon_{\mathrm{kin}}, \varepsilon_{\mathrm{pen}}, \varepsilon_{\mathrm{fp}})$ captures four engine artifacts during physics ticks.
+
+8.2 Clock Discretization Error
+
+\varepsilon_{\mathrm{clk}}(K) \leq K \cdot \delta_{\mathrm{jitter}}
+
+where $\delta_{\mathrm{jitter}}$ is the empirically measured or enforced maximum jitter per frame.
+
+8.3 Kinematic Integration Error
+
+Godot uses semi-implicit (symplectic) Euler integration for RigidBody3D and position-based motion for CharacterBody3D. The per-step position error for symplectic Euler is first order in $\Delta t$:
+
+e_{\mathrm{kin},k} \leq C \cdot \|v_k\|_2 \cdot \Delta t_k + C' \cdot \|a_k\|_2 \cdot \Delta t_k^2
+
+for constants $C, C'$ depending on the specific integrator. The adapter declares which integration scheme is used per entity type.
+
+8.4 Physics Solver Penetration
+
+Jolt Physics uses Baumgarte stabilization with default factor $\mu_{\mathrm{solver}} = 0.2$. Since stabilization reduces penetration over time, the bound is max-based, not sum-based:
+
+\varepsilon_{\mathrm{pen}}(K) \leq \max_k \left( \mu_{\mathrm{solver}} \cdot n_{\mathrm{contacts},k} \cdot \delta_{\mathrm{pen}} \right) \cdot \left( 1 + \frac{1}{1 - \mu_{\mathrm{solver}}} \right)
+
+8.5 Floating-Point Error
+
+For single-precision IEEE 754 (float32), machine epsilon $u = 2^{-24} \approx 5.96 \times 10^{-8}$:
+
+\varepsilon_{\mathrm{fp}}(K) = K \cdot u \cdot \max_{e \in \mathcal{E}} \|\mathbf{x}_e\|_\infty
+
+The adapter declares precision mode (single or double) and adjusts $u$.
+
+8.6 Error Coupling Recurrence
+
+Let $\mathbf{e}_k = \mathbf{x}_k^{\mathrm{engine}} - \mathbf{x}_k^{\mathrm{IR}}$ be the spatial error at step $k$. For a transition map Lipschitz in spatial coordinates with constant $L_x$ and in velocity with constant $L_v$:
+
+\|\mathbf{e}_{k+1}\|_2 \leq (1 + L_x \Delta t) \|\mathbf{e}_k\|_2 + L_v \Delta t \|\mathbf{v}_k^{\mathrm{err}}\|_2 + \eta_k
+
+where $\eta_k$ aggregates kinematic, penetration, and floating-point perturbations.
+
+With $L = 1 + L_x \Delta t_{\max}$, the closed-form bound over $K$ steps is:
+
+\|\mathbf{e}_K\|_2 \leq L^K \|\mathbf{e}_0\|_2 + \sum_{k=0}^{K-1} L^k \eta_{K-1-k}
+
+Remark 8.1. As established in Section 4.4, for $L > 1$, this bound grows exponentially with $K$ and becomes vacuous for long horizons. Resynchronization checkpoints (Definition 7.1) reset $\|\mathbf{e}_0\|$ periodically and restore a meaningful bound.
+
+8.7 Composition Operators
+
+A. Worst-Case Deterministic Bound ($f_{\mathrm{det}}$). When strict safety verification is required:
+
+f_{\mathrm{det}}(\vec{\varepsilon}; K) = \alpha \left[ L^K \|\mathbf{e}_0\|_2 + \frac{L^K - 1}{L - 1} \eta_{\max} \right] + \gamma \cdot \mathbb{I}(\tau_{\mathrm{guard}} > \Delta t_{\max})
+
+where $\eta_{\max}$ is the worst-case per-step disturbance and $\mathbb{I}(\cdot)$ is the indicator of guard-frame misalignment.
+
+B. Root-Sum-Square Stochastic Bound ($f_{\mathrm{rss}}$). Under uncorrelated zero-mean disturbances:
+
+f_{\mathrm{rss}}(\vec{\varepsilon}; K) = \alpha \sqrt{K \left( \|v_{\max}\| \sigma_{\mathrm{jitter}} \right)^2 + K \left( \frac{1}{2} a_{\max} \Delta t_{\max}^2 \right)^2 + K \sigma_{\mathrm{pen}}^2 + K \sigma_{\mathrm{fp}}^2}
+
+The $\sqrt{K}$ growth is favorable relative to the exponential $L^K$ growth.
+
+8.8 Compilation Gate
+
+During compilation, the L4 adapter evaluates:
+
+\text{CompileStatus} = \begin{cases} \mathbf{SUCCESS}(\varepsilon_{\mathrm{declared}} = f_{\mathrm{rss}}), & \text{if } f_{\mathrm{rss}} \leq \varepsilon_{\mathrm{global}} \\ \mathbf{REMEDIATE}(\text{resync checkpoints}), & \text{if } f_{\mathrm{det}} > \varepsilon_{\mathrm{global}} \text{ but resync feasible} \\ \mathbf{FAIL}(\kappa \gets \mathrm{UNSUPPORTED}), & \text{otherwise} \end{cases}
+
+Note. The primary gate uses $f_{\mathrm{rss}}$, not $f_{\mathrm{det}}$, because $f_{\mathrm{det}}$ is vacuous for long horizons without resynchronization. Resynchronization checkpoints are declared as a capability parameter with their frequency $\nu_{\mathrm{resync}}$.
+
+---
+
+9. UPPAAL TRANSLATION AND VERIFICATION SCOPE
+
+9.1 AST Mapping
+
+The Game IR is mapped to UPPAAL XML (.xml) and L3 properties to TCTL queries (.q).
+
+· Clocks. Every $c \in \mathcal{C}$ is declared as clock c;.
+· Variables. Discrete $x \in \mathcal{V}$ become int[min, max] x; or bool x;.
+· Urgent locations. Rendered with <urgent/>.
+· Synchronous actions. Mapped to chan a; with a! (emit) and a? (receive). Broadcast channels model 1-to-N triggers.
+
+9.2 TCTL Query Mapping
+
+Property TCTL Query
+Winning Reachability E<> (GameManager.Victory)
+Universal Recoverability GameManager.NotTerminal --> GameManager.Victory
+Deadlock Freedom A[] (not GameManager.Victory imply not deadlock)
+Bounded Completion E<> (GameManager.Victory and global_clock <= N)
+
+9.3 Expressiveness and Complexity Scope
+
+Critical Scope. The complexity of TCTL model checking over timed automata is $\mathsf{EXPTIME}$-complete. Restricted fragments (simple reachability) can be $\mathsf{PSPACE}$-complete, but the full TCTL fragment including the leads-to operator is $\mathsf{EXPTIME}$-complete.
+
+For a network with $n$ timed automata and $|\mathcal{C}|$ clocks, the UPPAAL state space is the product of all automaton locations times the region graph of clock valuations. The number of regions is:
+
+O\left(|\mathcal{C}|! \cdot \prod_{c \in \mathcal{C}} (2 \cdot \max_c)\right)
+
+which grows factorially with $|\mathcal{C}|$.
+
+Implication. Exhaustive UPPAAL verification is feasible only for small games with a small number of clocks. For realistic sizes, the adapter must use one of:
+
+1. Bounded horizon verification via UPPAAL's --search-order with depth limits;
+2. Statistical model checking (UPPAAL SMC) rather than exhaustive verification;
+3. Clock restriction with $|\mathcal{C}| \leq 3$ and APPROXIMATED declaration for larger games.
+
+Methodological Choice 9.1. The adapter's default verification mode is bounded falsification with horizon $K_{\mathrm{UPPAAL}}$, not exhaustive verification. Exhaustive verification is reserved for small verification targets (individual mechanics, small subgames).
+
+---
+
+10. REACHABILITY-PRESERVING PACING CONTRACT
+
+10.1 Two-Level Pacing
+
+Definition 10.1 (Structural Pacing). Structural pacing operates offline, before verification. It modifies the automaton network (locations, structural guards) and triggers a full termination verification pass.
+
+Definition 10.2 (Dynamic Pacing). Dynamic pacing operates online, during execution. It modifies only variables in $\mathcal{V}_Q$, subject to the contract below.
+
+10.2 The Contract
+
+Definition 10.3 (Pacing Configuration). A pacing configuration is a valuation $q \in Q$ of the QoS variables $\mathcal{V}_Q$. Applying $q$ yields a runtime system $M_q$ with the same state space $S$, the same terminal states $F$, and possibly a modified transition relation $T_q$.
+
+Definition 10.4 (Safe Configuration Set). The set $Q_{\mathrm{safe}} \subseteq Q$ is the largest set satisfying:
+
+\forall q \in Q_{\mathrm{safe}}, \quad \mathrm{Reach}_F^{M_q}(s_0) = \mathrm{Reach}_F^{M}(s_0)
+
+10.3 Contract Obligation
+
+Proposition 10.1 (Contract Obligation). The contract in Definition 10.4 is an adapter obligation. It cannot be derived from the naming of variables in $\mathcal{V}_Q$.
+
+Justification. A variable named "hint density" can affect action availability, collision timing, resource consumption, or timeouts. If any such effect changes reachability to $F$, the contract is violated regardless of the variable's name.
+
+Method for Establishing the Contract. The adapter must provide, for each $q \in Q_{\mathrm{safe}}$:
+
+1. A structural abstraction $\alpha_q : S \to S_\alpha$ such that $\alpha_q(s_0)$ and $\alpha_q(F)$ are identical across all $q \in Q_{\mathrm{safe}}$;
+2. A proof that the abstract transition relation is preserved;
+3. A refinement proof that the abstraction preserves reachability to $F$.
+
+Alternatively, the adapter may exhaustively verify the contract on a bounded state space.
+
+10.4 Decidability Caveat
+
+For dense-time systems, exact $\mathrm{Pre}^*$ computation is not decidable. The adapter must use one of:
+
+1. Finite abstractions (region graphs) to compute an over-approximation of $\mathrm{Pre}^*$;
+2. Bounded $\mathrm{Pre}^*$ computation with depth limits;
+3. Declaration of $Q_{\mathrm{safe}}$ as an APPROXIMATED contract with bounded horizon.
+
+10.5 Outcome Metrics
+
+We replace the single "agency loss" scalar with a declared outcome vector:
+
+\mathrm{Outcome}(q) = (\Delta h, \Delta o, \Delta p, \Delta t, \Delta a)
+
+where $\Delta h$: change in hints per objective; $\Delta o$: change in interaction opportunities; $\Delta p$: change in completion probability; $\Delta t$: change in completion time; $\Delta a$: subjective perceived autonomy.
+
+---
+
+11. PACING GOVERNOR
+
+11.1 Backward Winning Reachability Pre-Image
+
+For a configuration $q \in Q$, let $M_q$ be the induced transition system. The set of winning states $\mathrm{Pre}^*(F, M_q)$ is defined inductively:
+
+W_0 = F, \quad W_{k+1} = W_k \cup \{s \in S \mid \exists a \in \Sigma, d \geq 0 : s \xrightarrow{a, d}_{M_q} W_k\}
+
+\mathrm{Pre}^*(F, M_q) = \bigcup_{k=0}^{\infty} W_k
+
+The configuration $q$ is safe at state $s_t$ if:
+
+q \in Q_{\mathrm{safe}}(s_t) \iff s_t \in \mathrm{Pre}^*(F, M_q)
+
+11.2 Governor Algorithm
+
+The governor executes three steps per pacing decision:
+
+1. Candidate verification. For each candidate $q \in Q_{\mathrm{cand}}$, compute or approximate $\mathrm{Pre}^*(F, M_q)$ via bounded backward reachability with depth limit $D$; reject $q$ if $s_t \notin \mathrm{Pre}^*(F, M_q)$.
+2. Objective minimization. Among safe candidates, select:
+
+q^* = \arg\min_{q \in Q_{\mathrm{safe}}(s_t)} \left| \mathrm{Outcome}(q) - \mathrm{Outcome}_{\mathrm{target}} \right|
+
+3. Evidence logging. Record the decision in L5: state $s_t$, prior and new $q$, verification result, and downstream effect.
+
+11.3 Symbolic Verification with Bounded Depth
+
+Because exact $\mathrm{Pre}^*$ is undecidable for dense time, the governor uses bounded backward reachability:
+
+\mathrm{Pre}^*_D(F, M_q) = \bigcup_{k=0}^{D} W_k
+
+A candidate $q$ is accepted if $s_t \in \mathrm{Pre}^*_D(F, M_q)$. This is a sufficient but not necessary condition for safety: rejection does not prove $q$ unsafe, only that safety could not be verified within depth $D$. The depth limit is declared as a capability parameter.
+
+---
+
+12. EMPIRICAL VALIDATION
+
+12.1 Purpose
+
+Empirical validation discharges three obligations:
+
+1. Verify that the declared capability bounds $\varepsilon_\kappa$ are truthful.
+2. Verify that the matching relation $R_K$ of Theorem 4.1 holds for the compiled system.
+3. Verify that the pacing contract $Q_{\mathrm{safe}}$ is preserved at runtime.
+
+12.2 Godot Headless Telemetry Harness
+
+A Godot 4 headless script records frame-by-frame position, delta, and acceleration of observed entities over horizon $K$, exporting to JSON. The harness attaches to a target entity and terminates after $K$ physics frames.
+
+12.3 Drift Validation
+
+A Python orchestrator:
+
+1. Spawns Godot in --headless mode;
+2. Loads telemetry and IR ground truth traces;
+3. Computes empirical drift $\hat{\varepsilon} = \max_k \|\mathbf{x}_k^{\mathrm{engine}} - \mathbf{x}_k^{\mathrm{IR}}\|_2$;
+4. Evaluates $f_{\mathrm{det}}(\vec{\varepsilon}; K)$ and $f_{\mathrm{rss}}(\vec{\varepsilon}; K)$;
+5. Applies the validation gate $\hat{\varepsilon} \leq \varepsilon_{\mathrm{global}}$.
+
+Gate Semantics. The primary gate uses $f_{\mathrm{rss}}$; $f_{\mathrm{det}}$ is reported for reference. If $\hat{\varepsilon} > \varepsilon_{\mathrm{global}}$, the adapter either increases resynchronization frequency, increases physics tick rate (if the dominant error is kinematic), or marks the capability UNSUPPORTED.
+
+12.4 Pacing Contract Validation
+
+For each pacing configuration $q \in Q_{\mathrm{safe}}$, a runtime monitor records the sequence of structural state transitions. The observed transition graph is compared to the IR's abstract transition graph via graph isomorphism on the structural projection. Divergences are logged as contract violations.
+
+12.5 Adapter Obligations
+
+The adapter must provide, for empirical validation:
+
+· Declared capability bounds $\varepsilon_\kappa$ per capability;
+· Declared action-matching function $\mathrm{match}$;
+· Declared clock tolerance $\delta_{\mathrm{clk}}$;
+· Declared observation bound $\varepsilon$;
+· Declared resynchronization frequency $\nu_{\mathrm{resync}}$;
+· Declared $Q_{\mathrm{safe}}$ with verification depth $D$.
+
+All declarations are subject to empirical falsification.
+
+---
+
+13. COLLISION TEST METHODOLOGY
+
+13.1 Evidence Ledger
+
+Every claimed collision with prior work is recorded with the following fields:
+
+Field Required Evidence
+Identity Exact title, authors, venue or repository, stable identifier
+Publication status Published, accepted, preprint, or unverified
+Claimed capability Directly supported passage, figure, or experiment
+Limitation Explicit author statement or bounded inference
+Collision Exact overlap with the Game IR
+Residual novelty What remains after overlap removal
+
+13.2 Three Rules
+
+Rule 13.1. Absence of a feature is not established by failing to find it in an abstract. Inspect method, artifact, supplementary material, and limitations.
+
+Rule 13.2. A performance result is not a capability guarantee.
+
+Rule 13.3. Priority is not claimed prematurely. Statements of the form "no work has extended this formalism" are replaced by "within the literature search conducted at [date], no work extending this formalism was identified."
+
+13.3 Scoped Novelty Statement
+
+Within the search conducted in October 2026, no prior work was identified that:
+
+1. Formalizes an engine-neutral game specification as a timed automaton network with explicit concurrency, urgency, and Zeno-freedom assumptions;
+2. States a conditional finite-horizon trace correspondence theorem with explicit transfer, action-matching, clock-correspondence, and observation-bound hypotheses;
+3. Distinguishes four termination properties and proves complexity for each under specified encodings;
+4. Formulates a reachability-preserving pacing contract as an adapter-verified invariant with a symbolic backward-reachability governor.
+
+This statement is scoped to the search conditions. It does not claim that no such work exists.
+
+---
+
+14. EXPERIMENTAL PROTOCOL
+
+14.1 Experimental Conditions
+
+Condition Description
+B1 Direct engine-specific generation from prompt, no IR
+B2 Game IR generation, compilation, no verification loop
+B3 Game IR + local keypoint verification
+B4 Game IR + local verification + bounded termination verification + pacing agent
+B5 Game IR + local verification + bounded termination verification, pacing disabled
+
+B4 vs. B5 estimates the incremental effect of the pacing system with the remaining pipeline held constant.
+
+14.2 Metric Hierarchy
+
+Each metric establishes a distinct property. They are not substitutes.
+
+Metric What It Establishes
+Strict launch success Project starts without specified failures
+Local requirement fidelity Tested keypoints pass their defined checks
+Bounded test-agent completion Designated agent reaches victory within budget
+Model-level winning reachability A path to victory exists in the formal model
+Model-level recoverability Relevant reachable states retain a path to victory
+Runtime-model agreement Engine transitions conform to the IR
+Human playability Participants can complete the experience
+Human pacing Observed duration under human play
+
+14.3 Primary Endpoint and Estimand
+
+Primary endpoint: Bounded test-agent completion (binary).
+
+Estimand: Prompt-level paired difference:
+
+\Delta_{c, c'} = \mathbb{E}_p \left[ \mathbb{E}_{r \mid p} \left[ Y_c(p, r) - Y_{c'}(p, r) \right] \right]
+
+Estimated by:
+
+\widehat{\Delta}_{c, c'} = \frac{1}{|P|} \sum_{p \in P} \left( \frac{1}{R} \sum_{r=1}^{R} \left[ Y_c(p, r) - Y_{c'}(p, r) \right] \right)
+
+14.4 Paired Analysis
+
+Repetitions from the same prompt are not independent. We use paired differences at the prompt level, hierarchical or cluster-robust standard errors, and matched seeds across conditions where technically feasible.
+
+14.5 Confidence Intervals and Corrections
+
+Wilson intervals are used for individual binomial proportions. For paired differences, bootstrap confidence intervals clustered at the prompt level are reported. For multiple secondary metrics, Holm–Bonferroni (family-wise error) and Benjamini–Hochberg (false discovery rate) are applied. The primary hypothesis test is reserved for one predeclared endpoint.
+
+14.6 Power Analysis
+
+The repetition count $R$ is justified by a precision analysis. Given a plausible effect size $\delta$, a target half-width, and estimated between-prompt variance $\sigma^2_p$ and within-prompt variance $\sigma^2_w$:
+
+|P| \geq \frac{z_{1-\alpha/2}^2 (\sigma^2_p + \sigma^2_w / R)}{(\text{half-width})^2}
+
+Values of $\sigma^2_p$ and $\sigma^2_w$ are estimated from a pilot experiment.
+
+14.7 Falsification Criteria
+
+Hypothesis Falsification Condition
+H1 $\Delta_{B_4, B_1} \leq 0$ on the primary endpoint
+H2 Existence of $q \in Q_{\mathrm{safe}}$ with $\mathrm{Reach}_F^{M_q}(s_0) \neq \mathrm{Reach}_F^{M}(s_0)$
+H3 No reduction in completion-time deviation under B4 vs. B5
+H4 Empirical bound $\hat{\varepsilon}$ exceeds declared $\varepsilon$ for any capability
+
+A negative result for H1 does not invalidate the thesis. It remains valid as formalization and negative empirical result.
+
+14.8 Preregistration
+
+The protocol is pre-registered on OSF before data collection. The preregistration includes hypotheses, conditions, metrics, sample sizes, statistical tests, and falsification criteria. Amendments are logged with timestamps.
+
+---
+
+15. THREATS TO VALIDITY
+
+15.1 Internal Validity
+
+Confounding. B1 vs. B4 changes representation, verification, termination, and pacing simultaneously. B5 isolates pacing but not other components. A factorial design would isolate more effects but increases run count and implementation burden.
+
+Stochasticity. LLM sampling variance is addressed by fixed temperature, declared seeds, and reporting across multiple seeds.
+
+Contamination. Prompt novelty is tested against public corpora to reduce training-data leakage.
+
+15.2 External Validity
+
+Genre restriction. The evaluation targets 3D narrative exploration. Results may not generalize to other genres.
+
+Engine restriction. The prototype uses Godot. Multi-engine portability is hypothesized (H4) but not demonstrated. A second adapter is required to test H4.
+
+Prompt diversity. The prompt set is finite. Larger sets would improve coverage.
+
+15.3 Construct Validity
+
+Terminability. Bounded test-agent completion is not human completion. Both are reported separately.
+
+Prompt fidelity. Keypoint validation measures explicit conformance, not subjective quality.
+
+Duration. Automated test duration may differ from human duration. A human pilot calibrates the duration model.
+
+15.4 Conclusion Validity
+
+Multiple testing. Holm–Bonferroni and Benjamini–Hochberg correct for multiple comparisons under specified assumptions; the actual correlation structure among metrics is unknown.
+
+Power. The pilot determines the required sample size; underpowered analyses report effect sizes without strong significance claims.
+
+Negative results. Pre-registered. A negative result for H1 is a valid thesis outcome.
+
+15.5 Model Fidelity
+
+Abstract vs. concrete. Detection of completion dead ends in the abstract model does not capture practical unplayability (impossible jumps, non-intuitive paths, difficulty).
+
+Adapter declaration trust. Declared capability bounds and pacing contract verifications are adapter assertions. Empirical validation is mandatory.
+
+15.6 Horizon Limitation
+
+Bounded correspondence. The trace correspondence theorem is finite-horizon. Infinite-horizon correspondence is not claimed and would require $L \leq 1$ or infinite resynchronization frequency.
+
+---
+
+16. CONCLUSION
+
+16.1 Summary of Contributions
+
+Contribution 1 — Formal Game IR. A five-layer contract with executable semantics as a timed automaton network, explicit concurrency, urgency, Zeno-freedom, and observation metric.
+
+Contribution 2 — Conditional Correspondence Theorem. A finite-horizon trace correspondence theorem whose hypotheses are explicit transfer, action-matching, clock-correspondence, and observation-bound conditions. The matching relation is not derived from capability declarations; it is assumed and must be established or checked.
+
+Contribution 3 — Termination Analysis. Four distinct properties — winning reachability, universal recoverability, deadlock freedom, bounded completion — with complexity results for each under specified encodings. PSPACE-completeness is not claimed for the general verification problem; it is claimed only for encodings for which reductions are constructed. TCTL model checking is EXPTIME-complete, scoping verification to bounded horizons.
+
+Contribution 4 — Godot 4 Adapter Architecture. An error composition framework with declared sources, semi-implicit Euler bounds, contractive penetration bounds, horizon-limited growth, and mandatory state resynchronization checkpoints. The compilation gate uses the RSS bound as primary, with the deterministic bound reported for reference.
+
+Contribution 5 — Reachability-Preserving Pacing Contract. A formal invariant for dynamic pacing established by adapter contract, with a symbolic backward-reachability governor using bounded depth to preserve safety under decidability constraints.
+
+Contribution 6 — Scoped Novelty and Pre-Registered Protocol. An auditable collision methodology and a pre-registered experimental protocol with paired estimands, hierarchical error accounting, and explicit falsification criteria.
+
+16.2 Answer to the Research Question
+
+The research question was:
+
+Under what semantic and operational conditions can an executable, engine-neutral intermediate representation for 3D narrative exploration games support bounded behavioral conformance checking, detection of completion-dead-end states, and runtime pacing adjustments that preserve modeled winning reachability?
+
+The answer is: under the conditions specified in Sections 2–11, namely:
+
+· A Game IR formalized as a timed automaton network with explicit concurrency, urgency, and Zeno-freedom;
+· An adapter that declares capabilities, provides an error-composition rule, and enforces resynchronization checkpoints;
+· A matching relation satisfying the four transfer conditions of Theorem 4.1;
+· An observation metric with declared weights and missing-entity conventions;
+· A pacing contract established by adapter obligation, not variable naming, with bounded backward-reachability verification.
+
+Under these conditions, the Game IR supports the three capabilities. Whether it improves generation outcomes relative to direct engine-specific methods remains an empirical question addressed by the protocol of Section 14.
+
+16.3 Limitations
+
+Limitation 1 — Model fidelity. Detection of completion dead ends in the abstract model does not capture practical unplayability.
+
+Limitation 2 — Adapter declaration trust. Declared capability bounds and pacing contract verifications are adapter assertions. Empirical validation is mandatory.
+
+Limitation 3 — Bounded horizon. The correspondence theorem is finite-horizon. Infinite-horizon correspondence is not claimed.
+
+Limitation 4 — Engine restriction. The prototype is Godot-only. Multi-engine portability (H4) requires a second adapter to test.
+
+Limitation 5 — Complexity scope. PSPACE-hardness is claimed only for encodings for which reductions are constructed. TCTL verification is EXPTIME-complete, scoping UPPAAL use to bounded horizons.
+
+Limitation 6 — Undecidability of dense-time Pre*. Exact $\mathrm{Pre}^*$ is undecidable for dense-time systems. Pacing safety uses bounded or abstracted backward reachability.
+
+16.4 Perspectives
+
+Perspective 1 — Second adapter. Implementation of a second adapter (Unity or Unreal) would enable direct testing of H4.
+
+Perspective 2 — Advanced model checking. Integration with bounded model checking for timed automata beyond UPPAAL's default, or with statistical model checking for larger horizons.
+
+Perspective 3 — Learning-based pacing. Reinforcement learning of pacing configurations subject to the reachability-preservation contract, with the contract enforced as a hard constraint.
+
+Perspective 4 — Human studies. Systematic evaluation of playability, pacing, and perceived autonomy beyond automated metrics.
+
+16.5 Final Statement
+
+This thesis establishes a theoretical foundation for treating generated games as executable specifications with explicit semantics, testable completion properties, and controlled runtime adaptation. It formalizes the Game IR under a five-layer contract, states a conditional finite-horizon trace correspondence theorem, distinguishes four termination properties with scoped complexity results, specifies a Godot 4 adapter with declared error decomposition and mandatory resynchronization, and formulates a reachability-preserving pacing contract with bounded symbolic verification. The question of empirical superiority remains open, but it is now posed in a falsifiable manner with pre-registered criteria.
+
+The thesis deliberately does not claim what its proofs do not establish. The matching relation is not derived from capability declarations. Termination is not conflated with reachability. Engine independence is a design objective, not a demonstrated property. Exhaustive verification is scoped to bounded horizons where TCTL complexity permits. This discipline is the foundation on which subsequent empirical work can be honestly built.
+
+APPENDICES
+
+APPENDIX A — NOTATION AND CONVENTIONS
+
+A.1 Sets and Spaces
+
+Symbol Meaning
+$\mathbb{N}$ Non-negative integers
+$\mathbb{R}_{\geq 0}$ Non-negative reals
+$\mathcal{A} = \{A_1, \ldots, A_n\}$ Finite set of timed automata
+$\mathcal{C}$ Finite set of clock variables
+$\mathcal{V} = \mathcal{V}_S \uplus \mathcal{V}_Q$ Discrete variables (structural ⊎ QoS)
+$S$ Global state space
+$S_R \subseteq S$ Reachable state space from $s_0$
+$F \subseteq S_R$ Terminal (victory) states
+$E$ Transition edges
+$\mathcal{O}$ Observation space
+$\pi : S \to \mathcal{O}$ Observation projection
+$\Sigma$ Action alphabet
+$L, L_i$ Location sets
+$\ell, \ell_i$ Locations
+$\nu : \mathcal{C} \to \mathbb{R}_{\geq 0}$ Clock valuation
+$v : \mathcal{V} \to D$ Discrete valuation
+$\Gamma$ Typing environment
+
+A.2 Operators
+
+Symbol Meaning
+$\llbracket \cdot \rrbracket$ Denotational semantics
+$\models$ Satisfaction relation
+$\leadsto$ Reachability in a finite number of steps
+$\xrightarrow{a}$ Discrete transition labeled $a$
+$\xrightarrow{d}$ Time delay of duration $d$
+$\approx_\varepsilon$ ε-approximate bisimulation
+$\sqsubseteq$ Refinement relation
+$\uplus$ Disjoint union
+$\square$ End of proof
+
+A.3 Assumptions
+
+A.1 (Zeno-Freedom). Every cycle in the location graph contains at least one clock that is reset and whose invariant bounds the cycle duration from below by a positive constant.
+
+A.2 (Polynomial Successor). The successor function $\mathrm{succ}$ of any implicit encoding is computable in polynomial time in the size of the encoding.
+
+A.3 (Declared Bounds). Capability error bounds $\varepsilon_\kappa$ are adapter assertions and are not assumed truthful.
+
+A.4 (Finite Precision). All numerical computations are performed in IEEE 754 arithmetic, with precision mode (single or double) declared by the adapter.
+
+---
+
+APPENDIX B — PROOFS FOR CHAPTER 2 (GAME IR FORMALIZATION)
+
+B.1 Proof of Proposition 2.1 (Observation Metric)
+
+Proposition 2.1. Under the declared convention for missing entities and positive weights, $d_{\mathcal{O}}$ is a metric on $\mathcal{O}$.
+
+Proof. We verify the three metric axioms.
+
+(M1) Identity of indiscernibles. If $o_1 = o_2$, then $\mathrm{pos}_1(e) = \mathrm{pos}_2(e)$ for all $e \in \mathcal{E}$, $\mathrm{inv}_1 = \mathrm{inv}_2$, and $\mathrm{evt}_1 = \mathrm{evt}_2$. Hence all three terms vanish, so $d_{\mathcal{O}}(o_1, o_2) = 0$.
+
+Conversely, suppose $d_{\mathcal{O}}(o_1, o_2) = 0$. Since $\alpha, \beta, \gamma > 0$ and all terms are non-negative, all three terms must be zero. Thus $\max_e \|\mathrm{pos}_1(e) - \mathrm{pos}_2(e)\|_2 = 0$, which implies $\mathrm{pos}_1 = \mathrm{pos}_2$ on $\mathcal{E}$. Similarly $d_{\mathrm{inv}}(\mathrm{inv}_1, \mathrm{inv}_2) = 0$ implies $\mathrm{inv}_1 = \mathrm{inv}_2$, and $d_{\mathrm{evt}}(\mathrm{evt}_1, \mathrm{evt}_2) = 0$ implies $\mathrm{evt}_1 = \mathrm{evt}_2$. Therefore $o_1 = o_2$.
+
+(M2) Symmetry. Each constituent is symmetric: $\|\mathrm{pos}_1(e) - \mathrm{pos}_2(e)\|_2 = \|\mathrm{pos}_2(e) - \mathrm{pos}_1(e)\|_2$, $d_{\mathrm{inv}}$ is Hamming distance (symmetric), and $d_{\mathrm{evt}}$ is the discrete metric (symmetric). Positive-weighted sum of symmetric functions is symmetric.
+
+(M3) Triangle inequality. Let $o_1, o_2, o_3 \in \mathcal{O}$. We show $d_{\mathcal{O}}(o_1, o_3) \leq d_{\mathcal{O}}(o_1, o_2) + d_{\mathcal{O}}(o_2, o_3)$.
+
+For the spatial term:
+\max_e \|\mathrm{pos}_1(e) - \mathrm{pos}_3(e)\|_2 \leq \max_e \left[ \|\mathrm{pos}_1(e) - \mathrm{pos}_2(e)\|_2 + \|\mathrm{pos}_2(e) - \mathrm{pos}_3(e)\|_2 \right]
+
+
+\leq \max_e \|\mathrm{pos}_1(e) - \mathrm{pos}_2(e)\|_2 + \max_e \|\mathrm{pos}_2(e) - \mathrm{pos}_3(e)\|_2
+
+For the inventory term, Hamming distance satisfies the triangle inequality on any finite-dimensional vector space.
+
+For the event term, the discrete metric on any set satisfies the triangle inequality (it is a metric).
+
+A positive-weighted sum of metrics is a metric. $\square$
+
+B.2 Zeno-Freedom Sufficient Condition
+
+Proposition B.1. A Game IR satisfies Assumption A.1 if there exists a ranking function $r : \mathcal{A} \times L \to \mathbb{N}$ such that for every cycle $\ell_1 \to \ell_2 \to \cdots \to \ell_k \to \ell_1$ in the location graph of any automaton $A_i$, there exists an edge $(\ell_j, g, a, r_{\mathrm{clk}}, \ell_{j+1})$ with $c \in r_{\mathrm{clk}}$ and $\mathrm{Inv}(\ell_{j+1}) \models c \geq \delta_{\min}$ for some $\delta_{\min} > 0$.
+
+Proof. Consider a hypothetical Zeno execution. Any cycle traversal requires the designated edge to fire, which resets $c$ to $0$. To return to the cycle, the automaton must spend at least $\delta_{\min}$ time units in $\ell_{j+1}$ (by the invariant). Hence each cycle traversal consumes at least $\delta_{\min}$ time. Infinitely many traversals would require infinite time. Contradiction with Zeno definition. $\square$
+
+B.3 State Space Finiteness
+
+Proposition B.2. If the discrete variable domains are finite and the clock invariants are bounded, then the region-equivalence quotient of $S$ is finite.
+
+Proof. Each clock $c \in \mathcal{C}$ has a maximum value $M_c = \max_{\ell \in L} \mathrm{Inv}(\ell)(c)$ (finite by assumption). The region equivalence partitions $\mathbb{R}_{\geq 0}^{|\mathcal{C}|}$ into finitely many regions. The product with finitely many discrete valuations and location vectors is finite. $\square$
+
+---
+
+APPENDIX C — PROOFS FOR CHAPTER 3 (CONDITION LANGUAGE)
+
+C.1 Proof of Theorem 3.1 (Typing Safety)
+
+Theorem 3.1. If $\varphi$ is well-typed in $\Gamma$, then for all valid $s$, $\llbracket \varphi \rrbracket(s)$ is defined.
+
+Proof. By structural induction on $\varphi$.
+
+Base cases.
+
+· $\varphi = \top$ or $\bot$: $\llbracket \top \rrbracket(s) = \top$ is defined.
+· $\varphi = (x = v)$: Well-typedness requires $x \in \Gamma$ and $v \in \mathrm{Type}(x)$. Since $s$ is valid, $v(x)$ is defined, so $\llbracket x = v \rrbracket(s) = (v(x) = v)$ is a defined boolean.
+· $\varphi = \mathrm{near}(e_1, e_2, d)$: Well-typedness requires $e_1, e_2 \in \Gamma$ as entities and $d \in \mathbb{R}_{\geq 0}$. Since $s$ is valid, $s(e_1), s(e_2)$ are defined positions. Euclidean distance is computable. Defined.
+· $\varphi = \mathrm{time\_since}(ev) \leq t$: Well-typedness requires $ev \in \Gamma$ as an event and $t \in \mathbb{R}_{\geq 0}$. Since $s$ is valid, $\nu(\mathrm{clock}_{ev})$ is defined. Defined.
+
+Inductive cases.
+
+· $\varphi = \psi_1 \wedge \psi_2$: By IH, $\llbracket \psi_1 \rrbracket(s)$ and $\llbracket \psi_2 \rrbracket(s)$ are defined booleans. Their conjunction is defined.
+· $\varphi = \neg \psi$: By IH, $\llbracket \psi \rrbracket(s)$ is a defined boolean. Negation is defined.
+· $\varphi = \mathrm{before}(ev_1, ev_2)$: Well-typedness requires $ev_1, ev_2 \in \Gamma$. Since $s$ is valid, the clock values $\mathrm{clock}_{ev_1}, \mathrm{clock}_{ev_2}$ are defined. The comparison $\mathrm{time}(ev_1) < \mathrm{time}(ev_2)$ is defined.
+
+All cases preserve definedness. $\square$
+
+C.2 Proof of Theorem 3.2 (Type Checking in PTIME)
+
+Theorem 3.2. Type checking for $\mathcal{L}$ is decidable in polynomial time.
+
+Proof. We construct a syntax-directed type-checking algorithm.
+
+Algorithm.
+
+1. Traverse the AST bottom-up.
+2. For each node, apply the corresponding typing rule.
+3. Look up identifiers in $\Gamma$ (constant time with hash table).
+4. Unify types for polymorphic constructs.
+
+Complexity analysis.
+
+· AST traversal: $O(|\varphi|)$ nodes.
+· Each node performs a constant number of $\Gamma$ lookups: $O(1)$ each.
+· Unification of simple first-order types: linear in the size of the type expression.
+· Total: $O(|\varphi| \cdot t_{\max})$ where $t_{\max}$ is the maximum type size, bounded by $|\Gamma|$.
+
+Hence type checking is in PTIME. $\square$
+
+C.3 Compositionality
+
+Proposition C.1. For every $\varphi = \psi_1 \circ \psi_2$ with $\circ \in \{\wedge, \vee\}$, $\llbracket \varphi \rrbracket(s)$ depends only on $\llbracket \psi_1 \rrbracket(s)$ and $\llbracket \psi_2 \rrbracket(s)$.
+
+Proof. By Definition 3.2, the semantics of $\varphi$ is defined by composition of the semantics of the subformulas. No other state components are consulted. $\square$
+
+C.4 Determinism
+
+Proposition C.2. For every $s \in S$ and $\varphi \in \mathcal{L}$, $\llbracket \varphi \rrbracket(s)$ is uniquely determined.
+
+Proof. By induction on $\varphi$. The clock valuation $\nu$ is a function, so $\nu(\mathrm{clock}_{ev})$ is uniquely defined. Discrete valuations are functions. Distance computations are deterministic. Boolean operations are deterministic. $\square$
+
+---
+
+APPENDIX D — PROOFS FOR CHAPTER 4 (TRACE CORRESPONDENCE)
+
+D.1 Proof of Theorem 4.1 (Conditional Finite-Horizon Trace Correspondence)
+
+Theorem 4.1. Let $K \in \mathbb{N}$. If there exists a K-bounded matching relation $R_K$ satisfying (C1)–(C5), then for every trace $\tau$ of $M$ of length at most $K$, there exists a trace $\tau^e$ of $M_e$ of the same length satisfying the three stated properties.
+
+Proof. We proceed by strong induction on the trace length.
+
+Base case ($K = 0$). The only trace of length 0 is $s_0$. By (C1), $(s_0, s_0^e) \in R_K$. The trivial engine trace $\tau^e = s_0^e$ satisfies:
+
+· Vacuously, actions correspond (empty sequence).
+· $d_{\mathcal{O}}(\pi(s_0), \pi_e(s_0^e)) \leq \varepsilon$ by (C5).
+· $|\nu_0(c) - \nu^e_0(c)| \leq \delta_{\mathrm{clk}}$ for all $c \in \mathcal{C}_{\mathrm{obs}}$ by (C4) applied at the initial pair (with delay $0$).
+
+Inductive step. Assume the claim holds for all traces of length $\leq K$. Consider a trace $\tau' = \tau \cdot (a_{K+1}, d_{K+1})$ of length $K+1$.
+
+By the induction hypothesis, there exists a matched engine trace $\tau^e$ of length $K$ with:
+
+· Actions matched under $\mathrm{match}$;
+· For every $j \leq K$, $d_{\mathcal{O}}(\pi(s_j), \pi_e(s^e_j)) \leq \varepsilon$;
+· For every $j \leq K$, $|\nu_j(c) - \nu^e_j(c)| \leq \delta_{\mathrm{clk}}$ for $c \in \mathcal{C}_{\mathrm{obs}}$.
+
+Apply (C2) to the final pair $(s_K, s^e_K) \in R_K$ with action $a_{K+1}$. Since $T(s_K, a_{K+1}) = s_{K+1}$ is defined in $M$, there exists $a^e_{K+1} \in \Sigma_e$ with $\mathrm{match}(a_{K+1}, a^e_{K+1})$ and $s^e_{K+1}$ with $T_e(s^e_K, a^e_{K+1}) = s^e_{K+1}$ such that $(s_{K+1}, s^e_{K+1}) \in R_K$.
+
+Extend $\tau^e$ to $\tau'^e = \tau^e \cdot (a^e_{K+1}, d_{K+1})$. Then:
+
+· Action correspondence holds at position $K+1$ by construction.
+· The observation bound at position $K+1$ follows from (C5) applied to $(s_{K+1}, s^e_{K+1})$.
+· The clock bound at position $K+1$ follows from (C4) applied to the final pair, using the admissibility of $d_{K+1}$ in both systems.
+
+This completes the inductive step. $\square$
+
+D.2 Error Accumulation Lemma
+
+Lemma D.1 (Linear Recurrence Bound). Let $(e_k)_{k \geq 0}$ be a non-negative real sequence satisfying:
+
+e_{k+1} \leq L \cdot e_k + \eta
+
+for constants $L \geq 0$ and $\eta \geq 0$. Then for all $K \geq 0$:
+
+e_K \leq L^K e_0 + \eta \sum_{j=0}^{K-1} L^j
+
+with the convention that $\sum_{j=0}^{K-1} L^j = K$ when $L = 1$, and $\sum_{j=0}^{K-1} L^j = (L^K - 1)/(L - 1)$ when $L \neq 1$.
+
+Proof. By induction on $K$.
+
+Base case $K = 0$. The claim is $e_0 \leq e_0$, trivial.
+
+Inductive step. Assume the claim for $K$:
+e_K \leq L^K e_0 + \eta \sum_{j=0}^{K-1} L^j
+
+Then:
+e_{K+1} \leq L \cdot e_K + \eta \leq L \cdot \left( L^K e_0 + \eta \sum_{j=0}^{K-1} L^j \right) + \eta = L^{K+1} e_0 + \eta \sum_{j=0}^{K} L^j
+
+This establishes the claim for $K+1$. $\square$
+
+D.3 Exponential Growth for $L > 1$
+
+Corollary D.1. If $L > 1$ and $K \to \infty$, the bound $L^K e_0 + \eta (L^K - 1)/(L - 1)$ grows as $\Theta(L^K)$.
+
+Proof. Immediate from the form of the bound. The dominant term is $L^K e_0$, which grows exponentially in $K$. $\square$
+
+Remark D.1. For a 90-minute game at 60 Hz, $K \approx 3.24 \times 10^5$. If $L = 1.001$, then $L^K \approx e^{0.001 \times 3.24 \times 10^5} = e^{324} \approx 10^{140}$. This bound is astronomically large and therefore vacuous for any practical $\varepsilon_{\mathrm{global}}$. This motivates the mandatory resynchronization checkpoints (Definition 7.1).
+
+D.4 Resynchronization Bound
+
+Definition D.1 (Resynchronized Error). Let $\nu_{\mathrm{resync}} > 0$ be the resynchronization frequency (in checkpoints per frame). Let $K_{\mathrm{resync}} = 1/\nu_{\mathrm{resync}}$ be the interval between checkpoints. The resynchronized error is:
+
+\varepsilon_{\mathrm{resync}} = \frac{L^{K_{\mathrm{resync}}} - 1}{L - 1} \cdot \eta_{\max}
+
+Proposition D.1. Under resynchronization with interval $K_{\mathrm{resync}}$, the effective error bound over any horizon $K$ is at most $\varepsilon_{\mathrm{resync}} + \varepsilon_{\mathrm{global}}$.
+
+Proof. Between checkpoints, the recurrence grows at most as $L^{K_{\mathrm{resync}}}$. At each checkpoint, the error is reset to at most $\varepsilon_{\mathrm{global}}$ (by the correction rule). Hence the maximum error over any window is bounded by $\varepsilon_{\mathrm{resync}} + \varepsilon_{\mathrm{global}}$. $\square$
+
+---
+
+APPENDIX E — PROOFS FOR CHAPTER 5 (TERMINATION PROPERTIES)
+
+E.1 Proof of Theorem 5.1 (Completion Dead End Characterization)
+
+Theorem 5.1. $s \in S_R$ is a completion dead end iff $\mathrm{Reach}_F(s) = 0$.
+
+Proof.
+
+($\Rightarrow$) Suppose $s$ is a completion dead end. By Definition 5.5, $s \notin F$ and no $f \in F$ is reachable from $s$. Hence $\mathrm{Reach}_F(s) = 0$.
+
+($\Leftarrow$) Suppose $\mathrm{Reach}_F(s) = 0$. Then no $f \in F$ is reachable from $s$. If $s \in F$, then $s \leadsto s$ trivially, contradicting $\mathrm{Reach}_F(s) = 0$. Hence $s \notin F$. Combined with unreachability, $s$ is a completion dead end. $\square$
+
+E.2 Relationship Between the Four Properties
+
+Proposition E.1. The following implications hold:
+
+1. $\mathrm{UnivRec}(\mathcal{G}) = 1 \Rightarrow \mathrm{WinReach}(\mathcal{G}) = 1$;
+2. $\mathrm{DeadlockFree}(\mathcal{G}) = 1$ does not imply $\mathrm{WinReach}(\mathcal{G}) = 1$;
+3. $\mathrm{BoundedComplete}(\mathcal{G}, \rho, N) = 1 \Rightarrow \mathrm{WinReach}(\mathcal{G}) = 1$.
+
+Proof.
+
+(1) If every non-terminal reachable state can reach $F$, then in particular $s_0$ (if $s_0 \notin F$) can reach $F$, or $s_0 \in F$ and trivially reaches itself. Either way, $\mathrm{WinReach}(\mathcal{G}) = 1$.
+
+(2) Consider a graph with $S_R = \{s_0, s_1\}$, $F = \emptyset$, and edges $\{(s_0, s_1), (s_1, s_0)\}$. Both states have non-empty out-degree, so $\mathrm{DeadlockFree} = 1$. But no state is in $F$, so $\mathrm{WinReach} = 0$.
+
+(3) If under policy $\rho$, victory is reached within $N$ steps, then a path to $F$ exists, so $\mathrm{WinReach} = 1$. $\square$
+
+E.3 Proof of Proposition 5.1 (Local Does Not Imply Global)
+
+Proposition 5.1. Satisfaction of all tested local keypoints does not imply global winning reachability.
+
+Proof. We construct an explicit counterexample.
+
+Game IR. Consider a game with:
+
+· Two doors A and B, and a victory condition requiring door B to be opened.
+· Initial state: both doors closed, no keys.
+· Actions:
+  · open_A: if A closed, open A and permanently disable B (structural guard update).
+  · open_B: if B closed and A not yet opened, open B.
+  · complete: if B open, transition to victory.
+
+Keypoints.
+
+· $k_1$: "The player can open door A." Satisfied by trace: open_A.
+· $k_2$: "The player can open door B." Satisfied by trace: open_B (before opening A).
+· $k_3$: "The player can reach victory." Satisfied by trace: open_B; complete.
+
+Each keypoint is individually satisfiable. But there exists a trace open_A after which B is permanently disabled and victory is unreachable. Hence the game has a completion dead end.
+
+Formal verification. $\mathrm{WinReach}(\mathcal{G}) = 1$ (via the trace open_B; complete), but there exists a reachable state (after open_A) that is a completion dead end. Local keypoints are all satisfied, yet the global recoverability property fails: $\mathrm{UnivRec}(\mathcal{G}) = 0$. $\square$
+
+E.4 Decidability of Winning Reachability
+
+Proposition E.2. For finite state spaces, $\mathrm{WinReach}$, $\mathrm{UnivRec}$, $\mathrm{DeadlockFree}$, and $\mathrm{BoundedComplete}$ are all decidable.
+
+Proof. For a finite $S_R$:
+
+· $\mathrm{WinReach}$: DFS/BFS from $s_0$ to $F$.
+· $\mathrm{UnivRec}$: reverse reachability from $F$; check all non-terminal reachable states are covered.
+· $\mathrm{DeadlockFree}$: enumerate reachable states; check out-degree.
+· $\mathrm{BoundedComplete}$: simulate policy $\rho$ for up to $N$ steps. $\square$
+
+---
+
+APPENDIX F — PROOFS FOR CHAPTER 6 (COMPLEXITY)
+
+F.1 Proof of Theorem 6.1 (Explicit Deadlock Detection)
+
+Theorem 6.1. Given an explicit graph $\mathcal{G} = (S_R, E)$ and $F \subseteq S_R$, the decision problem "does there exist $s \in S_R$ with $\mathrm{Reach}_F(s) = 0$?" is in $\mathsf{P}$.
+
+Proof. Construct the reverse graph $\mathcal{G}^R = (S_R, E^R)$ where $E^R = \{(s', s) : (s, s') \in E\}$.
+
+Algorithm.
+
+1. Initialize a queue $Q = F$ and a set $\mathrm{canReach} = F$.
+2. While $Q \neq \emptyset$:
+   · Dequeue $s$.
+   · For each $s' \in E^R(s)$ (predecessor in $E$):
+     · If $s' \notin \mathrm{canReach}$, add $s'$ to $\mathrm{canReach}$ and enqueue.
+3. Return true iff $S_R \setminus \mathrm{canReach} \neq \emptyset$.
+
+Correctness. By induction on the number of iterations, $\mathrm{canReach}$ contains exactly the states that can reach $F$.
+
+Complexity. Each state is enqueued at most once. Each edge is examined at most once. Time: $O(|S_R| + |E|)$. Space: $O(|S_R|)$. Hence in $\mathsf{P}$. $\square$
+
+F.2 Proof of Theorem 6.2 (Implicit Winning Reachability in PSPACE)
+
+Theorem 6.2. Given an implicit encoding $(\mathcal{I}, \mathrm{enc})$ with polynomial successor enumeration and polynomial-size state encodings, the decision problem $\mathrm{WinReach}(\mathcal{G}) = 1$ is in $\mathsf{PSPACE}$.
+
+Proof. We exhibit a non-deterministic polynomial-space algorithm; by Savitch's theorem, $\mathsf{NPSPACE} = \mathsf{PSPACE}$.
+
+Algorithm (non-deterministic).
+
+1. Set $s \leftarrow s_0$, counter $\mathrm{cnt} \leftarrow 0$.
+2. While $\mathrm{cnt} < 2^{|\mathcal{I}|}$:
+   · If $s \in F$, accept.
+   · Non-deterministically choose $a \in \Sigma$ and $d \geq 0$ consistent with the timed semantics.
+   · Compute $s' = T(s, a, d)$.
+   · Set $s \leftarrow s'$, $\mathrm{cnt} \leftarrow \mathrm{cnt} + 1$.
+3. Reject.
+
+Space analysis. Each state $s$ is encoded in polynomial space by assumption. The counter uses $|\mathcal{I}|$ bits. The choices of $a$ and $d$ require polynomial space. Total space: polynomial in $|\mathcal{I}|$.
+
+Correctness. A finite state space of size at most $2^{|\mathcal{I}|}$ ensures termination. If a path to $F$ exists of length at most $|S_R| \leq 2^{|\mathcal{I}|}$, the non-deterministic algorithm finds it. $\square$
+
+F.3 Conditional PSPACE-Hardness
+
+Proposition 6.1. If the implicit encoding permits a polynomial-time reduction from a $\mathsf{PSPACE}$-hard planning problem, then $\mathrm{WinReach}$ is $\mathsf{PSPACE}$-hard for that encoding.
+
+Proof sketch. Suppose there is a $\mathsf{PSPACE}$-hard problem $P$ with a polynomial-time reduction $R : P \to \mathrm{WinReach}$. The reduction constructs from an instance $p \in P$ a Game IR $\mathcal{I}_p$ such that $p$ has a solution iff $\mathrm{WinReach}(\mathcal{G}_{\mathcal{I}_p}) = 1$. Then deciding $\mathrm{WinReach}$ for such encodings would decide $P$ in polynomial time, contradicting the $\mathsf{PSPACE}$-hardness of $P$ unless $\mathsf{P} = \mathsf{PSPACE}$. $\square$
+
+Remark F.1 (No General Hardness). $\mathsf{PSPACE}$-hardness does not follow merely from the encoding being implicit. Different implicit encodings may have different complexity. The hardness result is encoding-specific.
+
+F.4 Complexity of Universal Recoverability
+
+Proposition F.1. $\mathrm{UnivRec}$ for explicit graphs is in $\mathsf{P}$.
+
+Proof. Compute $\mathrm{canReach}$ via reverse reachability from $F$. Then:
+
+\mathrm{UnivRec} = 1 \iff S_R \setminus F \subseteq \mathrm{canReach}
+
+This is checked in $O(|S_R|)$ time. $\square$
+
+F.5 TCTL Complexity (Scoping Result)
+
+Proposition F.2 (Established). TCTL model checking over timed automata is $\mathsf{EXPTIME}$-complete.
+
+Justification. The result follows from standard timed automata theory: the region construction yields a finite quotient of exponential size, and CTL model checking on the quotient is polynomial in the quotient size. Lower bound is by reduction from alternating Turing machine computations. This is established in the timed automata literature.
+
+Corollary F.1. Exhaustive UPPAAL verification with TCTL queries including the leads-to operator is feasible only for small clock counts and small location products.
+
+---
+
+APPENDIX G — GODOT 4 ADAPTER: DETAILED COMPILATION RULES
+
+G.1 Complete Construct Mapping
+
+Game IR Construct Godot 4 Target GDScript Runtime
+Entity $e \in \mathcal{E}$ Node3D subclass Scene node
+Static geometry StaticBody3D + MeshInstance3D + CollisionShape3D Physics-static
+Dynamic entity RigidBody3D + mesh + collider Physics-dynamic
+Character CharacterBody3D + mesh + collider Kinematic
+Zone Area3D + CollisionShape3D Trigger volume
+Automaton $A_i$ Custom Node Timed automaton script
+Location $\ell_i$ Enum value current_location
+Clock $c$ float accumulator Incremented in _physics_process
+Invariant Check in _physics_process if c > bound: handle_violation()
+Urgent location Frame-synchronous call No await in this frame
+Action $\sigma$ Signal signal act_sigma
+Synchronization Global SignalBus Autoload singleton
+Guard $g$ Boolean function func guard_g() -> bool
+Update $u$ Assignment Inline in transition
+Terminal $f \in F$ Special location Triggers victory_reached
+
+G.2 Synchronization Channel Compilation
+
+Game IR action sets are partitioned into synchronous and asynchronous. The adapter emits:
+
+· Synchronous action $\sigma$: SignalBus.emit_signal("act_sigma") on a global autoload.
+· Asynchronous action $\sigma$: local emit_signal("act_sigma") on the automaton node.
+
+The adapter declares per-action the mode explicitly in the L4 configuration.
+
+G.3 Clock Integration
+
+Each clock $c \in \mathcal{C}$ is compiled to a float accumulator per automaton. In _physics_process(delta):
+
+```
+func _physics_process(delta: float) -> void:
+    for c in active_clocks:
+        clock_values[c] += delta
+    _check_invariants()
+    _check_transitions()
+```
+
+Discretization error. Clock advancement uses the physics tick delta, which may vary. The adapter configures Engine.max_physics_steps_per_frame to bound jitter.
+
+G.4 Resynchronization Checkpoint Implementation
+
+```
+func _physics_process(delta: float) -> void:
+    frames_since_resync += 1
+    if frames_since_resync >= resync_interval:
+        _resynchronize()
+        frames_since_resync = 0
+
+func _resynchronize() -> void:
+    var observed = _observe()
+    var expected = IRGroundTruth.get_expected(frame)
+    if d_O(observed, expected) > epsilon_global:
+        _apply_correction(expected)
+        L5EvidenceLogger.log_resync(frame, observed, expected)
+```
+
+_apply_correction snaps entity positions and discrete variables to the IR-expected values.
+
+G.5 Compilation Gate Pseudocode
+
+```
+def compile(game_ir, adapter, epsilon_global):
+    capabilities = adapter.declare_capabilities(game_ir)
+    if any(c is UNSUPPORTED for c in capabilities):
+        return FAIL(reason="unsupported_capability")
+    
+    eps_vec = adapter.measure_component_errors(game_ir)
+    K = adapter.declared_horizon(game_ir)
+    
+    f_rss_val = f_rss(eps_vec, K)
+    if f_rss_val <= epsilon_global:
+        return SUCCESS(mode=APPROXIMATED, epsilon=f_rss_val)
+    
+    f_det_val = f_det(eps_vec, K)
+    if f_det_val > epsilon_global:
+        if adapter.can_insert_resync():
+            resync_interval = adapter.compute_resync_interval(eps_vec, epsilon_global)
+            return SUCCESS(mode=APPROXIMATED, epsilon=f_rss_val, resync=resync_interval)
+        else:
+            return FAIL(reason="error_bound_exceeded")
+    
+    return SUCCESS(mode=SUPPORTED)
+```
+
+---
+
+APPENDIX H — ERROR COMPOSITION DERIVATIONS
+
+H.1 Clock Jitter Bound
+
+Proposition H.1. Under bounded jitter $|\eta_k| \leq \delta_{\mathrm{jitter}}$ for all $k$, the accumulated clock error over $K$ frames satisfies:
+
+\varepsilon_{\mathrm{clk}}(K) \leq K \cdot \delta_{\mathrm{jitter}}
+
+Proof. By the triangle inequality:
+\left| \sum_{k=1}^{K} \Delta t_k - K \Delta t_{\mathrm{target}} \right| = \left| \sum_{k=1}^{K} \eta_k \right| \leq \sum_{k=1}^{K} |\eta_k| \leq K \delta_{\mathrm{jitter}}
+
+$\square$
+
+H.2 Kinematic Integration Error for Semi-Implicit Euler
+
+Proposition H.2. For semi-implicit Euler with position update $x_{k+1} = x_k + v_{k+1} \Delta t$ and velocity update $v_{k+1} = v_k + a_k \Delta t$, the local truncation error is $O(\Delta t^2)$ for position and $O(\Delta t)$ for velocity.
+
+Derivation. Expand the exact solution:
+x(t_k + \Delta t) = x(t_k) + v(t_k) \Delta t + \frac{1}{2} a(t_k) \Delta t^2 + O(\Delta t^3)
+
+Semi-implicit Euler:
+x_{k+1}^{\mathrm{SI}} = x_k + v_{k+1} \Delta t = x_k + (v_k + a_k \Delta t) \Delta t = x_k + v_k \Delta t + a_k \Delta t^2
+
+Difference:
+x(t_{k+1}) - x_{k+1}^{\mathrm{SI}} = \left( \frac{1}{2} - 1 \right) a_k \Delta t^2 + O(\Delta t^3) = -\frac{1}{2} a_k \Delta t^2 + O(\Delta t^3)
+
+Hence the position error per step is $O(\Delta t^2)$. However, this accumulates. Over $K$ steps with constant $a$, the accumulated error is:
+
+\varepsilon_{\mathrm{kin}}(K) = K \cdot \frac{1}{2} a \Delta t^2 = \frac{1}{2} a K \Delta t^2 = \frac{1}{2} a T \Delta t
+
+where $T = K \Delta t$ is the total time. Thus the accumulated error is first order in $\Delta t$ for fixed $T$. $\square$
+
+Corollary H.1. For semi-implicit Euler over horizon $T$, the accumulated kinematic error scales as $O(\Delta t) = O(1/f_{\mathrm{physics}})$.
+
+Implication. Halving the physics tick interval (doubling tick rate) halves the accumulated kinematic error. This justifies the remediation strategy in the compilation gate.
+
+H.3 Penetration Bound for Baumgarte Stabilization
+
+Proposition H.3. Under Baumgarte stabilization with factor $\mu \in (0, 1]$, penetration depth converges geometrically to a steady-state bound:
+
+\delta_{\mathrm{pen}}^\infty = \frac{\delta_{\mathrm{initial}} \cdot (1 - \mu)}{\mu}
+
+Derivation. The stabilization reduces penetration depth by factor $(1 - \mu)$ each step:
+\delta_{k+1} = (1 - \mu) \delta_k + \delta_{\mathrm{new}}
+
+Steady state:
+\delta^\infty = (1 - \mu) \delta^\infty + \delta_{\mathrm{new}} \implies \delta^\infty = \frac{\delta_{\mathrm{new}}}{\mu}
+
+For initial penetration $\delta_0 = 0$, the bound is:
+\delta^\infty \leq \frac{\delta_{\mathrm{new}}}{\mu}
+
+For $\mu = 0.2$ and per-step injection $\delta_{\mathrm{new}} \leq 0.01$ m, the steady-state penetration is at most $0.05$ m. $\square$
+
+Corollary H.2. The penetration error is not additive over time; it converges to a bounded steady state. The bound is max-based, not sum-based.
+
+H.4 Floating-Point Error Bound
+
+Proposition H.4. For single-precision IEEE 754 with machine epsilon $u = 2^{-24}$, the accumulated error from $K$ transform operations on vectors of magnitude at most $M$ is:
+
+\varepsilon_{\mathrm{fp}}(K) \leq K \cdot u \cdot M
+
+Proof. Each operation introduces a relative error bounded by $u$. For a vector addition $x + y$, the error is $\mathrm{fl}(x + y) - (x + y) \leq u |x + y|$. Accumulating over $K$ operations with each magnitude at most $M$, the total absolute error is bounded by $K u M$. $\square$
+
+H.5 Composition Rule Derivation
+
+Definition H.1 (Deterministic Composition). Given component error bounds $\varepsilon_1, \ldots, \varepsilon_m$ and a horizon $K$, the deterministic composition is:
+
+f_{\mathrm{det}}(\vec{\varepsilon}; K) = \alpha \left[ L^K e_0 + \frac{L^K - 1}{L - 1} \eta_{\max} \right] + \gamma \cdot \mathbb{I}(\tau_{\mathrm{guard}} > \Delta t_{\max})
+
+where:
+
+· $L = 1 + L_x \Delta t_{\max}$ is the Lipschitz growth factor;
+· $e_0$ is the initial error;
+· $\eta_{\max} = \|v_{\max}\|_2 \delta_{\mathrm{jitter}} + \frac{1}{2} a_{\max} \Delta t_{\max}^2 + \varepsilon_{\mathrm{pen}}^\infty + \varepsilon_{\mathrm{fp}}$ is the maximum per-step disturbance;
+· $\tau_{\mathrm{guard}} = \varepsilon_{\mathrm{pos}}(K) / \|v_{\max}\|_2 + \varepsilon_{\mathrm{clk}}(K)$ is the guard evaluation delay;
+· $\mathbb{I}$ is the indicator of a phase shift across a frame boundary.
+
+Definition H.2 (RSS Composition). Under the assumption of uncorrelated zero-mean disturbances:
+
+f_{\mathrm{rss}}(\vec{\varepsilon}; K) = \alpha \sqrt{K (\|v_{\max}\| \sigma_{\mathrm{jitter}})^2 + K (\frac{1}{2} a_{\max} \Delta t_{\max}^2)^2 + K \sigma_{\mathrm{pen}}^2 + K \sigma_{\mathrm{fp}}^2}
+
+Proposition H.5. $f_{\mathrm{rss}}(\vec{\varepsilon}; K) \leq f_{\mathrm{det}}(\vec{\varepsilon}; K)$ under the stated assumptions.
+
+Proof. The RSS bound arises from assuming uncorrelated errors, whereas the deterministic bound assumes worst-case alignment. Since random errors are unlikely to align adversarially, the RSS bound is generally tighter. Formally, the deterministic bound uses $|\sum e_i| \leq \sum |e_i|$ whereas the RSS bound uses $\mathbb{E}[(\sum e_i)^2] = \sum \mathbb{E}[e_i^2]$ for uncorrelated zero-mean $e_i$. $\square$
+
+H.6 Resynchronization Interval Computation
+
+Proposition H.6. Given target global bound $\varepsilon_{\mathrm{global}}$ and per-step disturbance $\eta_{\max}$, the resynchronization interval satisfying $\varepsilon_{\mathrm{resync}} \leq \varepsilon_{\mathrm{global}}$ is:
+
+K_{\mathrm{resync}} = \min \left\{ k : \frac{L^k - 1}{L - 1} \eta_{\max} \leq \varepsilon_{\mathrm{global}} \right\}
+
+Proof. By Proposition D.1, the resynchronized error over interval $K_{\mathrm{resync}}$ is $(L^{K_{\mathrm{resync}}} - 1)/(L - 1) \cdot \eta_{\max}$. Setting this equal to $\varepsilon_{\mathrm{global}}$ and solving for $K_{\mathrm{resync}}$ yields the bound. $\square$
+
+Closed form. For $L > 1$:
+K_{\mathrm{resync}} \leq \log_L \left( 1 + \frac{\varepsilon_{\mathrm{global}} (L - 1)}{\eta_{\max}} \right)
+
+For $L = 1$:
+K_{\mathrm{resync}} \leq \frac{\varepsilon_{\mathrm{global}}}{\eta_{\max}}
+
+---
+
+APPENDIX I — UPPAAL TRANSLATION: COMPLETE GRAMMAR
+
+I.1 XML Schema Mapping
+
+Game IR Element UPPAAL XML Element
+Clock $c$ <declaration>clock c;</declaration>
+Discrete $x$ <declaration>int[min,max] x;</declaration>
+Automaton $A_i$ <template>
+Location $\ell$ <location id="..." name="...">
+Urgent location <location ...><urgent/></location>
+Invariant <label kind="invariant">...</label>
+Initial location <init ref="..."/>
+Edge <transition>
+Edge source <source ref="..."/>
+Edge target <target ref="..."/>
+Guard <label kind="guard">...</label>
+Synchronization <label kind="synchronisation">chan!</label>
+Update <label kind="assignment">x = expr</label>
+Select <label kind="select">id : type</label>
+
+I.2 Guard Translation
+
+Game IR Guard UPPAAL Expression
+$x = v$ x == v
+$x < v$ x < v
+$\mathrm{near}(e_1, e_2, d)$ dist(e1, e2) <= d (with declared dist macro)
+$\mathrm{has\_item}(e, i)$ inv[e] == i
+$\mathrm{time\_since}(ev) \leq t$ c_ev <= t
+$\varphi \wedge \psi$ guard_phi && guard_psi
+$\neg \varphi$ !guard_phi
+
+I.3 TCTL Query Translation
+
+L3 Property TCTL Query UPPAAL Syntax
+$\mathrm{WinReach}$ $\exists \Diamond F$ E<> (Victory)
+$\mathrm{UnivRec}$ $\Box(p \Rightarrow \Diamond q)$ p --> q
+$\mathrm{DeadlockFree}$ $\Box(\neg F \Rightarrow \neg \mathrm{deadlock})$ A[] (not Victory imply not deadlock)
+$\mathrm{BoundedComplete}$ $\exists \Diamond (F \wedge t \leq N)$ E<> (Victory and global_clock <= N)
+
+I.4 Region Graph Size
+
+Proposition I.1. For a timed automaton network with $|\mathcal{C}|$ clocks and maximum constants $M_c$, the region graph has at most
+
+|\mathcal{C}|! \cdot 2^{|\mathcal{C}|} \cdot \prod_{c \in \mathcal{C}} (2 M_c + 1)
+
+regions.
+
+Proof. Standard region construction. $\square$
+
+Corollary I.1. The number of regions grows factorially with $|\mathcal{C}|$, explaining the $\mathsf{EXPTIME}$ complexity of TCTL model checking.
+
+I.5 Bounded UPPAAL Verification
+
+For bounded verification with horizon $N$, we add a global clock global_clock and modify the query:
+
+E<> (Victory and global_clock <= N)
+
+The global_clock is never reset. UPPAAL's symbolic exploration prunes traces exceeding $N$.
+
+---
+
+APPENDIX J — PACING GOVERNOR: ALGORITHM AND CORRECTNESS
+
+J.1 Backward Reachability Pre-Image
+
+Algorithm J.1 (Bounded Pre*).
+
+```
+def compute_bounded_pre_star(transitions, F, depth_D):
+    W = set(F)
+    for k in range(depth_D):
+        W_next = set(W)
+        for (s, a, s') in transitions:
+            if s' in W:
+                W_next.add(s)
+        if W_next == W:
+            break
+        W = W_next
+    return W
+```
+
+Complexity. $O(D \cdot |E|)$ time, $O(|S_R|)$ space.
+
+J.2 Correctness of the Pacing Governor
+
+Proposition J.1. For any $q \in Q_{\mathrm{safe}}(s_t)$ with $s_t \in \mathrm{Pre}^*(F, M_q)$, there exists a path in $M_q$ from $s_t$ to some $f \in F$.
+
+Proof. By definition of $\mathrm{Pre}^*$, if $s_t \in \mathrm{Pre}^*(F, M_q)$, then $s_t \in W_k$ for some $k$. By induction on $k$, if $s_t \in W_k$, there exists a path of length at most $k$ to $F$. $\square$
+
+Proposition J.2. If $Q_{\mathrm{safe}}$ is defined with the exact $\mathrm{Pre}^*$, then no dynamic pacing configuration introduces a completion dead end.
+
+Proof. Suppose $q \in Q_{\mathrm{safe}}$ and $s_t \in \mathrm{Pre}^*(F, M_q)$. Then $s_t$ can reach $F$ in $M_q$. Since dynamic pacing preserves the state space and terminal states, the path remains valid. Hence no completion dead end arises. $\square$
+
+J.3 Decidability Caveat
+
+Proposition J.3. For dense-time systems with unbounded clocks, exact $\mathrm{Pre}^*$ computation is undecidable.
+
+Proof. Reachability for timed automata with unbounded clocks is decidable (Alur–Dill), but universal recoverability requires quantification over all reachable states, which corresponds to checking whether the reachability relation is total. For dense-time, this involves infinite branching. The region construction gives decidability for bounded systems but not for the general case. $\square$
+
+Corollary J.1. The pacing governor must use bounded or abstracted $\mathrm{Pre}^*$, accepting the possibility of conservative rejection.
+
+J.4 Bounded Pre* Safety
+
+Proposition J.4. If $s_t \in \mathrm{Pre}^*_D(F, M_q)$, then $q$ is safe for $s_t$ (in $M_q$).
+
+Proof. Immediate from $\mathrm{Pre}^*_D \subseteq \mathrm{Pre}^*$. $\square$
+
+Converse. If $s_t \notin \mathrm{Pre}^*_D(F, M_q)$, then safety is not established by bounded verification. The candidate may still be safe, but the governor rejects it conservatively.
+
+J.5 Optimal Pacing Selection
+
+Algorithm J.2 (Optimal Selection).
+
+```
+def select_optimal_pacing(s_t, candidates, target_outcome, depth_D):
+    safe_candidates = [q for q in candidates if is_safe(s_t, q, depth_D)]
+    if not safe_candidates:
+        return default_qos
+    return min(safe_candidates, key=lambda q: distance(Outcome(q), target_outcome))
+```
+
+Proposition J.5. Algorithm J.2 returns a configuration in $Q_{\mathrm{safe}} \cap Q_{\mathrm{cand}}$, or the default configuration if no safe candidate exists.
+
+Proof. By construction. $\square$
+
+J.6 Audit Logging
+
+Every governor decision logs an L5 record with:
+
+· Timestamp $t$;
+· State $s_t$;
+· Candidate $q$;
+· Verification result (in/out of $Q_{\mathrm{safe}}$);
+· Selection rationale;
+· Downstream Outcome vector.
+
+---
+
+APPENDIX K — EMPIRICAL VALIDATION: COMPLETE HARNESS
+
+K.1 IR Ground Truth Generation
+
+The Game IR is executed symbolically to produce a reference trace $\mathbf{x}_k^{\mathrm{IR}}$ at each frame $k$. The trace is stored as JSON:
+
+```json
+{
+    "frames": [
+        {"k": 0, "pos": [0, 0, 0], "clocks": {"c_door": 0}},
+        ...
+    ]
+}
+```
+
+K.2 Godot Telemetry Collection
+
+The TelemetryCollector.gd script records per-frame:
+
+· Frame index $k$;
+· Physics delta $\Delta t_k$;
+· Position of the target entity;
+· Current acceleration estimate;
+· Active clocks.
+
+K.3 Drift Analysis
+
+The Python validator computes:
+
+\hat{\varepsilon} = \max_{k \in [0, K]} \|\mathbf{x}_k^{\mathrm{engine}} - \mathbf{x}_k^{\mathrm{IR}}\|_2
+
+and evaluates $f_{\mathrm{rss}}(\vec{\varepsilon}; K)$ using measured $\sigma_{\mathrm{jitter}}$, $a_{\max}$, and empirical $\hat{\varepsilon}_{\mathrm{pen}}$, $\hat{\varepsilon}_{\mathrm{fp}}$.
+
+K.4 Validation Decision Rules
+
+Condition Action
+$\hat{\varepsilon} \leq f_{\mathrm{rss}}$ Declare SUPPORTED
+$f_{\mathrm{rss}} < \hat{\varepsilon} \leq f_{\mathrm{det}}$ Declare APPROXIMATED with warning
+$\hat{\varepsilon} > f_{\mathrm{det}}$ Investigate; increase resync frequency or mark UNSUPPORTED
+
+K.5 Pacing Contract Validation
+
+For each pacing configuration $q \in Q_{\mathrm{safe}}$, run $N$ headless sessions. Extract the sequence of structural transitions. Compare with the IR's expected structural transitions via graph isomorphism on the location projection. Log divergences.
+
+K.6 Adapter Obligations Checklist
+
+Before validation, the adapter must declare:
+
+☐ Capability list with SUPPORTED/APPROXIMATED/UNSUPPORTED;
+☐ Error bounds $\varepsilon_\kappa$ per capability;
+☐ Action-matching function $\mathrm{match}$;
+☐ Clock tolerance $\delta_{\mathrm{clk}}$;
+☐ Observation bound $\varepsilon$;
+☐ Resynchronization interval $K_{\mathrm{resync}}$;
+☐ $Q_{\mathrm{safe}}$ with verification depth $D$;
+☐ Precision mode (float32/float64).
+
+All declarations are logged for reproducibility.
+
+---
+
+APPENDIX L — STATISTICAL ANALYSIS DETAILS
+
+L.1 Wilson Score Interval
+
+For a binomial proportion $p$ estimated from $n$ trials with $k$ successes, the Wilson interval at confidence level $1 - \alpha$ is:
+
+\frac{\hat{p} + \frac{z^2}{2n} \pm z \sqrt{\frac{\hat{p}(1 - \hat{p})}{n} + \frac{z^2}{4n^2}}}{1 + \frac{z^2}{n}}
+
+where $\hat{p} = k/n$ and $z = z_{1 - \alpha/2}$.
+
+Proposition L.1. The Wilson interval has coverage probability at least $1 - \alpha$ for all $p \in [0, 1]$ and all $n \geq 1$.
+
+Proof. Standard result in binomial confidence intervals. $\square$
+
+L.2 Paired Difference Estimator
+
+For prompts $p \in P$ and repetitions $r \in \{1, \ldots, R\}$:
+
+\widehat{\Delta}_{c, c'} = \frac{1}{|P| \cdot R} \sum_{p \in P} \sum_{r=1}^{R} \left[ Y_c(p, r) - Y_{c'}(p, r) \right]
+
+Variance. Under clustering at the prompt level:
+
+\mathrm{Var}(\widehat{\Delta}_{c, c'}) = \frac{1}{|P|} \left( \sigma_p^2 + \frac{\sigma_w^2}{R} \right)
+
+where:
+
+· $\sigma_p^2 = \mathrm{Var}_p(\mathbb{E}_r[Y_c(p, \cdot) - Y_{c'}(p, \cdot)])$;
+· $\sigma_w^2 = \mathbb{E}_p[\mathrm{Var}_r(Y_c(p, \cdot) - Y_{c'}(p, \cdot))]$.
+
+L.3 Bootstrap Confidence Interval
+
+For paired differences, use the non-parametric bootstrap:
+
+1. Sample $|P|$ prompts with replacement.
+2. For each resampled set, compute $\widehat{\Delta}^*_{c, c'}$.
+3. Repeat $B = 10{,}000$ times.
+4. The $(1 - \alpha)$ interval is $[\widehat{\Delta}^*_{(\alpha/2)}, \widehat{\Delta}^*_{(1 - \alpha/2)}]$.
+
+L.4 Holm–Bonferroni Correction
+
+For $m$ hypotheses with raw p-values $p_1, \ldots, p_m$:
+
+1. Sort p-values ascending: $p_{(1)} \leq \cdots \leq p_{(m)}$.
+2. For $j = 1, \ldots, m$, reject $H_{(j)}$ if $p_{(j)} \leq \alpha / (m - j + 1)$.
+3. Stop at the first non-rejection.
+
+Proposition L.2. Holm–Bonferroni controls the family-wise error rate at level $\alpha$.
+
+Proof. Standard result in multiple testing. $\square$
+
+L.5 Benjamini–Hochberg Correction
+
+For $m$ hypotheses with sorted p-values $p_{(1)} \leq \cdots \leq p_{(m)}$:
+
+1. Find the largest $j$ such that $p_{(j)} \leq \frac{j}{m} \alpha$.
+2. Reject $H_{(1)}, \ldots, H_{(j)}$.
+
+Proposition L.3. Benjamini–Hochberg controls the false discovery rate at level $\alpha$ under independence or positive dependence.
+
+Proof. Standard result in multiple testing. $\square$
+
+L.6 Power Analysis
+
+For a two-sided test at level $\alpha$ with power $1 - \beta$, effect size $\delta$, and variance $\sigma^2$:
+
+n \geq \frac{2 (z_{1 - \alpha/2} + z_{1 - \beta})^2 \sigma^2}{\delta^2}
+
+For the prompt-level paired design:
+
+|P| \geq \frac{(z_{1 - \alpha/2} + z_{1 - \beta})^2 (\sigma_p^2 + \sigma_w^2 / R)}{(\delta / 2)^2}
+
+L.7 Falsification Criteria Formalization
+
+H1 falsified. $\widehat{\Delta}_{B_4, B_1} \leq 0$ with the one-sided upper confidence bound below zero.
+
+H2 falsified. $\exists q \in Q_{\mathrm{safe}}$ such that the observed runtime structural transition graph is not isomorphic to the IR's structural projection.
+
+H3 falsified. $|\mu_{B_4} - \mu_{\mathrm{target}}| \geq |\mu_{B_5} - \mu_{\mathrm{target}}|$ on the primary duration metric.
+
+H4 falsified. $\hat{\varepsilon} > \varepsilon_{\mathrm{declared}}$ for any capability in any of the tested Game IR instances.
+
+L.8 Preregistration Contents
+
+The preregistration document includes:
+
+· Hypotheses (H1–H4) with formal definitions;
+· Experimental conditions (B1–B5);
+· Primary and secondary metrics with operational definitions;
+· Sample sizes $|P|$ and $R$ with justification;
+· Statistical tests: primary paired analysis, Holm–Bonferroni, Benjamini–Hochberg;
+· Falsification criteria;
+· Amendment policy: any change after data collection begins is logged with timestamp and rationale.
+
+---
+
+APPENDIX M — NOTATION SUMMARY
+
+M.1 Game IR
+
+Symbol Description
+$\mathcal{I}$ Game IR
+$\mathcal{A}$ Timed automata set
+$\mathcal{C}$ Clock set
+$\mathcal{V}_S, \mathcal{V}_Q$ Structural and QoS variables
+$s, s_0$ Global state, initial state
+$S_R$ Reachable state space
+$F$ Terminal states
+$E$ Transition edges
+$\mathcal{O}$ Observation space
+$d_{\mathcal{O}}$ Observation metric
+$\pi$ Observation projection
+$T, T_e$ IR and engine transition functions
+$\mathrm{match}$ Action-matching relation
+
+M.2 Termination
+
+Symbol Description
+$\mathrm{WinReach}$ Existential winning reachability
+$\mathrm{UnivRec}$ Universal recoverability
+$\mathrm{DeadlockFree}$ Deadlock freedom
+$\mathrm{BoundedComplete}$ Bounded completion
+$\mathrm{Reach}_F(s)$ Reachability indicator
+
+M.3 Adapter and Errors
+
+Symbol Description
+$\varepsilon_\kappa$ Capability error bound
+$\varepsilon_{\mathrm{global}}$ Global tolerance
+$f_{\mathrm{det}}, f_{\mathrm{rss}}$ Deterministic and RSS composition
+$L$ Lipschitz growth factor
+$K_{\mathrm{resync}}$ Resynchronization interval
+$\delta_{\mathrm{clk}}, \delta_{\mathrm{jitter}}$ Clock and jitter tolerances
+
+M.4 Pacing
+
+Symbol Description
+$Q$ Pacing configuration space
+$Q_{\mathrm{safe}}$ Safe configurations
+$\mathrm{Pre}^*$ Exact backward reachability
+$\mathrm{Pre}^*_D$ Bounded backward reachability
+$\mathrm{Outcome}(q)$ Pacing outcome vector
+$D$ Verification depth limit
+
+M.5 Experimental
+
+Symbol Description
+$B_1, \ldots, B_5$ Experimental conditions
+$P$ Prompt set
+$R$ Repetitions per prompt
+$Y_c(p, r)$ Binary outcome
+$\Delta_{c, c'}$ Paired difference estimand
+$\widehat{\Delta}_{c, c'}$ Estimator
+
+APPENDIX N — ASCII DIAGRAMS
+
+This appendix provides complete visual schematics for the architectural, formal, and experimental components of the thesis. Each diagram corresponds to a specific section of the main text and appendices.
+
+---
+
+N.1 Overall Thesis Architecture
+
+```
++==============================================================================+
+|                     AGENTIC ORCHESTRATION PIPELINE                           |
++==============================================================================+
+|                                                                              |
+|  +-------------------+                                                       |
+|  |  Natural Language |                                                       |
+|  |      Prompt       |                                                       |
+|  +---------+---------+                                                       |
+|            |                                                                 |
+|            v                                                                 |
+|  +-------------------+       +-------------------+       +-----------------+ |
+|  |   Comprehension   | ----> |     Planning      | ----> |   Generation    | |
+|  |      Module       |       |      Module       |       |     Module      | |
+|  +-------------------+       +-------------------+       +--------+--------+ |
+|                                                                   |         |
+|                                                                   v         |
+|                                                     +-------------------------+
+|                                                     |   GAME IR (L1, L2, L3) |
+|                                                     +------------+------------+
+|                                                                  |          |
+|                                                                  v          |
+|  +-------------------+       +-------------------+       +-----------------+|
+|  |   Verification    | <---- |   Compilation     | <---- |   L4 Adapter    ||
+|  |  & Correction     |       |      Module       |       |  (Godot/Unity/  ||
+|  |      Loop         |       |                   |       |   Unreal)       ||
+|  +---------+---------+       +-------------------+       +-----------------+|
+|            |                                                                 |
+|            |                                                                 |
+|            +----> [Accept]  ----------------------------------------------+ |
+|            |                                                              | |
+|            +----> [Revise]  ---> back to Generation                       | |
+|                                                                           | |
+|                                                                           v |
+|                                                     +-------------------------+
+|                                                     |  L5 Runtime Evidence    |
+|                                                     |  (Traces, Logs, Audits) |
+|                                                     +-------------------------+
+|                                                                              |
++==============================================================================+
+```
+
+---
+
+N.2 Five-Layer Game IR Contract
+
+```
++--------------------------------------------------------------------------+
+|                       GAME IR — FIVE-LAYER CONTRACT                      |
++--------------------------------------------------------------------------+
+|                                                                          |
+|   L1 · TYPED WORLD MODEL                        [Executable]             |
+|   +------------------------------------------------------------------+   |
+|   |  Entities | Geometry | Zones | Assets | Transforms               |   |
+|   +------------------------------------------------------------------+   |
+|                                   |                                      |
+|                                   v                                      |
+|   L2 · EXECUTABLE TRANSITION MODEL              [Executable]             |
+|   +------------------------------------------------------------------+   |
+|   |  Locations | Actions | Guards | Updates | Clocks | Invariants    |   |
+|   +------------------------------------------------------------------+   |
+|                                   |                                      |
+|                                   v                                      |
+|   L3 · REQUIREMENTS AND CONTRACTS               [Requirements]           |
+|   +------------------------------------------------------------------+   |
+|   |  Safety | Reachability | Recoverability | Observations | Timing  |   |
+|   +------------------------------------------------------------------+   |
+|                                   |                                      |
+|                                   v                                      |
+|   L4 · ENGINE ADAPTER                           [Compilation]            |
+|   +------------------------------------------------------------------+   |
+|   |  Capability Mapping | Compilation | Declared Approximation       |   |
+|   +------------------------------------------------------------------+   |
+|                                   |                                      |
+|                                   v                                      |
+|   L5 · RUNTIME EVIDENCE                         [Evidence]               |
+|   +------------------------------------------------------------------+   |
+|   |  Traces | Counterexamples | Conformance Tests | Audit Records    |   |
+|   +------------------------------------------------------------------+   |
+|                                                                          |
++--------------------------------------------------------------------------+
+                    BOUNDARY RULE: L1/L2 carry executable semantics.
+                    Annotations affecting transitions MUST be in L2.
+```
+
+---
+
+N.3 Timed Automaton Network and Synchronous Product
+
+```
+                 AUTOMATON A_1                    AUTOMATON A_2
+        +--------------------------+      +--------------------------+
+        |  (l_1_0)                 |      |  (l_2_0)                 |
+        |   Init                   |      |   Init                   |
+        +--------+-----------------+      +--------+-----------------+
+                 |                                 |
+             g_1 / a_1                         g_2 / a_2
+                 |                                 |
+                 v                                 v
+        +--------------------------+      +--------------------------+
+        |  (l_1_1)                 |      |  (l_2_1)                 |
+        |   Inv: c_1 <= 5          |      |   Urgent                 |
+        +--------------------------+      +--------------------------+
+                 \                               /
+                  \                             /
+                   \___________ PRODUCT _______/
+                               |
+                               v
+              +---------------------------------------+
+              |  GLOBAL STATE  s = (l_1, l_2, ν, v)   |
+              |                                       |
+              |  INVARIANT: ν |= Inv_1(l_1) ∧ Inv_2(l_2)
+              +---------------------------------------+
+
+        SYNCHRONOUS TRANSITION:
+           (l_1, l_2, ν, v) --[A ⊆ Σ]--> (l_1', l_2', ν', v')
+
+        ASYNCHRONOUS TRANSITION:
+           (l_1, l_2, ν, v) --[{a}]--> (l_1', l_2, ν', v')
+```
+
+---
+
+N.4 Urgency, Zeno-Freedom, and Time Divergence
+
+```
+   ZENO-FREE EXECUTION (Admissible)          ZENO EXECUTION (Forbidden)
+   =================================          =========================
+
+   t ->                                        t ->
+   0      +--[a_1]--+                         0      +--[a_1]--+
+          |         |                                |         |
+   0.5    |  delay  |                         0.05   | [a_2]   |
+          |         |                                |         |
+   1.0    +--[a_2]--+                         0.075  | [a_3]   |
+          |         |                                |         |
+   1.5    |  delay  |                         0.0875 | [a_4]   |
+          |         |                                |         |
+   2.0    +--[a_3]--+                         0.0937 | [a_5]   |
+          |         |                                |         |
+   2.5    |  delay  |                         0.0968 | [a_6]   |
+          |         |                                |         |
+   3.0    +-- ...    +                          ...   |  ...    |
+                                                    |
+                                              t -> 0.1  (finite)
+                                              but infinitely many events
+   Total time: ∞                              => FORBIDDEN by Assumption 2.1
+   Finite events per unit time
+
+   STATIC CHECK: Every cycle must contain a clock reset with Inv >= δ_min > 0
+```
+
+---
+
+N.5 Conditional Trace Correspondence (Theorem 4.1)
+
+```
+      GAME IR SYSTEM M                          ENGINE SYSTEM M_e
+   +---------------------+                   +---------------------+
+   |  s_0 (initial)      |                   |  s_0^e (initial)    |
+   +----------+----------+                   +----------+----------+
+              |                                         |
+              |  a_1                                    |  a_1^e
+              v                                         v
+   +---------------------+                   +---------------------+
+   |  s_1                |  <-- match -->    |  s_1^e              |
+   +----------+----------+                   +----------+----------+
+              |                                         |
+              |  a_2                                    |  a_2^e
+              v                                         v
+   +---------------------+                   +---------------------+
+   |  s_2                |  <-- match -->    |  s_2^e              |
+   +----------+----------+                   +----------+----------+
+              |                                         |
+              |  ...                                    |  ...
+              v                                         v
+   +---------------------+                   +---------------------+
+   |  s_K                |  <-- match -->    |  s_K^e              |
+   +---------------------+                   +---------------------+
+
+   OBSERVATION BOUND:   d_O(π(s_j), π_e(s_j^e)) <= ε   for all j ∈ [0, K]
+   CLOCK BOUND:         |ν_j(c) - ν_j^e(c)| <= δ_clk  for all c ∈ C_obs
+   ACTION MATCHING:     match(a_j, a_j^e) = 1         for all j ∈ [1, K]
+
+   MATCHING RELATION R_K:  (s_0, s_0^e) ∈ R_K
+                            (s_j, s_j^e) ∈ R_K for all j
+```
+
+---
+
+N.6 Four Termination Properties — Hierarchy
+
+```
+                         +---------------------------+
+                         |  BOUNDED COMPLETION       |
+                         |  BoundedComplete(G,ρ,N)   |
+                         |  (strongest)              |
+                         +-------------+-------------+
+                                       |
+                                       | implies
+                                       v
+                         +---------------------------+
+                         |  UNIVERSAL RECOVERABILITY |
+                         |  UnivRec(G)               |
+                         |  ∀s: s -->* F             |
+                         +-------------+-------------+
+                                       |
+                                       | implies
+                                       v
+                         +---------------------------+
+                         |  WINNING REACHABILITY     |
+                         |  WinReach(G)              |
+                         |  ∃f ∈ F : s_0 -->* f      |
+                         |  (weakest)                |
+                         +---------------------------+
+
+   INDEPENDENT AXIS:
+                         +---------------------------+
+                         |  DEADLOCK FREEDOM         |
+                         |  DeadlockFree(G)          |
+                         |  ∀s ∉ F : out(s) ≠ ∅      |
+                         +---------------------------+
+
+   RELATIONSHIP:  DeadlockFree  ⇏  WinReach
+                  (may have non-terminal states with outgoing edges
+                   but no path to victory)
+
+   COMPLETION DEAD END:  s ∉ F  ∧  ¬∃f ∈ F : s -->* f
+```
+
+---
+
+N.7 Complexity Hierarchy
+
+```
+                          COMPLEXITY LADDER
+   ==========================================================================
+
+                              EXPTIME
+                              +-----+
+                              |     |   TCTL model checking on timed automata
+                              |     |   ATL/ATL* over GDL
+                              +--+--+
+                                 |
+                                 | contains
+                                 v
+                              PSPACE
+                              +-----+
+                              |     |   Implicit WinReach (Theorem 6.2)
+                              |     |   Bounded UPPAAL verification
+                              |     |   Dense-time reachability (Alur-Dill)
+                              +--+--+
+                                 |
+                                 | contains
+                                 v
+                              NP
+                              +-----+
+                              |     |   Sokoban plan existence (hardness)
+                              |     |
+                              +--+--+
+                                 |
+                                 | contains
+                                 v
+                              P
+                              +-----+
+                              |     |   Explicit Deadlock Detection (Thm 6.1)
+                              |     |   Explicit UnivRec (Prop F.1)
+                              |     |   Type Checking (Thm 3.2)
+                              +-----+
+
+   SCOPING RULE:  PSPACE-hardness is claimed only for encodings
+                  with explicit polynomial-time reductions.
+                  No general PSPACE-completeness claim is made.
+```
+
+---
+
+N.8 Godot 4 L4 Adapter Compilation Pipeline
+
+```
+   +------------------------------------------------------------------+
+   |                     GAME IR SPECIFICATION                         |
+   |  - Automata A_i ∈ A                                              |
+   |  - Clocks C_j ∈ C                                                |
+   |  - Discrete Vars V_S ⊎ V_Q                                       |
+   +-------------------------------+----------------------------------+
+                                   |
+                                   v
+   +------------------------------------------------------------------+
+   |                     L4 GODOT ADAPTER COMPILER                     |
+   |                                                                   |
+   |   [1] AST Ingestion & Capability Gatekeeper                       |
+   |        - κ ∈ {SUPPORTED, APPROXIMATED, UNSUPPORTED}              |
+   |        - Fail fast on UNSUPPORTED                                 |
+   |                                                                   |
+   |   [2] Scene Graph Generator                                       |
+   |        - L1 World Model --> .tscn Tree                            |
+   |                                                                   |
+   |   [3] State Machine Generator                                     |
+   |        - L2 Timed Automata --> GDScript Node Systems              |
+   |                                                                   |
+   |   [4] Clock Integrator                                            |
+   |        - c ∈ C --> Frame Accumulator / _physics_process(delta)    |
+   |                                                                   |
+   |   [5] Error Composition Monitor                                   |
+   |        - f(ε_1, ..., ε_m) <= ε_global                             |
+   |        - If fail: attempt resync, else fail                       |
+   +-------------------------------+----------------------------------+
+                                   |
+                                   v
+   +------------------------------------------------------------------+
+   |                  GODOT 4 RUNTIME EXECUTABLE                       |
+   |  - Core Event Bus (Signal Broadcast for Σ_i)                      |
+   |  - Physics Loop (60 Hz default, configurable)                     |
+   |  - Resynchronization Checkpoints                                  |
+   |  - L5 Runtime Evidence Logger                                     |
+   +------------------------------------------------------------------+
+```
+
+---
+
+N.9 Error Composition and Resynchronization
+
+```
+           ERROR GROWTH WITHOUT RESYNCHRONIZATION (L > 1)
+
+   error
+     ^
+     |
+     |                                            *
+     |                                       *
+     |                                  *
+     |                             *
+     |                        *
+     |                   *
+     |              *
+     |         *
+     |    *
+     | *
+     +------------------------------------------------> K
+     0    10   20   30   40   50   60   70   80   90
+     
+     e_K ~ L^K e_0  (exponential growth, vacuous for large K)
+
+           ERROR GROWTH WITH RESYNCHRONIZATION (K_resync fixed)
+
+   error
+     ^
+     |     /\        /\        /\        /\
+     |    /  \      /  \      /  \      /  \
+     |   /    \    /    \    /    \    /    \
+     |  /      \  /      \  /      \  /      \
+     | /        \/        \/        \/        \
+     +------------------------------------------------> K
+     0   K_r  2K_r  3K_r  4K_r  5K_r  6K_r  7K_r  8K_r
+
+     Bounded error: ε_resync + ε_global
+
+   +-------------------------------------------------------------------+
+   |  RESYNCHRONIZATION CHECKPOINT                                     |
+   |  - Compare engine observation π_e(s^e_k) with IR π(s_k)          |
+   |  - If d_O > ε_global: snap to IR state                           |
+   |  - Log L5 evidence record                                         |
+   +-------------------------------------------------------------------+
+```
+
+---
+
+N.10 UPPAAL Translation Flow
+
+```
+   +------------------+         +-------------------+
+   |  GAME IR (.gir)  | ------> |  AST Translator   |
+   +------------------+         +---------+---------+
+                                          |
+                        +-----------------+-----------------+
+                        |                 |                 |
+                        v                 v                 v
+              +------------------+ +--------------+ +------------------+
+              |  UPPAAL XML      | |  Declarations| |  Channels        |
+              |  (.xml)          | |  clocks, vars| |  sync/broadcast  |
+              +--------+---------+ +--------------+ +------------------+
+                       |
+                       v
+   +------------------+---------+         +------------------+
+   |  UPPAAL MODEL CHECKER      | <------ |  TCTL Queries    |
+   |  - Symbolic exploration    |         |  (.q)            |
+   |  - Bounded depth D         |         |  E<> / A[] / --> |
+   +------------------+---------+         +------------------+
+                      |
+                      v
+   +------------------+-------------------------------------------+
+   |  VERIFICATION RESULT                                          |
+   |  - SATISFIED  |  VIOLATED + counterexample  |  UNKNOWN        |
+   +---------------------------------------------------------------+
+
+   TCTL QUERY MAPPING:
+   WinReach           :  E<> (Victory)
+   UnivRec            :  NotTerminal --> Victory
+   DeadlockFree       :  A[] (not Victory imply not deadlock)
+   BoundedComplete    :  E<> (Victory and global_clock <= N)
+```
+
+---
+
+N.11 Pacing Governor Architecture
+
+```
+   +-------------------------------------------------+
+   |  Current State s_t  &  Runtime Telemetry        |
+   +---------------------+---------------------------+
+                         |
+                         v
+   +---------------------+---------------------------+
+   |  Target Calculator                              |
+   |  e(t) = t_target(s_t) - t_observed              |
+   +---------------------+---------------------------+
+                         |
+                         v
+   +---------------------+---------------------------+
+   |  Candidate QoS Configurations Q_cand            |
+   +---------------------+---------------------------+
+                         |
+                         v
+   +-------------------------------------------------+
+   |  Q_safe Filter (Bounded Backward Reachability)  |
+   |  Is s_t ∈ Pre*_D(F, M_q)?                       |
+   +---------------------+---------------------------+
+                         |
+              +----------+----------+
+              |                     |
+          [REJECT]              [PASS]
+              |                     |
+              v                     v
+   +------------------+   +-------------------------+
+   |  Fallback to     |   |  Select q* ∈ Q_safe     |
+   |  Default q_safe  |   |  minimizing             |
+   |                  |   |  |Outcome(q) - Target|  |
+   +--------+---------+   +------------+------------+
+            |                          |
+            +-------------+------------+
+                          |
+                          v
+   +----------------------+--------------------------+
+   |  Update V_Q  &  Log L5 Evidence Record          |
+   |  - state, prior q, new q, verification result   |
+   +-------------------------------------------------+
+```
+
+---
+
+N.12 Empirical Validation Pipeline
+
+```
+   +--------------------------+
+   |  Game IR (L1, L2, L3)    |
+   +------------+-------------+
+                |
+                | symbolic execution
+                v
+   +--------------------------+
+   |  ir_ground_truth.json    |
+   |  {x_k^IR, clocks_k}      |
+   +------------+-------------+
+                |
+                |                +---------------------------+
+                |                |  Godot 4 Headless Engine  |
+                |                |  --headless --quit-after  |
+                |                +-------------+-------------+
+                |                              |
+                |                              | physics ticks
+                |                              v
+                |                +---------------------------+
+                |                |  telemetry_output.json    |
+                |                |  {x_k^engine, dt_k, a_k}  |
+                |                +-------------+-------------+
+                |                              |
+                +-------------+----------------+
+                              |
+                              v
+   +--------------------------------------------------+
+   |  Drift Validator (Python)                        |
+   |  - Compute ε_hat = max_k ||x_k^engine - x_k^IR|| |
+   |  - Compute f_rss(ε_vec; K)                       |
+   |  - Compute f_det(ε_vec; K)                       |
+   +--------------------------+-----------------------+
+                              |
+             +----------------+----------------+
+             |                |                |
+             v                v                v
+       ε_hat <= f_rss   f_rss < ε_hat    ε_hat > f_det
+             |          <= f_det              |
+             v                v                v
+       SUPPORTED        APPROXIMATED       INVESTIGATE
+                                                |
+                                                v
+                                       - increase resync freq
+                                       - increase tick rate
+                                       - mark UNSUPPORTED
+```
+
+---
+
+N.13 Experimental Protocol (B1–B5)
+
+```
+   PROMPT p ∈ P (20 prompts)
+        |
+        +---> +--------+      +--------+      +--------+      +--------+
+              |  B1    |      |  B2    |      |  B3    |      |  B4    |
+              | Direct |      | IR     |      | IR +   |      | Full   |
+              | Godot  |      | only   |      | Local  |      | System |
+              +---+----+      +---+----+      +---+----+      +---+----+
+                  |               |               |               |
+                  | R=10 reps each (matched seeds where feasible)
+                  |               |               |               |
+                  v               v               v               v
+              +--------+      +--------+      +--------+      +--------+
+              | Y_B1   |      | Y_B2   |      | Y_B3   |      | Y_B4   |
+              +---+----+      +---+----+      +---+----+      +---+----+
+                  |               |               |               |
+                  +---------------+---------------+---------------+
+                                  |
+                                  v
+                        +---------------------+
+                        |  B5 ablation        |
+                        |  IR + Local + Term  |
+                        |  Pacing DISABLED    |
+                        +----------+----------+
+                                   |
+                                   v
+                        +---------------------+
+                        |  Paired Estimand    |
+                        |  Δ = E[Y_B4 - Y_B1] |
+                        |  Δ_pacing = E[Y_B4  |
+                        |           - Y_B5]   |
+                        +---------------------+
+```
+
+---
+
+N.14 Threat Model and Validity Dimensions
+
+```
+                         +---------------------------+
+                         |   EXTERNAL VALIDITY       |
+                         |   - Genre restriction     |
+                         |   - Engine (Godot only)   |
+                         |   - Prompt set finite     |
+                         +-------------+-------------+
+                                       |
+                                       v
+                         +---------------------------+
+                         |   CONSTRUCT VALIDITY      |
+                         |   - Terminability vs.     |
+                         |     playability           |
+                         |   - Fidelity vs. fun      |
+                         +-------------+-------------+
+                                       |
+                                       v
+                         +---------------------------+
+                         |   INTERNAL VALIDITY       |
+                         |   - Confounding (B1 vs B4)|
+                         |   - LLM stochasticity     |
+                         |   - Training contamination|
+                         +-------------+-------------+
+                                       |
+                                       v
+                         +---------------------------+
+                         |   CONCLUSION VALIDITY     |
+                         |   - Multiple testing      |
+                         |   - Power (pilot-driven)  |
+                         |   - Negative results      |
+                         +---------------------------+
+```
+
+---
+
+N.15 Collision Evidence Ledger Structure
+
+```
+   +------------------------------------------------------------------+
+   |  CLAIMED WORK: [Title, Authors, Venue, Identifier]               |
+   +------------------------------------------------------------------+
+   |                                                                  |
+   |  +---------------------+  +---------------------+                |
+   |  |  PUBLICATION STATUS |  |  CLAIMED CAPABILITY |                |
+   |  |  - Published        |  |  - Direct quote     |                |
+   |  |  - Accepted         |  |  - Figure/Table ref |                |
+   |  |  - Preprint         |  |  - Experimental ref |                |
+   |  |  - Unverified       |  +---------------------+                |
+   |  +---------------------+                                         |
+   |                                                                  |
+   |  +---------------------+  +---------------------+                |
+   |  |  LIMITATION         |  |  COLLISION          |                |
+   |  |  - Author statement |  |  - Exact overlap    |                |
+   |  |  - Bounded infer.   |  |  - Component overlap|                |
+   |  +---------------------+  +---------------------+                |
+   |                                                                  |
+   |  +-------------------------------------------------------+       |
+   |  |  RESIDUAL NOVELTY                                     |       |
+   |  |  - What remains after overlap removal?                |       |
+   |  |  - Is it a theorem, method, or empirical claim?       |       |
+   |  +-------------------------------------------------------+       |
+   |                                                                  |
+   +------------------------------------------------------------------+
+```
+
+---
+
+N.16 Full System Data Flow
+
+```
+   +-------------+     +-------------+     +-------------+
+   |   Prompt    | --> |  Planning   | --> | Generation  |
+   +-------------+     +-------------+     +------+------+
+                                                 |
+                                                 v
+   +-------------------------------------------------------+
+   |                    GAME IR                            |
+   |  +---------------+  +---------------+  +-----------+ |
+   |  | L1 World      |  | L2 Transition |  | L3 Req's  | |
+   |  +-------+-------+  +-------+-------+  +-----+-----+ |
+   |          |                  |                |       |
+   |          +---------+--------+----------------+       |
+   |                    |                                  |
+   +--------------------+----------------------------------+
+                        |
+          +-------------+-------------+
+          |                           |
+          v                           v
+   +-------------+             +------------------+
+   |  UPPAAL     |             |  L4 Adapter      |
+   |  (L3 verify)|             |  (Compilation)   |
+   +------+------+             +---------+--------+
+          |                              |
+          | TCTL queries                 | GDScript + .tscn
+          v                              v
+   +-------------+             +------------------+
+   | Verification|             |  Godot Runtime   |
+   |   Result    |             |  (Headless CI)   |
+   +------+------+             +---------+--------+
+          |                              |
+          |                              | telemetry
+          |                              v
+          |                    +------------------+
+          |                    |  L5 Evidence     |
+          |                    |  (Traces, Logs)  |
+          |                    +---------+--------+
+          |                              |
+          +--------------+---------------+
+                         |
+                         v
+              +----------------------+
+              |  Pacing Governor     |
+              |  (Online Modulation) |
+              +----------+-----------+
+                         |
+                         | update V_Q
+                         v
+              +----------------------+
+              |  Godot Runtime       |
+              |  (Continued)         |
+              +----------------------+
+```
+
+---
+
+N.17 Complete Theorem Dependency Graph
+
+```
+                       TYPING SAFETY (Thm 3.1)
+                              |
+                              | underpins
+                              v
+                       TYPE DECIDABILITY (Thm 3.2)
+                              |
+                              | enables
+                              v
+              CONDITIONAL TRACE CORRESPONDENCE (Thm 4.1)
+                              |
+                    +---------+---------+
+                    |                   |
+                    | uses              | uses
+                    v                   v
+        ERROR ACCUMULATION        OBSERVATION METRIC
+        (Lemma D.1)               (Prop 2.1)
+                    |
+                    | bounds
+                    v
+              RESYNC BOUND (Prop D.1)
+                    |
+                    | enables
+                    v
+              COMPILATION GATE (Sec 8.8)
+
+                       COMPLETION DEAD END (Thm 5.1)
+                              |
+                              | distinguishes
+                              v
+                    FOUR TERMINATION PROPERTIES
+                              |
+                    +---------+---------+
+                    |                   |
+                    v                   v
+              EXPLICIT P (Thm 6.1)  IMPLICIT PSPACE (Thm 6.2)
+                                        |
+                                        | scoped by
+                                        v
+                              CONDITIONAL PSPACE-HARD (Prop 6.1)
+                                        |
+                                        | contrasted with
+                                        v
+                              TCTL EXPTIME (Prop F.2)
+
+                       PACING CONTRACT (Def 10.4)
+                              |
+                              | verified by
+                              v
+                    BOUNDED PRE* (Prop J.4)
+                              |
+                              | ensures
+                              v
+                    NO COMPLETION DEAD END (Prop J.2)
+```
+
+---
+
+N.18 Claim Status Matrix
+
+```
+   +-----------------------------+-----------+--------+--------+---------+
+   |  CLAIM                      | ESTAB.    | COND.  | PRELIM.| UNVERIF.|
+   +-----------------------------+-----------+--------+--------+---------+
+   |  Obs. metric is a metric    |     X     |        |        |         |
+   |  Typing safety              |     X     |        |        |         |
+   |  Type check in PTIME        |     X     |        |        |         |
+   |  Zeno-freedom sufficient    |     X     |        |        |         |
+   |  Trace correspondence       |           |    X   |        |         |
+   |  Resync bound               |     X     |        |        |         |
+   |  Completion dead-end char.  |     X     |        |        |         |
+   |  Explicit deadlock P        |     X     |        |        |         |
+   |  Implicit WinReach PSPACE   |     X     |        |        |         |
+   |  PSPACE-hard (conditional)  |           |    X   |        |         |
+   |  TCTL EXPTIME               |     X     |        |        |         |
+   |  Adapter error bounds       |           |        |        |    X    |
+   |  Pacing contract            |           |    X   |        |         |
+   |  Pre*_D safety              |     X     |        |        |         |
+   |  Empirical superiority H1   |           |        |    X   |         |
+   +-----------------------------+-----------+--------+--------+---------+
+```
+
+---
+
+N.19 Notation Legend for Diagrams
+
+```
+   +------------------+------------------------------------------+
+   |   SYMBOL         |   MEANING                                |
+   +------------------+------------------------------------------+
+   |   [ ]  / +--+    |   Process, module, or transformation     |
+   |   --->           |   Data flow or control flow              |
+   |   ---|           |   Blocking or gating relation            |
+   |   v              |   Directionality                         |
+   |   *              |   State, node, or key point              |
+   |   /\             |   Peak or bounded excursion              |
+   |   X              |   Established / validated                |
+   |   ...            |   Continuation                           |
+   |   Δ              |   Difference or delta                     |
+   |   ε              |   Error bound                            |
+   |   π              |   Observation projection                 |
+   |   Σ              |   Action alphabet                        |
+   |   Φ_S, Φ_Q       |   Structural, QoS guard sets             |
+   |   Pre*           |   Backward reachability pre-image        |
+   |   Q_safe         |   Safe pacing configurations             |
+   +------------------+------------------------------------------+
+```
+
