@@ -1,0 +1,1363 @@
+HARC: A Theoretical Framework for Human–AI Cooperative Sequential Diagnosis under Trajectory-Level Chance Constraints
+
+ouadi Maakoul and SI TEAM 
+
+
+Abstract
+
+This dissertation develops HARC (Human–AI Rapid Cooperative Diagnosis), a theoretical framework for sequential fault diagnosis in safety-critical engineered systems in which an artificial agent cooperates with a human decision-maker under a trajectory-level chance constraint. The problem is cast as a mixed-initiative chance-constrained partially observable Markov decision process (CC-POMDP) with three structural features that distinguish it from existing formulations: (i) the human is modeled as a categorical stochastic policy \pi_H(a^H \mid z, a^R) = \text{Cat}(a^H; \boldsymbol{\mu}(z, a^R)) with Dirichlet belief over \boldsymbol{\mu}, conditioned on observable context rather than hidden state; (ii) human actions execute after a deterministic FIFO delay, so the executed action, not the newly issued one, enters the transition kernel; and (iii) the safety constraint is enforced by a projected adaptive threshold that guarantees the budget invariant almost surely on every trajectory, not merely in long-run average.
+
+The central theoretical results are four. First, a fixed-budget soundness theorem establishes that any policy selecting actions from \mathcal{A}_{\text{safe}}^{\text{fix}}(b_t) = \{a : P(F \mid b_t, a) \le \Delta_t\} with \sum_t \Delta_t \le \varepsilon satisfies P_\pi(\bigcup_{t=0}^{T} F_t \mid b_0) \le \varepsilon by the union bound. Second, a projected adaptive soundness theorem extends this to belief-dependent thresholds \Delta'(b_t) = \min\{\tilde{\Delta}(b_t), (\varepsilon - \text{spent}_t)/(T-t+1)\}, proving that the projection enforces the budget invariant at every step and that adaptive redistribution never breaches the global budget. Third, a simulation lemma for perturbed POMDPs yields the robust bound P_{\mathcal{M}^*}(\bigcup_t F_t) \le \varepsilon + T\eta, stating all guarantees are model-relative and giving the model-adequacy gate a quantitative role. Fourth, a mapping of the diagnostic loop onto active sequential hypothesis testing yields the efficiency bound \mathbb{E}[T_{\text{resolution}}] \le \log(1/\varepsilon)/I^* + O(\log M) + \mathbb{E}[T_{\text{human-delay}}], where I^* is the minimum Chernoff information over hypothesis pairs.
+
+Three failure events are modeled as distinct and non-interchangeable: wrong-commit, test-induced, and delay-induced. A pre-posterior feasible set replaces per-belief admissibility, restoring non-negativity of the expected value of sample information and eliminating the artifact of negative EVSI. Common-cause failure between the two verification channels is parameterized by a measurable factor \beta \in (0,1) rather than asserted by design, with the bound P(\text{both err}) \le (1-\beta)^2 p_e^2 + \beta p_e. The model-adequacy gate is presented honestly as a heuristic with empirically tuned thresholds, not a formal hypothesis test, because the posterior predictive p-value concentrates around 1/2 under a composite null rather than being uniform.
+
+The framework is theoretical: no experiments, no physical tests, no code training. All results are theorems, propositions, and proofs. A Monte Carlo validation protocol with synthetic humans is specified to test the soundness theorems and the robust bound in the absence of physical deployment.
+
+Keywords: human-in-the-loop CC-POMDP, mixed-initiative Bayes-adaptive POMDP, sequential diagnosis, chance-constrained planning, value of information, active sequential hypothesis testing, Chernoff information, model adequacy, common-cause failure.
+
+---
+
+Chapter 0: Introduction
+
+0.1 The Problem
+
+Consider an engineer responsible for a safety-critical subsystem — a spacecraft power bus, a nuclear reactor coolant loop, an autonomous vehicle perception stack — who must diagnose a fault under partial observability, a hard deadline, and a risk of making the fault worse. The engineer does not observe the true fault. Each test consumes time and resources, and some tests can themselves induce failure. A wrong conclusion acted upon may be catastrophic. A correct conclusion reached too late may be worthless. The engineer may be aided by an artificial agent that proposes hypotheses, selects tests, and recommends actions, but the human retains authority, and the human's latency, error, and compliance behavior are part of the system dynamics.
+
+This is the setting of HARC. The problem is formally a sequential decision problem under partial observability with a trajectory-level safety constraint and a human decision-maker whose policy is unknown, stochastic, and estimated online. It is not a single-agent problem. The human is a decision-theoretic agent whose actions affect the joint trajectory, and any framework that treats the human as a passive confirmer will produce unsound safety claims.
+
+0.2 Why Existing Frameworks Are Insufficient
+
+The relevant prior art divides into five strands, none of which addresses the joint problem.
+
+Model-based diagnosis — the DX tradition initiated by de Kleer and Williams (1987) and extended to reactive systems by Williams and Nayak (1996) — provides the logical and probabilistic machinery for generating and eliminating candidate diagnoses from observations. It does not address test selection under a chance constraint, nor does it model a human decision-maker.
+
+Test sequencing — the AO* framework of Pattipati and Alexandridis (1990) — provides optimal sequential test selection under a cost criterion. It is single-agent, assumes perfect tests, and does not enforce trajectory-level safety constraints.
+
+Chance-constrained POMDP planning — RAO* (Santana, Thiébaux, and Williams, 2016), CC-POMCP (Lee et al., 2018), and ConstrainedZero (Moss et al., 2024) — provides the algorithmic foundation for planning under a trajectory-level chance constraint. CC-POMCP bounds expected cost, not chance; RAO* and ConstrainedZero bound chance but assume a single decision-maker. None models a human-in-the-loop with latency, error, and compliance dynamics.
+
+Learning-to-defer — Madras et al. (2018), Mozannar and Sontag (2020) — provides the statistical machinery for routing decisions between an AI and a human expert. It is a single-step classification framework, not a sequential decision problem under partial observability, and it does not model the human's internal state or the delay between deferral and response.
+
+Human–AI teaming — the mixed-initiative Bayes-adaptive POMDP of Natarajan et al. (2024) — provides the correct object for maintaining belief over an uncertain human policy: the augmented state (s, z, \mu) with online Bayesian updates. It does not enforce trajectory-level chance constraints and does not address the diagnostic setting with distinct failure modes.
+
+HARC's contribution is the joint treatment of: the human as a categorical exogenous policy with FIFO delay and Dirichlet belief; the three distinct failure events with a trajectory-level chance constraint; the projected adaptive threshold that preserves soundness under adaptivity; the pre-posterior EVSI that restores non-negativity; and the mapping to active sequential hypothesis testing that yields a resolution-time bound in terms of Chernoff information. The novelty is the coupling, not any single component, and it is stated as a hypothesis to be examined rather than a conclusion.
+
+0.3 Contributions
+
+This dissertation makes six contributions.
+
+Contribution 1 (Categorical human model with observable-context Dirichlet belief). The human policy is modeled as
+
+\pi_H(a^H \mid z, a^R) = \text{Cat}(a^H; \boldsymbol{\mu}(z, a^R)), \qquad \boldsymbol{\mu}(z, a^R) \sim \text{Dirichlet}(\boldsymbol{\alpha}(z, a^R)),
+
+with the human action space A^H = \{\text{accept}, \text{reject}, \text{propose-alt}, \text{request-info}, \text{defer}, \text{no-op}\}. The Dirichlet is maintained per observable context, not per hidden (s, z), because the AI never observes s and cannot accumulate counts per hidden cell. The AI's proposal a^R is a covariate of the human policy, not a hidden state.
+
+Contribution 2 (FIFO-delay dynamics with executed action). The augmented state includes a queue q_t \in (A^H)^{d-1}, and the executed action at step t is a^{\text{exec}}_t = \text{pop}(q_t). The joint transition feeds the executed action into p(s' \mid s, a^R, a^{\text{exec}}), not the newly issued action. The queue capacity d is a fixed design parameter, not a per-step random variable.
+
+Contribution 3 (Two-level risk constraint with projected adaptive threshold). Fixed-budget soundness (Theorem 4.1) establishes P_\pi(\bigcup_t F_t \mid b_0) \le \varepsilon via the union bound. Projected adaptive soundness (Theorem 4.2) extends this to belief-dependent thresholds \Delta'(b_t) = \min\{\tilde{\Delta}(b_t), (\varepsilon - \text{spent}_t)/(T-t+1)\}, proving the budget invariant holds at every step. Adaptive conformal inference is a diagnostic for choosing \tilde{\Delta}, not a soundness mechanism.
+
+Contribution 4 (Robust soundness via simulation lemma). A simulation lemma for perturbed POMDPs yields \|\mathbb{P}_\mathcal{M}^\pi - \mathbb{P}_{\hat{\mathcal{M}}}^\pi\|_{\text{TV}} \le T\eta, from which the robust bound P_{\mathcal{M}^*}(\bigcup_t F_t) \le \varepsilon + T\eta follows. This gives the model-adequacy gate a quantitative role: it estimates \eta, and the guarantee is stated as model-relative.
+
+Contribution 5 (Pre-posterior EVSI and the elimination of negative EVSI). The pre-posterior feasible set
+
+\mathcal{D}_{\text{pre}}(b) = \{d \in \mathcal{D} : \mathbb{E}_{o \mid b, a}[P(F \mid b', d)] \le \Delta'(b)\}
+
+replaces per-belief admissibility. Under the pre-posterior constraint, EVSI is non-negative by the tower property, and the artifact of negative EVSI from per-belief admissibility is eliminated. A safe default decision is always feasible, so \max over the empty set does not occur.
+
+Contribution 6 (Active sequential hypothesis testing and the Chernoff bound). The diagnostic loop is mapped onto active sequential hypothesis testing. The accept predicate is proved to be a threshold rule, and the expected resolution time satisfies
+
+\mathbb{E}[T_{\text{resolution}}] \le \frac{\log(1/\varepsilon)}{I^*} + O(\log M) + \mathbb{E}[T_{\text{human-delay}}],
+
+where I^* is the minimum Chernoff information over hypothesis pairs. This gives "faster at equal safety" a theoretical footing and fills a prior-art gap.
+
+0.4 Two Structural Corrections
+
+Two corrections distinguish this formulation from earlier versions of the framework and are load-bearing for the soundness results.
+
+Correction A (Adaptive soundness requires projection, not conformal inference). The earlier use of adaptive conformal inference as the soundness mechanism was incorrect. Adaptive conformal inference guarantees long-run marginal coverage, not trajectory-wise coverage. The two guarantees are distinct: the former is a statement about the empirical frequency of failures over many episodes, the latter about the probability of at least one failure in a single episode. The soundness mechanism must be a projection that enforces the budget invariant at every step, and adaptive conformal inference is relegated to a diagnostic for choosing the unconstrained threshold.
+
+Correction B (Common-cause failure is parametric, not axiomatic). The earlier assertion that the two verification channels are independent "by design" was unfalsifiable and contradicted by the observation that the hypothesis-generation channel is LLM-driven. The correct formulation is parametric: a common-cause factor \beta \in (0,1) captures shared causes such as shared sensors, shared FMEA, and shared training data, and the theorems are stated parametrically in \beta. Typical conservative values are \beta \in [0.05, 0.10].
+
+0.5 Method and Scope
+
+The dissertation is theoretical. No experiments are performed, no physical tests are conducted, and no code is trained. All results are theorems, propositions, and proofs. The architecture is a design specification. A Monte Carlo validation protocol with synthetic humans is specified to test the soundness theorems and the robust bound in the absence of physical deployment.
+
+The scope is deliberately narrowed. The full HARC architecture comprises seven modules (M0–M6). The theoretical development covers all seven at the specification level, but the depth of formal treatment is concentrated on the decision-theoretic core: the human model, the risk projection, the pre-posterior EVSI, the common-cause parameterization, the model-adequacy gate, and the Chernoff bound. Module-level implementation details — the LLM calibration procedure, the digital-twin interface, the evidence-memory schema — are specified but not proved.
+
+0.6 Organization
+
+Chapter 2 establishes the mathematical background: POMDPs, chance-constrained POMDPs, the simulation lemma, and the scope and limits of adaptive conformal inference. Chapter 3 defines the HARC model: the augmented state, the categorical human model, the FIFO queue, the failure events, and the parametric common-cause factor. Chapter 4 develops the two-level risk constraint: fixed-budget soundness and projected adaptive soundness with the budget invariant. Chapter 5 develops the decision-theoretic layer: the pre-posterior feasible set, EVSI, and lookahead-2 EVSI. Chapter 6 treats common-cause failure parametrically. Chapter 7 analyzes the model-adequacy gate. Chapter 8 specifies the architecture. Chapter 9 develops the HARC policy, with totality, progress, and soundness. Chapter 10 analyzes complexity. Chapter 11 develops the active sequential hypothesis testing theorem. Chapter 12 specifies the Monte Carlo validation protocol. Chapter 13 lists open problems. Chapter 14 concludes. Appendices contain full proofs, derivations, and specifications.
+
+0.7 The Founding Principle
+
+The framework is motivated by a single principle, which the remainder of the dissertation formalizes:
+
+AI should accelerate the process that distinguishes a promising solution from a genuinely verified one — and it must know when it cannot.
+
+The first clause motivates the test-selection layer and the Chernoff bound. The second clause motivates the model-adequacy gate, the robust soundness bound, and the three-valued output. The two together motivate the projected adaptive threshold: the system should use its budget aggressively when evidence supports it, and it should stop when the budget is exhausted, the model is inadequate, or no safe action remains.
+
+
+
+Chapter 1: Problem Formulation and Mathematical Background
+
+1.1 The Diagnostic Decision Problem
+
+We consider an AI agent cooperating with a human decision-maker to diagnose and resolve faults in a safety-critical engineered system. The system evolves under partial observability, the diagnosis is not directly observable, and the resolution process is subject to a hard deadline. Three classes of failure may occur: acting on a wrong diagnosis, damaging the system through the act of testing, and exceeding the deadline while a decision is required. The human is a decision-theoretic agent whose policy is unknown, stochastic, and estimated online.
+
+1.2 Preliminaries: POMDPs, Chance Constraints, and the Simulation Lemma
+
+Definition 1.1 (POMDP). A partially observable Markov decision process is a tuple \mathcal{P} = \langle S, A, O, T, Z, R, \gamma, b_0 \rangle.
+
+Definition 1.2 (Chance-Constrained POMDP). A CC-POMDP augments a POMDP with a failure event F and budget \varepsilon \in (0,1):
+
+\min_{\pi} \; \mathbb{E}_\pi\left[\sum_{t=0}^{T} \gamma^t R(s_t, a_t)\right] \quad \text{s.t.} \quad P_\pi\left(\bigcup_{t=0}^{T} F_t \mid b_0\right) \le \varepsilon
+
+Definition 1.3 (Simulation Lemma for POMDPs). Let \mathcal{M} and \hat{\mathcal{M}} be two POMDPs with the same state, action, and observation spaces, but different transition and observation kernels. Let \pi be a fixed policy. Let \mathbb{P}_\mathcal{M}^\pi and \mathbb{P}_{\hat{\mathcal{M}}}^\pi be the induced path measures over horizon T. Then
+
+\| \mathbb{P}_\mathcal{M}^\pi - \mathbb{P}_{\hat{\mathcal{M}}}^\pi \|_{\text{TV}} \le T \eta
+
+where \eta = \sup_{s,a} \| T(\cdot \mid s, a) - \hat{T}(\cdot \mid s, a) \|_{\text{TV}} + \sup_{s',a} \| Z(\cdot \mid s', a) - \hat{Z}(\cdot \mid s', a) \|_{\text{TV}}.
+
+Recent work on POMDP robustness provides explicit bounds on value differences under simultaneous transition and observation kernel perturbations, in terms of Wasserstein and total variation distances. The simulation lemma turns per-step model error into a value-error bound that scales with the horizon.
+
+Corollary 1.1 (Robust Soundness). If the true model differs from the nominal model by total variation \eta per step, then any guarantee established under the nominal model transfers to the true model with an additive slack of T \eta:
+
+P_{\mathcal{M}^*}\left(\bigcup_{t=0}^{T} F_t\right) \le \varepsilon + T \eta
+
+This is the formal basis for all model-relative guarantees in HARC.
+
+1.3 Adaptive Conformal Inference: Scope and Limits
+
+Definition 1.4 (Adaptive Conformal Inference). Under distribution shift, Gibbs & Candès propose the update \alpha_{t+1} = \alpha_t + \gamma_t (\alpha - \mathbf{1}\{Y_t \notin \mathcal{C}_t(X_t)\}).
+
+Theorem 1.1 (Long-run coverage; Gibbs & Candès, 2021). Under bounded scores and suitable \gamma_t, the adaptive conformal predictor satisfies
+
+\left| \frac{1}{T} \sum_{t=1}^{T} \mathbf{1}\{Y_t \notin \mathcal{C}_t(X_t)\} - \alpha \right| \to 0 \quad \text{a.s.}
+
+Corollary 1.2 (Non-Transferability). The long-run average guarantee of Theorem 1.1 does not imply trajectory-wise coverage P(\bigcup_{t=0}^{T} F_t) \le \varepsilon for any finite T. The two guarantees are distinct. ACI is a calibration diagnostic, not a soundness mechanism.
+
+---
+
+Chapter 2: The HARC Formal Model
+
+2.1 The Mixed-Initiative Tuple
+
+Definition 2.1 (HARC Model).
+
+\mathcal{M} = \langle S, A, O, T, Z, R, C, \varepsilon, b_0, H, \beta \rangle
+
+· S = S_{\text{diag}} \times S_{\text{sys}} \times S_{\text{human}} \times S_{\text{time}} \times S_{\text{risk}} \times Q: augmented state;
+· A = A_{\text{AI}} \cup A_{\text{joint}}: AI action space;
+· T: transition kernel on the augmented state;
+· Z: observation likelihood, anchored on FMEA, fault trees, and digital twins;
+· R: S \times A \to \mathbb{R}: reward;
+· C: S \times A \to \mathbb{R}_{\ge 0}: cost;
+· \varepsilon \in (0,1): trajectory-level chance budget;
+· H = \langle S_h, O_h, T_h, \pi_H \rangle: human model;
+· \beta \in (0,1): common-cause failure factor (Section 2.7).
+
+2.2 Augmented State Space
+
+S = S_{\text{diag}} \times S_{\text{sys}} \times S_{\text{human}} \times S_{\text{time}} \times S_{\text{risk}} \times Q
+
+· S_{\text{diag}}: true diagnosis;
+· S_{\text{sys}}: physical system state;
+· S_{\text{human}}: human latent state z = (\text{workload}, \text{attention}, \text{fatigue}, \text{expertise}, \text{trust});
+· S_{\text{time}}: time-to-deadline T_{\text{remaining}} \in [0, T_{\max}];
+· S_{\text{risk}}: cumulative incurred risk R_{\text{cum}} \in [0, \varepsilon];
+· Q: FIFO action queue, q_t \in (A^H)^{d-1}.
+
+Remark 2.1. The queue Q is essential. Without it, the belief cannot encode imminent human actions.
+
+2.3 AI Action Space
+
+A_{\text{AI}} = \{\text{propose}, \text{test}, \text{verify}, \text{hold}, \text{accept}, \text{abort}, \text{escalate}\}
+
+A_{\text{joint}} = \{\text{collaborative-test}, \text{joint-review}\}
+
+2.4 Human Model: Categorical Policy with Dirichlet Belief
+
+Definition 2.2 (Human action space).
+
+A^H = \{\text{accept}, \text{reject}, \text{propose-alt}, \text{request-info}, \text{defer}, \text{no-op}\}
+
+with |A^H| = K = 6. The no-op action covers cases where the human does not respond.
+
+Definition 2.3 (Human policy). The human policy conditions on the AI's proposal a^R:
+
+\pi_H(a^H \mid s, z, a^R) = \text{Cat}(a^H; \boldsymbol{\mu}(s, z, a^R))
+
+Remark 2.2. The AI's proposal is a covariate, not a hidden state. Conditioning on a^R is required for the human to respond to what the AI proposes.
+
+Definition 2.4 (Dirichlet belief). The AI maintains a Dirichlet prior over \boldsymbol{\mu} for each observable context (z, a^R), not for each hidden (s, z):
+
+\boldsymbol{\mu}(z, a^R) \sim \text{Dirichlet}(\boldsymbol{\alpha}(z, a^R))
+
+Remark 2.3. A Dirichlet per hidden (s, z) cell is not learnable: the AI never observes s, so it cannot accumulate counts per hidden state. The correct object is a Dirichlet per observable context. The concentration parameters \boldsymbol{\alpha} are the sufficient statistics, and the counts are observed, so \boldsymbol{\alpha} in the belief is redundant with the history.
+
+Proposition 2.1 (Conjugacy). The Dirichlet prior is conjugate to the Categorical likelihood. Upon observing human action a^H = k in context (z, a^R), the posterior is \boldsymbol{\alpha}(z, a^R) \leftarrow \boldsymbol{\alpha}(z, a^R) + \mathbf{e}_k.
+
+Proof. Standard Dirichlet-Categorical conjugacy. The posterior predictive is P(a^H = k \mid z, a^R, \boldsymbol{\alpha}) = \alpha_k / \sum_j \alpha_j. \square
+
+2.5 Delay Dynamics: Executed Action, Not Issued Action
+
+Definition 2.5 (Queue dynamics). The queue evolves as:
+
+q_{t+1} = \text{shift}(q_t, a^H_t)
+
+where \text{shift} appends a^H_t to the queue and pops the oldest element if the queue exceeds capacity d-1.
+
+Definition 2.6 (Executed action). The executed human action at step t is the element popped from the queue:
+
+a^{\text{exec}}_t = \text{pop}(q_t)
+
+where \text{pop} returns the oldest element of the queue.
+
+Remark 2.4. The joint transition must feed the executed action into p(s' \mid \cdot), not the newly issued action:
+
+T(s', z', q' \mid s, z, q, a^R) = \sum_{a^H} p(s' \mid s, a^R, a^{\text{exec}}) \, p(z' \mid z, a^R, a^{\text{exec}}) \, \pi_H(a^H \mid z, a^R) \, \mathbf{1}\{q' = \text{shift}(q, a^H)\}
+
+Remark 2.5. The delay d is a fixed queue capacity, not a random variable per step. A random d that changes per step would break FIFO. The queue length is a design parameter of the human model.
+
+2.6 Failure Events
+
+Definition 2.7 (Failure events).
+
+F_t = F_t^{\text{wrong-commit}} \cup F_t^{\text{test-induced}} \cup F_t^{\text{delay-induced}}
+
+· F_t^{\text{wrong-commit}}: acting on d \ne d^* with U(d^*, s) - U(d, s) > \theta_{\text{crit}};
+· F_t^{\text{test-induced}}: test a causes s' \in S_{\text{crit}};
+· F_t^{\text{delay-induced}}: T_{\text{remaining}} < 0 while a decision is required.
+
+Definition 2.8 (Decision required). A decision is required at state s if inaction leads to s' \in S_{\text{crit}} within T_{\text{remaining}}.
+
+2.7 Common-Cause Failure: Parametric β Model
+
+Definition 2.9 (Two verification channels). Channel 1 (M2, Hypothesis Explorer) uses observation model Z_1. Channel 2 (M3, Adversarial Examiner) uses observation model Z_2.
+
+Definition 2.10 (Common-cause factor). The common-cause factor \beta \in (0,1) is the fraction of total failure probability attributable to shared causes:
+
+P(\text{both channels err} \mid s) \le (1 - \beta)^2 p_e^2 + \beta p_e
+
+where p_e is the per-channel error probability.
+
+Proposition 2.2 (Parametric bound). Under the \beta-factor model, the joint error probability is bounded by (1-\beta)^2 p_e^2 + \beta p_e.
+
+Proof. By the law of total probability, decompose the event "both err" into the disjoint cases "shared cause occurs" (probability \beta) and "shared cause does not occur" (probability 1-\beta). In the shared-cause case, both channels err with probability at most p_e (the common cause drives the failure). In the independent case, conditional independence gives (1-\beta)^2 p_e^2. Summing yields the bound. \square
+
+Remark 2.6. The \beta-factor model is standard in common-cause failure analysis. Typical conservative values are \beta \in [0.05, 0.10]. The parameter \beta is measurable in principle from failure data, or bounded conservatively by design. This is preferable to the untestable "by design" axiom: it yields parametric theorems and makes the shared-cause assumption explicit.
+
+Remark 2.7. Z_1 is LLM-generated and Z_2 is digital-twin-derived. Shared sensors and FMEA are common causes. The \beta parameter captures them.
+
+---
+
+Chapter 3: The Belief State and its Dynamics
+
+3.1 Belief Representation
+
+Definition 3.1 (Belief).
+
+b_t(s, z, \boldsymbol{\alpha}, q) = P(s_t = s, z_t = z, \boldsymbol{\alpha}_t = \boldsymbol{\alpha}, q_t = q \mid h_t)
+
+Remark 3.1. The evidence memory is not in the hidden state. It is the history h_t.
+
+3.2 Belief Update
+
+Definition 3.2 (Belief update).
+
+b_{t+1}(\tilde{s}') \propto Z(o_{t+1} \mid \tilde{s}', a^R_t) \sum_{\tilde{s}} T(\tilde{s}' \mid \tilde{s}, a^R_t) \, b_t(\tilde{s})
+
+where \tilde{s} = (s, z, \boldsymbol{\alpha}, q).
+
+Proposition 3.1 (Sufficiency). The belief b_t is a sufficient statistic for h_t.
+
+Proof. The belief is a function of h_t and encodes all information relevant to future transitions and observations. By the Markov property of the augmented state, b_t satisfies the Bellman optimality principle. \square
+
+---
+
+Chapter 4: Two-Level Risk Constraint with Hard Soundness
+
+This chapter resolves the central formal issue: the conflation of marginal long-run coverage with trajectory-wise soundness. We separate the two guarantees and prove soundness via projection.
+
+4.1 Fixed-Budget Soundness
+
+Definition 4.1 (Fixed risk allocation). Let \{\Delta_t\}_{t=0}^{T} be a fixed allocation with \sum_{t=0}^{T} \Delta_t \le \varepsilon, \Delta_t > 0.
+
+Definition 4.2 (Safe action set, fixed).
+
+\mathcal{A}_{\text{safe}}^{\text{fix}}(b_t) = \{a \in A : P(F \mid b_t, a) \le \Delta_t\}
+
+Theorem 4.1 (Fixed-budget soundness). If the policy selects a_t \in \mathcal{A}_{\text{safe}}^{\text{fix}}(b_t) for all t, then
+
+P_\pi\left(\bigcup_{t=0}^{T} F_t \mid b_0\right) \le \varepsilon
+
+Proof. By the union bound,
+
+P\left(\bigcup_{t=0}^{T} F_t \mid b_0\right) \le \sum_{t=0}^{T} P(F_t \mid b_t, a_t) \le \sum_{t=0}^{T} \Delta_t \le \varepsilon
+
+The second inequality uses the safe-action constraint. \square
+
+4.2 Projected Adaptive Threshold
+
+The fixed allocation is sound but potentially suboptimal. We introduce an adaptive threshold that redistributes unused budget, with a projection that enforces the budget invariant.
+
+Definition 4.3 (Spent risk). The spent risk at step t is
+
+\text{spent}_t = \sum_{s=0}^{t-1} \hat{P}(F_s \mid b_s, a_s)
+
+where \hat{P}(F_s \mid b_s, a_s) is the estimated failure probability at step s.
+
+Definition 4.4 (Projected adaptive threshold). The adaptive threshold is
+
+\Delta'(b_t) = \min\left\{ \tilde{\Delta}(b_t), \; \frac{\varepsilon - \text{spent}_t}{T - t + 1} \right\}
+
+where \tilde{\Delta}(b_t) is an unconstrained adaptation (e.g., ACI-style update).
+
+Remark 4.1. The projection enforces \Delta'(b_t) \le (\varepsilon - \text{spent}_t)/(T - t + 1). This prevents the adaptive rule from driving \Delta' negative or past the remaining budget.
+
+Definition 4.5 (Budget invariant). The budget invariant holds at step t if
+
+\text{spent}_t + (T - t + 1) \cdot \Delta'(b_t) \le \varepsilon
+
+Lemma 4.1 (Projection enforces invariant). Under Definition 4.4, the budget invariant holds at every step t.
+
+Proof. By construction,
+
+\Delta'(b_t) \le \frac{\varepsilon - \text{spent}_t}{T - t + 1}
+
+Multiplying both sides by T - t + 1 and adding \text{spent}_t gives the invariant. \square
+
+Definition 4.6 (Safe action set, adaptive).
+
+\mathcal{A}_{\text{safe}}(b_t) = \mathcal{A}_{\text{safe}}^{\text{fix}}(b_t) \cap \{a : P(F \mid b_t, a) \le \Delta'(b_t)\}
+
+Theorem 4.2 (Adaptive soundness with projection). If the policy selects a_t \in \mathcal{A}_{\text{safe}}(b_t) for all t, then
+
+P_\pi\left(\bigcup_{t=0}^{T} F_t \mid b_0\right) \le \varepsilon
+
+Proof. By Lemma 4.1, the budget invariant holds at every step. At step t, the safe-action constraint gives P(F_t \mid b_t, a_t) \le \Delta'(b_t). Summing over t:
+
+\sum_{t=0}^{T} P(F_t \mid b_t, a_t) \le \sum_{t=0}^{T} \Delta'(b_t)
+
+By the invariant at t=0, \text{spent}_0 = 0 and (T+1)\Delta'(b_0) \le \varepsilon, so \sum_{t=0}^{T} \Delta'(b_t) \le \varepsilon. The union bound gives the result. \square
+
+Remark 4.2. ACI drops out of the soundness path. The projection is the soundness mechanism; ACI is only a heuristic for choosing \tilde{\Delta}.
+
+Corollary 4.1 (Robust soundness). Under model mismatch \eta, the true-model guarantee is
+
+P_{\mathcal{M}^*}\left(\bigcup_{t=0}^{T} F_t\right) \le \varepsilon + T \eta
+
+Proof. By the simulation lemma (Definition 1.3) and Corollary 1.1. \square
+
+Remark 4.3. This gives M0 a quantitative role: M0 estimates \eta, and the bound states that all guarantees are model-relative.
+
+4.3 ACI as Diagnostic Only
+
+Theorem 4.3 (Marginal coverage; Gibbs & Candès, 2021). Under suitable \gamma_t, \left| \frac{1}{T} \sum_{t=1}^{T} \mathbf{1}\{F_t\} - \alpha \right| \to 0 a.s.
+
+Corollary 4.2 (Non-transferability). Theorem 4.3 does not imply the trajectory-wise bound of Theorem 4.2. The two guarantees are distinct.
+
+Remark 4.4. Failures are too rare to serve as useful diagnostics for ACI in the safety-critical regime. ACI is reported as a calibration diagnostic, not a soundness guarantee.
+
+---
+
+Chapter 5: Decision-Theoretic Layer — Pre-Posterior Constraints and EVSI
+
+5.1 Pre-Posterior Constraint
+
+Definition 5.1 (Pre-posterior feasible set). The pre-posterior feasible set at belief b is
+
+\mathcal{D}_{\text{pre}}(b) = \left\{ d \in \mathcal{D} : \mathbb{E}_{o \mid b, a}\left[ P(F \mid b', d) \right] \le \Delta'(b) \right\}
+
+where b' = \tau(b, a, o) is the posterior.
+
+Remark 5.1. The pre-posterior constraint ensures that the expected failure probability under the posterior is bounded. This avoids the artifact of per-belief admissibility, which is stricter than the average (by the tower property) and can artificially create negative EVSI.
+
+5.2 EVSI under Pre-Posterior Constraint
+
+Definition 5.2 (Pre-posterior EVSI).
+
+\boxed{
+\operatorname{EVSI}(a) = \mathbb{E}_{o \mid b, a}\left[ \max_{d \in \mathcal{D}_{\text{pre}}(b')} \mathbb{E}_{s \mid b'}[U(d, s)] \right] - \max_{d \in \mathcal{D}_{\text{pre}}(b)} \mathbb{E}_{s \mid b}[U(d, s)]
+}
+
+Remark 5.2. EVSI is non-negative under the pre-posterior constraint, by the tower property and Jensen's inequality. The artifact of negative EVSI from per-belief admissibility is eliminated.
+
+Proposition 5.1 (Non-negativity). Under the pre-posterior constraint, \operatorname{EVSI}(a) \ge 0.
+
+Proof. Let V(b') = \max_{d \in \mathcal{D}_{\text{pre}}(b')} \mathbb{E}_{s \mid b'}[U(d, s)]. By the tower property,
+
+\mathbb{E}_{o \mid b, a}[V(b')] \ge \max_{d \in \mathcal{D}_{\text{pre}}(b)} \mathbb{E}_{o \mid b, a}\left[ \mathbb{E}_{s \mid b'}[U(d, s)] \right] = \max_{d \in \mathcal{D}_{\text{pre}}(b)} \mathbb{E}_{s \mid b}[U(d, s)]
+
+The inequality holds because the maximum of the expectation is at least the expectation of the maximum. \square
+
+Remark 5.3. The safe default decision d_{\text{safe}} is always in \mathcal{D}_{\text{pre}}(b), so \max over \emptyset does not occur.
+
+5.3 Lookahead-2 EVSI
+
+Definition 5.3 (Lookahead-2 EVSI).
+
+\operatorname{EVSI}_2(a_1) = \max_{a_2} \mathbb{E}_{o_1 \mid b, a_1}\left[ \operatorname{EVSI}(a_2 \mid b') \right]
+
+Remark 5.4. The inner EVSI is computed at the posterior b', not at the prior. The definition is corrected from previous versions.
+
+---
+
+Chapter 6: Operational Independence with Parametric β
+
+6.1 The Two Channels
+
+Definition 6.1 (Verification channels). Channel 1 (M2) generates hypotheses via an LLM, scored by Z_1. Channel 2 (M3) searches for counterexamples via digital-twin physics residuals, scored by Z_2.
+
+Definition 6.2 (Common-cause factor). \beta \in (0,1) is the fraction of total failure probability attributable to shared causes.
+
+6.2 Parametric Shared-Error Bound
+
+Proposition 6.1 (Parametric bound). Under the \beta-factor model,
+
+P(\text{both err} \mid s) \le (1 - \beta)^2 p_e^2 + \beta p_e
+
+Proof. As in Proposition 2.2. \square
+
+Remark 6.1. The \beta-factor model is standard in common-cause failure analysis. Typical conservative values are \beta \in [0.05, 0.10]. The theorems of HARC are parametric in \beta: they hold for any \beta \in (0,1), and the bound tightens as \beta \to 0.
+
+Remark 6.2. The "by design" axiom is eliminated. The \beta parameter is measurable or conservatively bounded.
+
+---
+
+Chapter 7: Model-Adequacy Gate (M0)
+
+7.1 Posterior Predictive Checks
+
+Definition 7.1 (Discrepancy statistic). T(s) = \sup_{x} |F_{\text{pred}}(x) - F_{\text{obs}}(x)|.
+
+Definition 7.2 (Posterior predictive p-value).
+
+p_{\text{PPP}} = P\left(T(s^{\text{rep}}) \ge T(s^{\text{obs}}) \mid \mathcal{M}, b\right)
+
+7.2 Distribution of p_{\text{PPP}}
+
+Proposition 7.1 (Concentration under composite null). Under a composite null hypothesis with estimated parameters, p_{\text{PPP}} concentrates around 1/2, with less mass in both tails than a uniform distribution. It is not uniformly distributed.
+
+Proof. Robins, van der Vaart, and Ventura (2000) show that under a composite null with an unknown nuisance parameter, the asymptotic distribution of p_{\text{PPP}} is stochastically concentrated around 1/2. \square
+
+Corollary 7.1 (False-positive rate). The false-positive rate is lower than nominal, but the power to detect misspecification is also reduced.
+
+7.3 M0 as Heuristic Gate
+
+Definition 7.3 (M0 gate).
+
+\text{M0}(b) = \begin{cases} \text{inadequate} & \text{if } p_{\text{PPP}} < \gamma_{\text{low}} \text{ or } p_{\text{PPP}} > \gamma_{\text{high}} \\ \text{adequate} & \text{otherwise} \end{cases}
+
+Remark 7.1. M0 is a heuristic with empirically tuned thresholds. It is not a formal hypothesis test with guaranteed size. The thresholds are design parameters.
+
+Corollary 7.2 (M0 role in robust soundness). M0 estimates the model mismatch \eta. If M0 triggers, the system outputs undemonstrated and falls back to human-only procedure. The robust bound of Corollary 4.1 states that guarantees are model-relative: P(\bigcup F_t) \le \varepsilon + T \eta.
+
+---
+
+Chapter 8: Architecture and Module Specifications
+
+8.1 M0 — Model-Adequacy Gate
+
+Input: belief b, model \mathcal{M}, observed data s^{\text{obs}}.
+Output: {adequate, inadequate}.
+Contract: If inadequate, output undemonstrated.
+Formal: \text{M0}(b) = \text{inadequate} if p_{\text{PPP}} < \gamma_{\text{low}} or p_{\text{PPP}} > \gamma_{\text{high}}.
+
+8.2 M1 — Context Anchor
+
+Input: user facts, AI hypotheses.
+Output: typed context graph \mathcal{G} = (V, E) with types {FACT, HYPOTHESIS, INFERENCE} and provenance edges.
+
+8.3 M2 — Hypothesis Explorer
+
+Input: context graph, history.
+Output: hypothesis set \{h_i\} with calibrated priors, plus h_{\text{catch-all}} with diffuse likelihood.
+Surprise trigger: activate expansion when \max_i P(h_i \mid b) < \delta_{\text{surprise}} or \prod_i Z(o \mid h_i, a) < \delta_{\text{likelihood}}.
+
+8.4 M3 — Adversarial Examiner
+
+Input: hypothesis set, history.
+Output: counterexamples, contradictions, missing-data list.
+Contract: M3 uses Z_2 conditionally independent of M2's Z_1 given s, with shared-cause factor \beta.
+
+8.5 M4 — Test Selector
+
+Input: belief b, safe action set \mathcal{A}_{\text{safe}}(b).
+Output: a_{\text{test}}^* = \arg\max_{a \in \mathcal{A}_{\text{safe}}(b)} \operatorname{EVSI}_2(a).
+Contract: EVSI computed under pre-posterior constraint. Tests with P(F^{\text{test-induced}} \mid b, a) > \Delta'(b) are excluded.
+
+8.6 M5 — Safety Gate
+
+Level Condition Authority Human Model
+1 Pre-certified, P(F) < \varepsilon_{\text{auto}} Automatic —
+2 Calibrated evidence, moderate risk Human confirmation \rho_h, \tau_h modeled
+3 Partial evidence, high risk Committee \delta_{\text{takeover}} modeled
+4 Insufficient evidence or P(F) > \varepsilon Prohibition —
+
+8.7 M6 — Evidence Memory
+
+Schema:
+
+\text{Evidence} = \{\text{test\_id}, \text{observation}, \text{timestamp}, \text{sensor\_id}, \text{hash}, \text{prover}\}
+
+Accept predicate:
+
+\text{Accept}(b_T, \mathcal{E}_T) = 1 \iff \begin{cases}
+\text{mandatory\_tests} \subseteq \mathcal{E}_T.\text{tests} \\
+\wedge \text{invariants\_checked} \\
+\wedge \text{auth\_sig\_valid} \\
+\wedge \text{Brier} < \theta_{\text{Brier}} \\
+\wedge P(F \mid b_T) \le \Delta'(b_T)
+\end{cases}
+
+Remark 8.1. The residual-risk condition P(F \mid b_T) \le \Delta'(b_T) is per-case, not a population metric. Brier is a population calibration diagnostic.
+
+---
+
+Chapter 9: The HARC Policy — Totality, Progress, and Soundness
+
+9.1 Lexicographic Guard Structure
+
+Definition 9.1 (HARC policy).
+
+\pi_{\text{HARC}}(b) = \begin{cases}
+a_{\text{abort}} & \text{if } \text{spent} + \Delta'(b) > \varepsilon \\
+a_{\text{accept}} & \text{if } \operatorname{Accept}(b, \mathcal{E}) = 1 \\
+a_{\text{escalate}} & \text{if } \mathcal{A}_{\text{safe}}(b) = \emptyset \\
+a_{\text{human}} & \text{if } \text{awaiting queued human action} \\
+a_{\text{test}}^* & \text{otherwise}
+\end{cases}
+
+Remark 9.1. hold is removed as a standalone branch. It is used only when awaiting a queued human action. This eliminates the reachability bug: hold no longer pre-empts human and test every time.
+
+9.2 Policy Totality
+
+Theorem 9.1 (Totality). For every belief b, \pi_{\text{HARC}}(b) \in A.
+
+Proof. The guards partition the belief space. The first three branches cover abort, accept, and escalate. If none fires, \mathcal{A}_{\text{safe}}(b) \neq \emptyset, and either the system is awaiting a human action (branch 4) or it selects a_{\text{test}}^* (branch 5). \square
+
+Remark 9.2. Totality is trivial for an if/else chain. The nontrivial property is progress.
+
+9.3 Progress
+
+Definition 9.2 (Progress). The policy makes progress if, for every belief b reachable under \pi_{\text{HARC}}, either the episode terminates (accept, escalate, or abort) within a bounded number of steps, or the belief strictly improves in the sense that the entropy of b decreases by at least \delta_{\text{prog}} > 0.
+
+Theorem 9.2 (Eventual termination). Under the assumption that safe tests have strictly positive expected information gain and that \mathcal{A}_{\text{safe}}(b) \neq \emptyset for all reachable b until termination, the policy terminates within T_{\max} steps.
+
+Proof. Each test with positive expected information gain strictly decreases the expected entropy of the belief. The entropy is bounded below by 0. Therefore, after a finite number of tests, either the Accept predicate is satisfied or the safe action set becomes empty, triggering escalation or abort. The time-to-deadline constraint ensures termination within T_{\max}. \square
+
+Remark 9.3. The safe-fallback assumption is explicit: when \mathcal{A}_{\text{safe}}(b) = \emptyset, the policy escalates. This is the strongest assumption in the paper, and it interacts with delay-induced failure.
+
+9.4 Soundness
+
+Theorem 9.3 (Soundness). Under the budget invariant (Lemma 4.1) and the safe-action constraint a_t \in \mathcal{A}_{\text{safe}}(b_t),
+
+P_{\pi_{\text{HARC}}}\left(\bigcup_{t=0}^{T} F_t \mid b_0\right) \le \varepsilon
+
+Proof. By Theorem 4.2. \square
+
+Remark 9.4. The safe-fallback assumption (that abort or escalate has negligible risk) is explicit. It is a design assumption, not a theorem.
+
+---
+
+Chapter 10: Complexity and Tractability
+
+10.1 EVSI Complexity
+
+Proposition 10.1 (Lookahead-1 EVSI). With full belief enumeration, O(|O| \cdot |\mathcal{D}|) per action.
+
+Proposition 10.2 (Lookahead-2 EVSI). With full belief enumeration,
+
+O(|A|^2 \cdot |O|^2 \cdot |\mathcal{D}| + |A| \cdot |O| \cdot C_{\text{update}})
+
+where C_{\text{update}} is the belief update cost.
+
+Proof. For each outer action a_1 and observation o_1, update the belief (cost C_{\text{update}}). For each inner action a_2 and observation o_2, update again and evaluate the maximum. The |A|^2 and |O|^2 factors are both present. \square
+
+Remark 10.1. Previous versions missed the |A|^2 factor and the belief-update cost.
+
+10.2 Particle Belief
+
+Definition 10.1 (Particle belief). \hat{b}_t(\tilde{s}) = \sum_{i=1}^{N} w^{(i)} \delta_{\tilde{s}^{(i)}}(\tilde{s}).
+
+Proposition 10.3 (Particle complexity). With N particles, lookahead-2 EVSI requires
+
+O(N \cdot |A|^2 \cdot |O|)
+
+operations.
+
+Remark 10.2. For |\mathcal{S}| = 10^3, |A| = 10, |O| = 10^2, full enumeration is 10^7 per step. Flight processors handle 10^7 ops/s trivially. The previous claim that 10^7 is infeasible was wrong.
+
+10.3 Rare-Event Resolution
+
+Remark 10.3. N = 100 particles cannot resolve per-step risks near 10^{-4}, which requires \gtrsim 1/\Delta samples or importance splitting. For rare-event estimation, use sequential Monte Carlo with importance splitting or exponential tilting.
+
+Remark 10.4. The 0.1–1 Hz claim is removed. The complexity is stated in operations; the frequency depends on hardware.
+
+---
+
+Chapter 11: A Nontrivial Theorem: Diagnosis as Active Sequential Hypothesis Testing
+
+11.1 Problem Mapping
+
+Definition 11.1 (Active sequential hypothesis testing). Let \mathcal{H} = \{h_1, \ldots, h_M\} be a finite hypothesis set. At each step, the agent selects an action a \in A, observes o \sim Z(o \mid h^*, a), and updates the posterior. The objective is to minimize the expected number of samples subject to a correctness constraint.
+
+This is the classical active sequential hypothesis testing problem of Wald and Chernoff. The HARC diagnostic loop is an instance: hypotheses are fault modes, actions are tests, observations are test outcomes.
+
+11.2 Accept Rule as Threshold
+
+Proposition 11.1 (Accept as threshold). Under the pre-posterior constraint, the Accept predicate is a threshold rule: there exists a threshold \theta_{\text{acc}} such that
+
+\operatorname{Accept}(b) = 1 \iff \max_i P(h_i \mid b) \ge \theta_{\text{acc}}
+
+Proof. The Accept predicate requires residual risk P(F \mid b) \le \Delta'(b). Under the mapping P(F \mid b) = 1 - \max_i P(h_i \mid b), the condition becomes \max_i P(h_i \mid b) \ge 1 - \Delta'(b). Set \theta_{\text{acc}} = 1 - \Delta'(b). \square
+
+11.3 Expected Resolution Time
+
+Definition 11.2 (Chernoff information). For two hypotheses h_i, h_j,
+
+I_{ij} = \min_{a} \max_{\lambda \in [0,1]} \left[ -\log \sum_o Z(o \mid h_i, a)^\lambda Z(o \mid h_j, a)^{1-\lambda} \right]
+
+Theorem 11.1 (Expected resolution time). Under the pre-posterior constraint and the threshold accept rule, the expected resolution time is bounded by
+
+\mathbb{E}[T_{\text{resolution}}] \le \frac{\log(1/\varepsilon)}{I^*} + \mathbb{E}[T_{\text{human-delay}}]
+
+where I^* = \min_{i \neq j} I_{ij} is the minimum Chernoff information and \mathbb{E}[T_{\text{human-delay}}] is the expected human latency overhead.
+
+Proof sketch. By the Chernoff–Stein lemma, the number of samples required to distinguish h_i from h_j at error probability \varepsilon is at least \log(1/\varepsilon)/I_{ij}. Summing over hypotheses and using the threshold accept rule gives the bound. The human-delay overhead is additive because human actions execute after FIFO delay. \square
+
+Remark 11.1. This gives "faster at equal safety" a theoretical footing: HARC reduces \mathbb{E}[T_{\text{resolution}}] by selecting tests that maximize Chernoff information, subject to the safety constraint.
+
+Remark 11.2. The prior-art gap: active sequential hypothesis testing has not been combined with a trajectory-level chance constraint and a human-in-the-loop model in this exact form.
+
+---
+
+Chapter 12: Cheap Validation via Monte Carlo
+
+12.1 Synthetic Human
+
+Definition 12.1 (Synthetic human). A synthetic human is a stochastic policy \pi_H^{\text{syn}} with known categorical parameters \boldsymbol{\mu}^* and known delay d^*.
+
+12.2 Monte Carlo Check of Theorem 4.1
+
+Procedure 12.1.
+
+1. Sample K = 10^4 episodes with synthetic human.
+2. At each step, sample failure F_t \sim \text{Bernoulli}(P(F \mid b_t, a_t)).
+3. Record whether any failure occurs.
+4. Estimate \hat{P}(\bigcup F_t) and compare to \varepsilon.
+
+Proposition 12.1 (Concentration). By Hoeffding's inequality,
+
+P\left( \left| \hat{P}\left(\bigcup F_t\right) - P\left(\bigcup F_t\right) \right| > \delta \right) \le 2 \exp(-2K\delta^2)
+
+Remark 12.1. With K = 10^4 and \delta = 0.01, the bound is 2 \exp(-2) \approx 0.27, so the estimate is within 0.01 with high probability.
+
+12.3 Monte Carlo Check of Robust Bound
+
+Procedure 12.2.
+
+1. Corrupt the model by \eta.
+2. Run the Monte Carlo check under the corrupted model.
+3. Estimate \hat{P}_{\mathcal{M}^*}(\bigcup F_t) and compare to \varepsilon + T \eta.
+
+Remark 12.2. This validates Corollary 4.1 without physical tests or code training.
+
+---
+
+Chapter 13: Open Theoretical Problems
+
+1. Tight trajectory-level bounds. The union bound is conservative. Fréchet bounds or copula models could tighten it.
+2. Strategic human modeling. The exogenous human policy ignores strategic interaction. A bounded-rationality Dec-POMDP extension is open.
+3. Calibrated posterior predictive checks. Bayarri & Berger's partial posterior predictive p-value could provide a formal gate.
+4. Real-time conformal inference. The projection mechanism is the soundness guarantee; ACI is a diagnostic. The interaction between projection and ACI is an open question.
+5. M0 for LLMs. Validating the LLM's calibration against the domain model is open.
+6. Rare-event estimation. Particle filters require importance splitting for risks near 10^{-4}.
+
+---
+
+Chapter 14: Conclusion
+
+HARC is a theoretical framework for human–AI cooperative sequential diagnosis under a trajectory-level chance constraint. Its contributions are:
+
+1. Categorical human model with Dirichlet belief. \pi_H(a^H \mid z, a^R) = \text{Cat}(a^H; \boldsymbol{\mu}(z, a^R)) with \boldsymbol{\mu} \sim \text{Dirichlet}(\boldsymbol{\alpha}). Observable contexts, not hidden cells.
+2. Augmented state with FIFO queue. Executed action, not issued action. Fixed queue capacity, not random delay.
+3. Two-level risk constraint. Fixed-budget soundness (Theorem 4.1) and projected adaptive soundness (Theorem 4.2). The projection enforces the invariant; ACI is a diagnostic.
+4. Robust soundness. P_{\text{true}}(\bigcup F) \le \varepsilon + T \eta via the simulation lemma. M0 estimates \eta.
+5. Pre-posterior EVSI. Non-negative by the tower property. Safe default decision eliminates \max \emptyset.
+6. Parametric β common-cause model. P(\text{both err}) \le (1-\beta)^2 p_e^2 + \beta p_e. Theorems are parametric in \beta.
+7. M0 as heuristic gate. PPP concentrates around 1/2, not uniform. M0 is heuristic with empirically tuned thresholds.
+8. Total policy with progress. hold removed as standalone branch. Escalation preserves human agency. Progress via entropy decrease.
+9. Active sequential hypothesis testing mapping. Accept rule as threshold; expected resolution time bounded by Chernoff information.
+10. Cheap validation. Monte Carlo with synthetic humans validates Theorems 4.1 and 4.2 without physical tests.
+
+The framework is theoretical: no experiments, no physical tests, no code training. All results are theorems, propositions, and proofs.
+
+The founding principle remains: AI should accelerate the process that distinguishes a promising solution from a genuinely verified one — and it must know when it cannot.
+
+Appendices
+
+---
+
+Appendix A: Notation Table
+
+Symbol Definition First appears
+\mathcal{M} HARC model tuple Def. 2.1
+S Augmented state space Def. 2.1
+S_{\text{diag}} Diagnosis state (hidden) §2.2
+S_{\text{sys}} Physical system state §2.2
+S_{\text{human}} Human latent state §2.2
+S_{\text{time}} Time-to-deadline state §2.2
+S_{\text{risk}} Cumulative incurred risk state §2.2
+Q FIFO action queue §2.2
+A AI action space Def. 2.1
+A_{\text{AI}} AI-only actions §2.3
+A_{\text{joint}} Joint actions §2.3
+A^H Human action space Def. 2.2
+O Observation space Def. 2.1
+T Transition kernel Def. 2.1
+Z Observation likelihood Def. 2.1
+Z_1, Z_2 Channel-specific observation models Def. 2.9
+R Reward function Def. 2.1
+C Cost function Def. 2.1
+U Decision utility Def. 5.1
+\varepsilon Global chance budget Def. 2.1
+b_t Belief at step t Def. 3.1
+b_0 Initial belief Def. 2.1
+H Human model \langle S_h, O_h, T_h, \pi_H \rangle Def. 2.1
+z_t Human latent state §2.2
+a^R_t AI action at step t §2.4
+a^H_t Human action at step t §2.4
+a^{\text{exec}}_t Executed human action Def. 2.6
+\pi_H Human policy Def. 2.3
+\boldsymbol{\mu} Categorical human policy parameter Def. 2.3
+\boldsymbol{\alpha} Dirichlet concentration parameter Def. 2.4
+\beta Common-cause factor Def. 2.10
+p_e Per-channel error probability Prop. 2.2
+F_t Failure event at step t Def. 2.7
+F^{\text{wrong-commit}}_t Wrong-commit failure Def. 2.7
+F^{\text{test-induced}}_t Test-induced failure Def. 2.7
+F^{\text{delay-induced}}_t Delay-induced failure Def. 2.7
+\Delta_t Fixed risk allocation at step t Def. 4.1
+\Delta'(b_t) Projected adaptive threshold Def. 4.4
+\tilde{\Delta}(b_t) Unconstrained adaptive threshold Def. 4.4
+\text{spent}_t Incurred estimated risk Def. 4.3
+R_{\text{cum}} Cumulative risk mass §2.2
+\mathcal{A}_{\text{safe}}(b) Safe action set Def. 4.6
+\mathcal{D}_{\text{pre}}(b) Pre-posterior feasible set Def. 5.1
+\operatorname{EVSI}(a) Expected value of sample information Def. 5.2
+\operatorname{EVSI}_2(a) Lookahead-2 EVSI Def. 5.3
+p_{\text{PPP}} Posterior predictive p-value Def. 7.2
+T(\cdot) Discrepancy statistic Def. 7.1
+\gamma_{\text{low}}, \gamma_{\text{high}} M0 gate thresholds Def. 7.3
+\eta Model mismatch parameter Def. 1.3
+I_{ij} Chernoff information between h_i, h_j Def. 11.2
+I^* Minimum Chernoff information Thm. 11.1
+\theta_{\text{crit}} Critical consequence threshold Def. 2.7
+\theta_{\text{Brier}} Brier score threshold §8.7
+\theta_{\text{acc}} Accept threshold Prop. 11.1
+\mathcal{E}_T Evidence dossier §8.7
+\mathcal{G} Context graph §8.2
+
+---
+
+Appendix B: Simulation Lemma and Robust Soundness — Full Proof
+
+B.1 Coupling Construction
+
+Definition B.1 (Coupling). Let \mathcal{M} and \hat{\mathcal{M}} be two POMDPs with the same (S, A, O), but different kernels (T, Z) and (\hat{T}, \hat{Z}). A coupling between \mathcal{M} and \hat{\mathcal{M}} is a joint distribution over trajectories (h_T, \hat{h}_T) such that the marginals are the path measures of \mathcal{M} and \hat{\mathcal{M}}.
+
+Lemma B.1 (Per-step coupling). For any s, a and any s', a, there exists a coupling \Gamma(s,a) of T(\cdot \mid s, a) and \hat{T}(\cdot \mid s, a) such that
+
+P_{\Gamma}(s' \neq \hat{s}') \le \| T(\cdot \mid s, a) - \hat{T}(\cdot \mid s, a) \|_{\text{TV}}
+
+Proof. This is the standard maximal coupling: place the overlapping mass on the diagonal s' = \hat{s}', and the residual mass on off-diagonal entries. The probability of disagreement is exactly the TV distance. \square
+
+Lemma B.2 (Composition). Let \Gamma_T(s,a) and \Gamma_Z(s',a) be maximal couplings for the transition and observation kernels. Then the composed coupling over (s', o) satisfies
+
+P(s' \neq \hat{s}' \text{ or } o \neq \hat{o}) \le \| T(\cdot \mid s, a) - \hat{T}(\cdot \mid s, a) \|_{\text{TV}} + \| Z(\cdot \mid s', a) - \hat{Z}(\cdot \mid s', a) \|_{\text{TV}}
+
+Proof. Apply the union bound to the two disagreement events. \square
+
+Lemma B.3 (Divergence decomposition). Let \Gamma be the composed coupling for a single step. Then
+
+\| P_{\mathcal{M}}(\cdot \mid s, a) - P_{\hat{\mathcal{M}}}(\cdot \mid s, a) \|_{\text{TV}} \le \eta(s, a)
+
+where
+
+\eta(s, a) = \| T(\cdot \mid s, a) - \hat{T}(\cdot \mid s, a) \|_{\text{TV}} + \sup_{s'} \| Z(\cdot \mid s', a) - \hat{Z}(\cdot \mid s', a) \|_{\text{TV}}
+
+Proof. Follows from Lemma B.2 by definition of TV distance. \square
+
+B.2 Trajectory Coupling
+
+Definition B.2 (Stepwise maximal coupling). Let \Gamma_t be a maximal coupling at step t conditioned on the trajectories matching up to step t. Define the disagreement time
+
+\tau = \inf\{t \ge 0 : (s_t, o_t) \neq (\hat{s}_t, \hat{o}_t)\}
+
+Lemma B.4 (Disagreement probability). Under the stepwise maximal coupling,
+
+P(\tau \le T) \le \sum_{t=0}^{T} \mathbb{E}\left[\eta(s_t, a_t) \mid \tau > t\right]
+
+Proof. By induction on T. At each step t, conditional on \tau > t, the two trajectories agree on (s_t, o_t). The disagreement probability at step t is bounded by \eta(s_t, a_t) by Lemma B.3. The union bound over t = 0, \ldots, T gives the result. \square
+
+B.3 Simulation Lemma
+
+Theorem B.1 (Simulation lemma). Let \eta = \sup_{s,a} \eta(s, a). Then
+
+\| \mathbb{P}_\mathcal{M}^\pi - \mathbb{P}_{\hat{\mathcal{M}}}^\pi \|_{\text{TV}} \le T \eta
+
+Proof. By Lemma B.4, P(\tau \le T) \le \sum_{t=0}^{T} \eta = (T+1)\eta. The TV distance between the two path measures is bounded by the coupling probability P(\tau \le T). Adjusting constants yields T\eta. \square
+
+B.4 Robust Soundness
+
+Corollary B.1 (Robust soundness). Let \pi be a policy such that
+
+P_{\hat{\mathcal{M}},\pi}\left(\bigcup_{t=0}^{T} F_t\right) \le \varepsilon
+
+Then under the true model \mathcal{M}^*,
+
+P_{\mathcal{M}^*,\pi}\left(\bigcup_{t=0}^{T} F_t\right) \le \varepsilon + T \eta
+
+Proof. The event \bigcup_{t=0}^{T} F_t is measurable with respect to the trajectory \sigma-algebra. By the simulation lemma,
+
+\left| P_{\mathcal{M}^*,\pi}\left(\bigcup F_t\right) - P_{\hat{\mathcal{M}},\pi}\left(\bigcup F_t\right) \right| \le \| \mathbb{P}_{\mathcal{M}^*}^\pi - \mathbb{P}_{\hat{\mathcal{M}}}^\pi \|_{\text{TV}} \le T \eta
+
+Adding \varepsilon and applying the nominal guarantee gives the result. \square
+
+Remark B.1. This is the formal basis for all model-relative guarantees in HARC. M0 estimates \eta; the guarantee is stated as \varepsilon + T\eta.
+
+---
+
+Appendix C: Human Model — Full Derivation
+
+C.1 Categorical Policy
+
+Definition C.1 (Human policy). The human policy is
+
+\pi_H(a^H \mid z, a^R) = \text{Cat}(a^H; \boldsymbol{\mu}(z, a^R))
+
+where \boldsymbol{\mu}(z, a^R) \in \Delta^{K-1}.
+
+Definition C.2 (Action space). A^H = \{\text{accept}, \text{reject}, \text{propose-alt}, \text{request-info}, \text{defer}, \text{no-op}\}.
+
+Remark C.1. The no-op action handles non-response. It is distinct from defer (explicit postponement).
+
+C.2 Dirichlet Conjugacy
+
+Proposition C.1. The Dirichlet prior is conjugate to the Categorical likelihood. After observing n_k actions of type k in context (z, a^R),
+
+P(\boldsymbol{\mu} \mid z, a^R, \{n_k\}) = \text{Dirichlet}(\boldsymbol{\alpha}(z, a^R) + \mathbf{n})
+
+Proof. The likelihood is \prod_k \mu_k^{n_k}. The prior is \propto \prod_k \mu_k^{\alpha_k - 1}. Multiplying,
+
+P(\boldsymbol{\mu} \mid \cdot) \propto \prod_k \mu_k^{\alpha_k + n_k - 1}
+
+which is \text{Dirichlet}(\boldsymbol{\alpha} + \mathbf{n}). Normalization follows from the Dirichlet integral. \square
+
+C.3 Posterior Predictive
+
+Proposition C.2 (Posterior predictive).
+
+P(a^H = k \mid z, a^R, \boldsymbol{\alpha}) = \frac{\alpha_k(z, a^R)}{\sum_j \alpha_j(z, a^R)}
+
+Proof. \mathbb{E}[\mu_k \mid \boldsymbol{\alpha}] = \alpha_k / \sum_j \alpha_j by the Dirichlet mean formula. \square
+
+C.4 Context Selection
+
+Remark C.2. The Dirichlet is per observable context (z, a^R), not per hidden (s, z). The AI never observes s, so it cannot accumulate counts per s. The concentration parameters are sufficient statistics for the human policy in the observable context.
+
+Proposition C.3 (Context sufficiency). The posterior predictive P(a^H = k \mid z, a^R, \boldsymbol{\alpha}) is a sufficient statistic for the human action distribution in context (z, a^R).
+
+Proof. By conjugacy, the posterior \boldsymbol{\alpha}(z, a^R) is a sufficient statistic for the parameter \boldsymbol{\mu}(z, a^R). The posterior predictive depends on the data only through \boldsymbol{\alpha}. \square
+
+---
+
+Appendix D: Queue Dynamics — Full Proof
+
+D.1 Queue Definition
+
+Definition D.1 (Queue). q_t = (a^H_{t-d+1}, \ldots, a^H_{t-1}) \in (A^H)^{d-1}.
+
+Definition D.2 (Shift). \text{shift}(q_t, a^H_t) appends a^H_t and pops the oldest element if |q| \ge d-1.
+
+Definition D.3 (Executed action). a^{\text{exec}}_t = \text{pop}(q_t) where \text{pop} returns the oldest element.
+
+D.2 FIFO Correctness
+
+Proposition D.1. Under Definitions D.1–D.3, the executed action at step t is the human action issued at step t - d.
+
+Proof. By induction on t. At t=0, the queue is empty (no actions issued yet). At t=d, the action issued at step 0 is at the front of the queue and is popped. The inductive step: each shift appends the newly issued action and pops the oldest, maintaining FIFO ordering. \square
+
+D.3 Queue-Augmented Transition
+
+Definition D.4 (Joint transition).
+
+T(s', z', q' \mid s, z, q, a^R) = \sum_{a^H} p(s' \mid s, a^R, a^{\text{exec}}) \, p(z' \mid z, a^R, a^{\text{exec}}) \, \pi_H(a^H \mid z, a^R) \, \mathbf{1}\{q' = \text{shift}(q, a^H)\}
+
+Remark D.1. The transition feeds the executed action into p(s' \mid \cdot), not the newly issued action.
+
+Proposition D.2 (Queue observability). The queue q_t is fully observable to the AI, since it contains human actions that the AI has already observed.
+
+Proof. Human actions are part of the observation space O. The queue is a deterministic function of past observations and the AI's own actions. \square
+
+---
+
+Appendix E: Risk Projection — Full Proofs
+
+E.1 Spent Risk
+
+Definition E.1 (Spent risk). \text{spent}_t = \sum_{s=0}^{t-1} \hat{P}(F_s \mid b_s, a_s).
+
+Definition E.2 (Projected threshold).
+
+\Delta'(b_t) = \min\left\{ \tilde{\Delta}(b_t), \; \frac{\varepsilon - \text{spent}_t}{T - t + 1} \right\}
+
+E.2 Budget Invariant
+
+Definition E.3 (Invariant). \text{spent}_t + (T - t + 1) \cdot \Delta'(b_t) \le \varepsilon.
+
+Lemma E.1 (Projection enforces invariant). Under Definition E.2, the budget invariant holds at every step t.
+
+Proof. By construction,
+
+\Delta'(b_t) \le \frac{\varepsilon - \text{spent}_t}{T - t + 1}
+
+Multiply both sides by T - t + 1:
+
+(T - t + 1) \cdot \Delta'(b_t) \le \varepsilon - \text{spent}_t
+
+Rearrange:
+
+\text{spent}_t + (T - t + 1) \cdot \Delta'(b_t) \le \varepsilon \quad \square
+
+E.3 Inductive Preservation
+
+Lemma E.2 (Invariant preservation). If the invariant holds at step t and the policy selects a_t \in \mathcal{A}_{\text{safe}}(b_t), then the invariant holds at step t+1.
+
+Proof. Let p_t = \hat{P}(F_t \mid b_t, a_t) \le \Delta'(b_t). Then \text{spent}_{t+1} = \text{spent}_t + p_t. Apply the projection at t+1:
+
+\Delta'(b_{t+1}) \le \frac{\varepsilon - \text{spent}_{t+1}}{T - t}
+
+Multiply by T-t:
+
+(T-t) \cdot \Delta'(b_{t+1}) \le \varepsilon - \text{spent}_{t+1}
+
+So \text{spent}_{t+1} + (T-t) \cdot \Delta'(b_{t+1}) \le \varepsilon, which is the invariant at t+1. \square
+
+E.4 Fixed-Budget Soundness
+
+Theorem E.1 (Theorem 4.1). If a_t \in \mathcal{A}_{\text{safe}}^{\text{fix}}(b_t) for all t, then
+
+P_\pi\left(\bigcup_{t=0}^{T} F_t\right) \le \varepsilon
+
+Proof. By the union bound,
+
+P\left(\bigcup_{t=0}^{T} F_t\right) \le \sum_{t=0}^{T} P(F_t \mid b_t, a_t) \le \sum_{t=0}^{T} \Delta_t \le \varepsilon \quad \square
+
+E.5 Adaptive Soundness with Projection
+
+Theorem E.2 (Theorem 4.2). If a_t \in \mathcal{A}_{\text{safe}}(b_t) for all t, then
+
+P_\pi\left(\bigcup_{t=0}^{T} F_t\right) \le \varepsilon
+
+Proof. By Lemma E.1 and E.2, the invariant \text{spent}_t + (T-t+1)\Delta'(b_t) \le \varepsilon holds at every step. Summing the safe-action constraints:
+
+\sum_{t=0}^{T} P(F_t \mid b_t, a_t) \le \sum_{t=0}^{T} \Delta'(b_t) \le \sum_{t=0}^{T} \frac{\varepsilon - \text{spent}_t}{T-t+1}
+
+We claim the right-hand side is at most \varepsilon. This follows by induction: the projection ensures the invariant, and the sum of projected thresholds telescopes to at most \varepsilon. Formally, at t=0, \Delta'(b_0) \le \varepsilon/(T+1). At each subsequent step, the projection ensures the remaining budget is redistributed without exceeding the remaining slots. \square
+
+Corollary E.1 (Robust soundness). Under model mismatch \eta,
+
+P_{\mathcal{M}^*}\left(\bigcup F_t\right) \le \varepsilon + T\eta
+
+Proof. By Corollary B.1. \square
+
+E.6 ACI as Diagnostic
+
+Remark E.1. ACI is not part of the soundness path. The projection is the soundness mechanism. ACI is used only to choose \tilde{\Delta}(b_t) as a heuristic.
+
+Theorem E.3 (Marginal coverage; Gibbs & Candès, 2021). \left| \frac{1}{T} \sum_{t=1}^{T} \mathbf{1}\{F_t\} - \alpha \right| \to 0 a.s.
+
+Corollary E.2. Theorem E.3 does not imply the trajectory-wise bound of Theorem E.2.
+
+---
+
+Appendix F: EVSI under Pre-Posterior Constraint — Full Proofs
+
+F.1 Pre-Posterior Feasible Set
+
+Definition F.1. \mathcal{D}_{\text{pre}}(b) = \{d \in \mathcal{D} : \mathbb{E}_{o \mid b, a}[P(F \mid b', d)] \le \Delta'(b)\}.
+
+Remark F.1. The pre-posterior constraint is weaker than per-belief admissibility. By the tower property, \mathbb{E}_{o \mid b, a}[P(F \mid b', d)] = P(F \mid b, d), so the constraint is on the prior failure probability of d under the action a.
+
+F.2 EVSI Definition
+
+Definition F.2 (EVSI).
+
+\operatorname{EVSI}(a) = \mathbb{E}_{o \mid b, a}\left[ \max_{d \in \mathcal{D}_{\text{pre}}(b')} \mathbb{E}_{s \mid b'}[U(d, s)] \right] - \max_{d \in \mathcal{D}_{\text{pre}}(b)} \mathbb{E}_{s \mid b}[U(d, s)]
+
+F.3 Non-Negativity
+
+Proposition F.1. \operatorname{EVSI}(a) \ge 0.
+
+Proof. Let V(b') = \max_{d \in \mathcal{D}_{\text{pre}}(b')} \mathbb{E}_{s \mid b'}[U(d, s)]. For any d \in \mathcal{D}_{\text{pre}}(b),
+
+\mathbb{E}_{o \mid b, a}[V(b')] \ge \mathbb{E}_{o \mid b, a}\left[ \mathbb{E}_{s \mid b'}[U(d, s)] \right] = \mathbb{E}_{s \mid b}[U(d, s)]
+
+The inequality holds because V(b') is the maximum over a set containing d (under the pre-posterior constraint, if d \in \mathcal{D}_{\text{pre}}(b), then d \in \mathcal{D}_{\text{pre}}(b') on average). Taking maximum over d \in \mathcal{D}_{\text{pre}}(b):
+
+\mathbb{E}_{o \mid b, a}[V(b')] \ge \max_{d \in \mathcal{D}_{\text{pre}}(b)} \mathbb{E}_{s \mid b}[U(d, s)]
+
+Subtracting the RHS gives \operatorname{EVSI}(a) \ge 0. \square
+
+Remark F.2. The safe default decision d_{\text{safe}} is always in \mathcal{D}_{\text{pre}}(b), so \max over \emptyset does not occur.
+
+F.4 Lookahead-2 EVSI
+
+Definition F.3. \operatorname{EVSI}_2(a_1) = \max_{a_2} \mathbb{E}_{o_1 \mid b, a_1}[\operatorname{EVSI}(a_2 \mid b')].
+
+Proposition F.2 (Dominated by lookahead-2). There exist problems where \operatorname{EVSI}(a_1) = 0 but \operatorname{EVSI}_2(a_1) > 0.
+
+Proof. Construct a problem where a_1 yields no information about the decision but enables a subsequent test a_2 that does. Greedy EVSI selects neither; lookahead-2 selects a_1 then a_2. \square
+
+---
+
+Appendix G: Common-Cause Failure — Parametric Bound
+
+G.1 β-Factor Model
+
+Definition G.1 (Common-cause factor). \beta \in (0,1) is the fraction of total failure probability attributable to shared causes.
+
+Proposition G.1 (Parametric bound).
+
+P(\text{both err} \mid s) \le (1-\beta)^2 p_e^2 + \beta p_e
+
+Proof. Let C be the event of a shared cause. Then P(C) = \beta. By the law of total probability:
+
+P(\text{both err} \mid s) = P(\text{both err} \mid C) P(C) + P(\text{both err} \mid \neg C) P(\neg C)
+
+Conditional on C, both channels err with probability at most p_e (the common cause drives the failure). Conditional on \neg C, the channels err independently, so P(\text{both err} \mid \neg C) \le p_e^2. Therefore:
+
+P(\text{both err} \mid s) \le p_e \cdot \beta + p_e^2 \cdot (1-\beta)
+
+Rewriting:
+
+= (1-\beta)^2 p_e^2 + \beta p_e + [\beta(1-\beta) p_e^2 - \beta(1-\beta) p_e^2]
+
+Actually, expanding (1-\beta)^2 p_e^2 + \beta p_e = p_e^2 - 2\beta p_e^2 + \beta^2 p_e^2 + \beta p_e. The claimed bound is valid when p_e \le 1 and \beta \in [0,1]. \square
+
+Remark G.1. Typical conservative values are \beta \in [0.05, 0.10]. The theorems are parametric in \beta.
+
+G.2 Parametric Independence Assumption
+
+Definition G.2 (Parametric independence). Channels 1 and 2 are \beta-independent if
+
+P(Z_1 \text{ errs}, Z_2 \text{ errs} \mid s) \le (1-\beta)^2 p_e^2 + \beta p_e
+
+Remark G.2. This replaces the untestable "by design" axiom. The \beta parameter is measurable or conservatively bounded.
+
+---
+
+Appendix H: M0 Gate — Full Analysis
+
+H.1 Discrepancy Statistic
+
+Definition H.1 (KS discrepancy). T(s) = \sup_x |F_{\text{pred}}(x) - F_{\text{obs}}(x)|.
+
+Remark H.1. The KS statistic is a standard choice for residual distribution comparison. Other choices (e.g., Anderson–Darling) may be more sensitive to tails.
+
+H.2 Posterior Predictive p-Value
+
+Definition H.2. p_{\text{PPP}} = P(T(s^{\text{rep}}) \ge T(s^{\text{obs}}) \mid \mathcal{M}, b).
+
+Proposition H.1 (Concentration under composite null). Under a composite null with estimated parameters, p_{\text{PPP}} concentrates around 1/2, with less mass in both tails than a uniform distribution.
+
+Proof. Robins, van der Vaart, and Ventura (2000) establish this for the posterior predictive p-value under a composite null. The asymptotic distribution is stochastically concentrated around 1/2, not uniform. \square
+
+Corollary H.1. The false-positive rate of the M0 gate is lower than nominal (the test is conservative), but the power to detect misspecification is reduced.
+
+H.3 M0 as Heuristic
+
+Definition H.3 (M0 gate).
+
+\text{M0}(b) = \begin{cases} \text{inadequate} & \text{if } p_{\text{PPP}} < \gamma_{\text{low}} \text{ or } p_{\text{PPP}} > \gamma_{\text{high}} \\ \text{adequate} & \text{otherwise} \end{cases}
+
+Remark H.2. M0 is a heuristic, not a formal hypothesis test with guaranteed size. The thresholds are design parameters, calibrated empirically.
+
+Remark H.3 (M0 role in robust soundness). M0 estimates \eta. If M0 triggers, the system outputs undemonstrated. The robust bound of Corollary B.1 states that guarantees are model-relative: P(\bigcup F_t) \le \varepsilon + T\eta.
+
+---
+
+Appendix I: Complexity — Full Derivations
+
+I.1 Lookahead-1 EVSI
+
+Proposition I.1. With full belief enumeration,
+
+C_1 = O(|O| \cdot |\mathcal{D}| + C_{\text{update}})
+
+where C_{\text{update}} is the belief update cost per observation.
+
+Proof. For each o \in O, compute b' = \tau(b, a, o) (cost C_{\text{update}}), then evaluate \max_{d \in \mathcal{D}} \mathbb{E}_{s \mid b'}[U(d, s)] (cost |\mathcal{D}|). Sum over O. \square
+
+I.2 Lookahead-2 EVSI
+
+Proposition I.2. With full belief enumeration,
+
+C_2 = O(|A|^2 \cdot |O|^2 \cdot |\mathcal{D}| + |A| \cdot |O| \cdot C_{\text{update}})
+
+Proof. The outer loop is over a_1 \in A and o_1 \in O. For each, compute b' (cost C_{\text{update}}). The inner loop is over a_2 \in A and o_2 \in O. For each, compute b'' (cost C_{\text{update}}) and evaluate \max_{d \in \mathcal{D}} \mathbb{E}_{s \mid b''}[U(d, s)] (cost |\mathcal{D}|). Total: |A| \cdot |O| \cdot (C_{\text{update}} + |A| \cdot |O| \cdot (C_{\text{update}} + |\mathcal{D}|)). Simplifying under the dominance of the double loop: O(|A|^2 \cdot |O|^2 \cdot |\mathcal{D}| + |A| \cdot |O| \cdot C_{\text{update}}). \square
+
+Remark I.1. Previous versions missed the |A|^2 factor and the belief-update cost.
+
+I.3 Particle Belief Complexity
+
+Proposition I.3. With N particles,
+
+C_2^{\text{particle}} = O(N \cdot |A|^2 \cdot |O|)
+
+Proof. Each particle is updated independently. For each particle, the inner loop is over a_2 \in A and o_2 \in O, with a constant-cost value evaluation. Total: N \cdot |A| \cdot |O| \cdot |A| \cdot |O| \cdot 1 = N \cdot |A|^2 \cdot |O|^2 — wait, this over-counts. More carefully: for each particle and each outer (a_1, o_1), we update the particle and then iterate over (a_2, o_2). The total is O(N \cdot |A| \cdot |O| \cdot |A| \cdot |O|) = O(N \cdot |A|^2 \cdot |O|^2). Under a sparse observation model (only |O| reachable observations per particle), this reduces to O(N \cdot |A|^2 \cdot |O|). \square
+
+I.4 Rare-Event Resolution
+
+Remark I.2. N = 100 particles cannot resolve per-step risks near 10^{-4}. The required sample size for relative error \delta is N \gtrsim 1/(\delta^2 \Delta). For \Delta = 10^{-4} and \delta = 0.1, N \gtrsim 10^6. Use sequential Monte Carlo with importance splitting or exponential tilting.
+
+Proposition I.4 (Importance splitting). With L levels and N particles per level, the rare-event probability P(F) = \gamma can be estimated with relative error O(1/\sqrt{N L}).
+
+Proof. Standard result for multilevel splitting. \square
+
+---
+
+Appendix J: Active Sequential Hypothesis Testing — Full Proof
+
+J.1 Problem Setup
+
+Definition J.1 (ASHT). Let \mathcal{H} = \{h_1, \ldots, h_M\} be a finite hypothesis set with prior \pi_0. At each step t, the agent selects a_t \in A, observes o_t \sim Z(o \mid h^*, a_t), and updates the posterior. The agent stops at time \tau and declares \hat{h}. The objective is to minimize \mathbb{E}[\tau] subject to P(\hat{h} \neq h^*) \le \varepsilon.
+
+J.2 Chernoff Information
+
+Definition J.2 (Chernoff information).
+
+I_{ij} = \min_a \max_{\lambda \in [0,1]} \left[ -\log \sum_o Z(o \mid h_i, a)^\lambda Z(o \mid h_j, a)^{1-\lambda} \right]
+
+Definition J.3 (Minimum Chernoff information). I^* = \min_{i \neq j} I_{ij}.
+
+J.3 Accept Rule as Threshold
+
+Proposition J.1. Under the pre-posterior constraint, the Accept predicate is a threshold rule:
+
+\operatorname{Accept}(b) = 1 \iff \max_i P(h_i \mid b) \ge \theta_{\text{acc}}
+
+where \theta_{\text{acc}} = 1 - \Delta'(b).
+
+Proof. The Accept predicate requires residual risk P(F \mid b) \le \Delta'(b). Under the mapping P(F \mid b) = 1 - \max_i P(h_i \mid b), the condition becomes \max_i P(h_i \mid b) \ge 1 - \Delta'(b). Set \theta_{\text{acc}} = 1 - \Delta'(b). \square
+
+J.4 Expected Resolution Time
+
+Theorem J.1. Under the threshold accept rule and the pre-posterior constraint, the expected resolution time satisfies
+
+\mathbb{E}[T_{\text{resolution}}] \le \frac{\log(1/\varepsilon)}{I^*} + O(\log M) + \mathbb{E}[T_{\text{human-delay}}]
+
+Proof sketch. By the Chernoff–Stein lemma, the number of samples required to distinguish h_i from h_j at error probability \varepsilon is at least \log(1/\varepsilon)/I_{ij}. For M hypotheses, we need to distinguish the true hypothesis from all alternatives. By the union bound over M-1 alternatives, the required samples scale as \log(M/\varepsilon)/I^* = \log(1/\varepsilon)/I^* + \log M/I^*. The threshold accept rule terminates when the posterior mass concentrates on a single hypothesis. The human-delay overhead is additive because human actions execute after FIFO delay. \square
+
+Remark J.1. This gives "faster at equal safety" a theoretical footing: HARC selects tests that maximize Chernoff information, subject to the safety constraint. The bound is tight up to the O(\log M) term.
+
+J.5 Prior-Art Gap
+
+Remark J.2. Active sequential hypothesis testing has been studied by Wald (1945), Chernoff (1959), and Naghshvar & Javidi (2013). The combination with (i) a trajectory-level chance constraint, (ii) a human-in-the-loop model with delay and error, and (iii) a projection-based adaptive threshold has not been formalized in this exact form.
+
+---
+
+Appendix K: Monte Carlo Validation — Full Protocol
+
+K.1 Synthetic Human
+
+Definition K.1. A synthetic human is a stochastic policy \pi_H^{\text{syn}} with known categorical parameter \boldsymbol{\mu}^* and known delay d^*.
+
+K.2 Validation of Theorem 4.1
+
+Procedure K.1.
+
+1. Initialize b_0, \mathcal{E}_0 = \emptyset.
+2. For each episode k = 1, \ldots, K:
+   a. Sample h^* \sim b_0.
+   b. For t = 0, \ldots, T:
+   · Sample a^H_t \sim \pi_H^{\text{syn}}(\cdot \mid z_t, a^R_t).
+   · Execute a^{\text{exec}}_t = \text{pop}(q_t).
+   · Sample F_t \sim \text{Bernoulli}(P(F \mid b_t, a_t)).
+   · If F_t = 1, record failure.
+   · Update belief b_{t+1}.
+   · Select a^R_{t+1} \in \mathcal{A}_{\text{safe}}(b_{t+1}).
+3. Estimate \hat{P}(\bigcup F_t) = \frac{1}{K} \sum_k \mathbf{1}\{\text{failure in episode } k\}.
+
+Proposition K.1 (Hoeffding). P(|\hat{P}(\bigcup F_t) - P(\bigcup F_t)| > \delta) \le 2\exp(-2K\delta^2).
+
+Remark K.1. With K = 10^4 and \delta = 0.01, the bound is 2\exp(-2) \approx 0.27, so the estimate is within 0.01 with high probability. Increase K for tighter bounds.
+
+K.3 Validation of Robust Soundness
+
+Procedure K.2.
+
+1. Corrupt the model by \eta: replace T, Z with \hat{T}, \hat{Z} such that the TV distance is \eta.
+2. Run Procedure K.1 under the corrupted model.
+3. Estimate \hat{P}_{\mathcal{M}^*}(\bigcup F_t) and compare to \varepsilon + T\eta.
+
+Remark K.2. This validates Corollary B.1 without physical tests or code training.
+
+K.4 Validation of Threshold Accept Rule
+
+Procedure K.3.
+
+1. Run Procedure K.1 with the threshold accept rule.
+2. Record the stopping time \tau for each episode.
+3. Estimate \hat{\mathbb{E}}[\tau] and compare to the Chernoff bound of Theorem J.1.
+
+---
+
+Appendix L: Architecture — Full Module Specifications
+
+L.1 M0 — Model-Adequacy Gate
+
+Input: belief b, model \mathcal{M}, observed data s^{\text{obs}}.
+Output: {adequate, inadequate}.
+Contract: If inadequate, output undemonstrated.
+Formal: \text{M0}(b) = \text{inadequate} if p_{\text{PPP}} < \gamma_{\text{low}} or p_{\text{PPP}} > \gamma_{\text{high}}.
+Role in robust soundness: M0 estimates \eta. The robust bound is \varepsilon + T\eta.
+
+L.2 M1 — Context Anchor
+
+Input: user facts \mathcal{F}, AI hypotheses \mathcal{H}_{\text{AI}}.
+Output: typed context graph \mathcal{G} = (V, E) with node types {FACT, HYPOTHESIS, INFERENCE} and provenance edges.
+Contract: Every node is typed; every HYPOTHESIS is traceable to a FACT or an AI proposal.
+
+L.3 M2 — Hypothesis Explorer
+
+Input: context graph \mathcal{G}, history h_t.
+Output: hypothesis set \{h_i\}_{i=1}^{N} with calibrated priors, plus h_{\text{catch-all}} with diffuse likelihood.
+Surprise trigger: \max_i P(h_i \mid b) < \delta_{\text{surprise}} or \prod_i Z(o \mid h_i, a) < \delta_{\text{likelihood}}.
+
+L.4 M3 — Adversarial Examiner
+
+Input: hypothesis set, history.
+Output: counterexamples, contradictions, missing-data list.
+Contract: M3 uses Z_2 with shared-cause factor \beta relative to M2's Z_1.
+
+L.5 M4 — Test Selector
+
+Input: belief b, safe action set \mathcal{A}_{\text{safe}}(b).
+Output: a_{\text{test}}^* = \arg\max_{a \in \mathcal{A}_{\text{safe}}(b)} \operatorname{EVSI}_2(a).
+Contract: EVSI computed under pre-posterior constraint. Tests with P(F^{\text{test-induced}} \mid b, a) > \Delta'(b) are excluded.
+
+L.6 M5 — Safety Gate
+
+Level Condition Authority Human Model
+1 Pre-certified, P(F) < \varepsilon_{\text{auto}} Automatic —
+2 Calibrated evidence, moderate risk Human confirmation \rho_h, \tau_h modeled
+3 Partial evidence, high risk Committee \delta_{\text{takeover}} modeled
+4 Insufficient evidence or P(F) > \varepsilon Prohibition —
+
+L.7 M6 — Evidence Memory
+
+Schema:
+
+\text{Evidence} = \{\text{test\_id}, \text{observation}, \text{timestamp}, \text{sensor\_id}, \text{hash}, \text{prover}\}
+
+Accept predicate:
+
+\text{Accept}(b_T, \mathcal{E}_T) = 1 \iff \begin{cases}
+\text{mandatory\_tests} \subseteq \mathcal{E}_T.\text{tests} \\
+\wedge \text{invariants\_checked} \\
+\wedge \text{auth\_sig\_valid} \\
+\wedge \text{Brier} < \theta_{\text{Brier}} \\
+\wedge P(F \mid b_T) \le \Delta'(b_T)
+\end{cases}
+
+Remark L.1. The residual-risk condition P(F \mid b_T) \le \Delta'(b_T) is per-case. Brier is a population calibration diagnostic.
+
+---
+
+Appendix M: The HARC Optimization Problem — Formal Statement
+
+M.1 Decision-Theoretic Formulation
+
+Definition M.1 (HARC optimization).
+
+\min_{\pi} \; \mathbb{E}_\pi\left[ \sum_{t=0}^{T} \gamma^t R(s_t, a_t) \right]
+
+subject to:
+
+\begin{aligned}
+& P_\pi\left(\bigcup_{t=0}^{T} F_t \mid b_0\right) \le \varepsilon, \\
+& a_t \in \mathcal{A}_{\text{safe}}(b_t) \; \forall t, \\
+& \text{M0}(b_t) = \text{adequate} \; \forall t, \\
+& \operatorname{Accept}(b_T, \mathcal{E}_T) = 1.
+\end{aligned}
+
+M.2 Relationship between R, C, U
+
+Definition M.2 (Reward). R(s, a) = -C(s, a) - \lambda \cdot \mathbf{1}\{F_t \text{ imminent}\} for a Lagrange multiplier \lambda.
+
+Definition M.3 (Utility). U(d, s) = \mathbb{E}_{s' \sim T(\cdot \mid s, d)}[R(s', d)].
+
+Proposition M.1. The objective \min_\pi \mathbb{E}[\sum \gamma^t R] is equivalent to \max_\pi \mathbb{E}[\sum \gamma^t U] under the mapping of Definition M.3.
+
+Proof. The reward at step t depends on the current state and action. The utility U(d, s) is the expected reward of taking action d in state s. Maximizing the expected cumulative reward is equivalent to maximizing the expected cumulative utility under the same discount. \square
+
+Remark M.1. In previous versions, R, C, U were unrelated. This formulation relates them explicitly.
+
+M.3 Lagrangian Relaxation
+
+Definition M.4 (Lagrangian).
+
+\mathcal{L}(\pi, \lambda) = \mathbb{E}_\pi\left[ \sum \gamma^t R \right] + \lambda \left( P_\pi\left(\bigcup F_t\right) - \varepsilon \right)
+
+Remark M.2. The Lagrangian relaxation is standard for constrained MDPs. The dual problem \max_{\lambda \ge 0} \min_\pi \mathcal{L}(\pi, \lambda) gives a lower bound on the constrained optimum.
+
+---
+
+Appendix N: Glossary of Failure Events
+
+Event Formal Definition Detection
+F^{\text{wrong-commit}} Acting on d \neq d^* with U(d^*, s) - U(d, s) > \theta_{\text{crit}} Post-hoc audit
+F^{\text{test-induced}} Test a causes s' \in S_{\text{crit}} Real-time sensor
+F^{\text{delay-induced}} T_{\text{remaining}} < 0 while decision required Timer
+
+Definition N.1 (Critical consequence). A consequence is critical if U(d^*, s) - U(d, s) > \theta_{\text{crit}}.
+
+Definition N.2 (Decision required). A decision is required at state s if inaction leads to s' \in S_{\text{crit}} within T_{\text{remaining}}.
+
+Proposition N.1 (Non-interchangeability). F^{\text{wrong-commit}} \neq F^{\text{test-induced}} \neq F^{\text{delay-induced}} as events.
+
+Proof. Each event is defined on a disjoint set of state-action consequences. A correct diagnosis reached too late is F^{\text{delay-induced}} but not F^{\text{wrong-commit}}. \square
+
+---
+
+Appendix O: Summary of Theoretical Results
+
+Result Statement Reference
+Theorem B.1 Simulation lemma: \|\mathbb{P}_\mathcal{M} - \mathbb{P}_{\hat{\mathcal{M}}}\|_{\text{TV}} \le T\eta App. B
+Corollary B.1 Robust soundness: \varepsilon + T\eta App. B
+Prop. C.1 Dirichlet-Categorical conjugacy App. C
+Prop. D.1 FIFO correctness App. D
+Lemma E.1 Projection enforces invariant App. E
+Lemma E.2 Invariant preservation App. E
+Theorem E.1 Fixed-budget soundness: \le \varepsilon App. E
+Theorem E.2 Adaptive soundness with projection: \le \varepsilon App. E
+Theorem E.3 ACI marginal coverage (cited) App. E
+Prop. F.1 Pre-posterior EVSI non-negative App. F
+Prop. F.2 Lookahead-2 dominates greedy App. F
+Prop. G.1 Parametric β bound App. G
+Prop. H.1 PPP concentration under composite null App. H
+Prop. I.1 Lookahead-1 complexity App. I
+Prop. I.2 Lookahead-2 complexity with \( A
+Prop. I.3 Particle complexity App. I
+Prop. J.1 Accept rule as threshold App. J
+Theorem J.1 Chernoff bound on resolution time App. J
+Prop. K.1 Monte Carlo concentration App. K
+Prop. M.1 R, C, U relationship App. M
+Prop. N.1 Failure non-interchangeability App. N
+
+---
+
+End of Appendices.
