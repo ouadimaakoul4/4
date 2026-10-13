@@ -1,0 +1,588 @@
+AISE-0.3 — Mathematical and Experimental Specification for Artificial Inherited Sensory Evolution
+
+Inheriting Perceptual Structure Without Inheriting Its Interpretation
+
+ouadi Maakoul and SI TEAM 
+
+Abstract
+
+We present AISE-0.3, a corrected mathematical and experimental specification for the intergenerational transmission of perceptual structure in evolutionary robotics. The framework defines a perceptual genome as an ordered sequence of gammatone filter triples, a leaky-integrator envelope detector with a corrected time constant, a recurrent controller whose parameters are reset between generations, and two dimension-preserving ablation operators for estimating marginal filter contribution. Two distillation operators are separated: supervised distillation, which optimizes present utility, and perceptual distillation, which preserves spectral diversity via a max-min dispersion objective with a known 2-approximation guarantee. The organizational control P\text{-}S permutes the sequential assignment of filter triples while preserving all marginal distributions. The experimental design corrects for generational data leakage, equalizes active filter capacity across groups, and pre-registers a primary comparison with an appropriately powered statistical plan.
+
+---
+
+1. Introduction and Positioning
+
+1.1 Established background
+
+Lamarckian inheritance of controller parameters accelerates evolution and raises newborn fitness, and this benefit has been demonstrated to persist under nonstationary environmental conditions, with the Lamarckian system achieving up to 33\% higher fitness than a Darwinian baseline in challenging dynamic terrains. Sensor–controller co-evolution is feasible: sensor sensitivities and temporal resolutions can be jointly optimized with controllers. Evolutionary optimization of receptive fields has been demonstrated on robotic arms and in active-vision systems. Evolutionary optimization of gammatone filter banks exists in the speech-processing literature. Knowledge distillation between robot generations exists for controllers (policies), not for perceptual structures; multi-teacher policy distillation has been shown to produce controllers that generalize zero-shot to new morphologies.
+
+Baldwinian evolution, in which learning does not alter the genotype but shapes the selection pressure on the genotype, is a related but distinct mechanism that has been studied in neural network evolution. LEAF, in its original usage, refers to an evolutionary AutoML framework that optimizes hyperparameters and network architectures; it is not a perceptual-distillation method, and AISE should not be conflated with it. The positioning of AISE relative to Baldwinian meta-learning and evolutionary AutoML is as follows: AISE transmits perceptual structure, not policy parameters, not hyperparameters, and not learning algorithms. The genotype encodes a filter bank; the phenotype is the lifetime-trained controller. This is a narrower and more specific claim than either Baldwinian meta-learning or evolutionary AutoML.
+
+1.2 Hypothesis to be tested
+
+H1 (Main hypothesis). A filter-bank structure distilled from one generation, transmitted without controller parameters, and re-adapted by the next generation reduces the number of learning episodes required to acquire a new predictive relationship in a semantically shifted environment, compared to: (a) no inheritance, (b) random selection of the same size, and (c) a permuted organization.
+
+1.3 What is not claimed
+
+We do not claim that the inherited structure carries meaning; only capacity to detect is transmitted. We do not claim that reinterpretation, if observed, implies consciousness or subjective experience. No systematic review has been completed, and the novelty claim is provisional.
+
+---
+
+2. Mathematical Framework
+
+2.1 Signal model
+
+Let x_t \in \mathbb{R}, t \in \{1,\dots,T\}, be a discrete-time signal sampled at rate f_s. The environment \mathcal{E} generates signals by superposition:
+
+x_t = \sum_{k=1}^{K} a_{k,t} \sin\!\left(2\pi f_k t / f_s + \phi_k\right) + \epsilon_t,
+\qquad
+\epsilon_t \sim \mathcal{N}(0,\sigma^2),
+
+with event-dependent amplitude envelopes a_{k,t} = a_k \, g(t - t_{\text{evt}}; \sigma_k), where g is a smooth pulse and t_{\text{evt}} is the event onset. Events belong to \mathcal{Y} = \{A, B, C, \varnothing\}.
+
+A fixed shared component at f_\star is present in A and B in the base environment, and in C in the semantic environment. The spectral composition of each environment is specified precisely in Section 3.1.
+
+2.2 Perceptual genome
+
+Definition 1 (Genome). A perceptual genome is an ordered sequence of filter triples
+
+G = \big( (f_i, b_i, \tau_i) \big)_{i=1}^{m},
+\qquad
+f_i, b_i, \tau_i \in \mathbb{R}_{>0},
+
+where f_i is the center frequency, b_i is the bandwidth parameter, and \tau_i is the temporal-integration constant. The ordering i=1,\dots,m is part of the genome and defines its organization.
+
+2.3 Filter bank and envelope extraction
+
+Gammatone impulse response of order n:
+
+h_{f_i,b_i}(t) = t^{\,n-1} e^{-2\pi b_i t} \cos(2\pi f_i t + \varphi),
+\qquad t \ge 0.
+
+The bandwidth parameter is
+
+b_i = 1.019 \, \operatorname{ERB}(f_i),
+\qquad
+\operatorname{ERB}(f) = 24.7 + 0.108 f,
+
+where the factor 1.019 accounts for the difference between the gammatone bandwidth and the ERB scale. The temporal-integration constant is initialized to span several carrier periods:
+
+\tau_i = \frac{k}{f_i},
+\qquad k \ge 3.
+
+This ensures that the integrator cutoff is well below the carrier frequency f_i, so that ripple at 2f_i is attenuated by at least a factor of k/(2\pi). Filtered output:
+
+u_{i,t} = (h_{f_i,b_i} * x)_t.
+
+Envelope extraction. First-order leaky integrator:
+
+z_{i,t} = \alpha_i \, z_{i,t-1} + (1-\alpha_i)\, |u_{i,t}|,
+\qquad
+\alpha_i = \exp\!\left(-\frac{\Delta t}{\tau_i}\right),
+
+with \Delta t = 1/f_s and z_{i,0}=0. The steady-state gain is unity: for constant input |u_{i,t}| = c, z_{i,\infty} = c. The effective integration window is \tau_{\text{eff}} = \tau_i.
+
+Spectral separability check. Before the full experiment, verify that the ERB-overlap between filters in [20,50] Hz and the filter at f_\star = 100 Hz is below a threshold \rho_{\max} (e.g., \rho_{\max} = 0.3). If separability fails, adjust f_\star or the filter count m until the oracle condition holds (see Section 4.4).
+
+2.4 Controller and lifetime learning
+
+Recurrent controller:
+
+h_t = \tanh(W_{hh} h_{t-1} + W_{zh} z_t + b_h),
+\qquad
+\hat{y}_t = \operatorname{softmax}(W_{hy} h_t + b_y).
+
+Lifetime learning minimizes cross-entropy over \mathcal{D}_{\text{train}}:
+
+\theta^\star = \arg\min_\theta \; \mathbb{E}_{(x,y)\sim \mathcal{D}_{\text{train}}} \big[ \mathcal{L}(\mathcal{C}_\theta(\Phi_G(x)), y) \big].
+
+Reset rule. For all perceptual-inheritance groups, \theta is drawn from a fixed random initialization at every generation. For the Lamarckian control group L\text{-}\theta, \theta is inherited from the parental controller while G is held fixed. Only G is inherited in the perceptual groups.
+
+2.5 Marginal contribution — two ablations
+
+Definition 2 (Zero-ablation, fixed dimension). For trained \theta^\star, set z_{i,t} \leftarrow 0 for all t, keep all other filters unchanged:
+
+\Delta_i^{\text{zero}} = J\!\left(\theta^\star, \Phi_G^{(i \to 0)}\right) - J\!\left(\theta^\star, \Phi_G\right).
+
+Input dimension is preserved, so W_{zh} is unchanged. \Delta_i^{\text{zero}} > 0 indicates that removing filter i worsens performance.
+
+Definition 3 (Retrained ablation). Remove filter i; train fresh \theta_{-i} on G \setminus i:
+
+\Delta_i^{\text{retrain}} = \min_{\theta} J\!\left(\theta, \Phi_{G \setminus i}\right) - J\!\left(\theta^\star, \Phi_G\right).
+
+\Delta_i^{\text{zero}} is primary; \Delta_i^{\text{retrain}} is secondary. Both computed on \mathcal{D}_{\text{sel}}, disjoint from train, validation, and test sets.
+
+2.6 Two distillation operators
+
+Definition 4 (Supervised distillation). Given threshold \varepsilon > 0:
+
+G^{\text{sup}} = \big( (f_i,b_i,\tau_i) \big)_{i \,:\, \Delta_i^{\text{zero}} \,>\, \varepsilon}.
+
+Definition 5 (Perceptual distillation). Given target size m', with d the log-space Euclidean metric:
+
+G^{\text{per}} = \arg\max_{I \subseteq \{1,\dots,m\}, \, |I|=m'} \; \min_{\substack{i,j \in I \\ i \neq j}} d\big((f_i,b_i,\tau_i), (f_j,b_j,\tau_j)\big).
+
+This is the max-min dispersion problem. The greedy farthest-first traversal provides a performance guarantee of two when distances satisfy the triangle inequality, and obtaining a guarantee of less than two is NP-hard. The 2-approximation is the best possible in general metric spaces unless P = NP. No (1-1/e) guarantee applies to the max-min objective; that guarantee belongs to a different problem class.
+
+When distillation reduces the active filter count, the filter bank retains m channels, and inactive slots are set to zero in \Phi_G to preserve input dimension across all groups.
+
+2.7 Transmission and variation
+
+Multiplicative mutation:
+
+\mathcal{V}_\sigma(G) = \big( (f_i e^{\eta_i}, b_i e^{\beta_i}, \tau_i e^{\gamma_i}) \big)_{i=1}^{m},
+\qquad
+\eta_i, \beta_i, \gamma_i \sim \mathcal{N}(0,\sigma^2).
+
+Offspring genome: G_{t+1} = \mathcal{V}_\sigma(\Pi(G_t)), where \Pi is the distillation operator and \sigma is fixed across conditions.
+
+2.8 Organizational control P\text{-}S
+
+Definition 6 (Organizational permutation). Given G = ((f_i,b_i,\tau_i))_{i=1}^m and a random permutation \pi:
+
+G^{\text{P-S}} = \big( (f_{\pi(i)}, b_{\pi(i)}, \tau_{\pi(i)}) \big)_{i=1}^{m}.
+
+Proposition 1. The multisets \{f_i\}, \{b_i\}, \{\tau_i\} are invariant under G \mapsto G^{\text{P-S}}; hence all marginal distributions are preserved exactly. A permutation reorders the index set, and multisets are invariant under reindexing. \square
+
+Functional interpretation and non-triviality condition. The organization of G is the sequential assignment of triples to positions 1,\dots,m. This assignment may encode relational structure such as frequency progression or frequency–bandwidth coupling. G^{\text{P-S}} breaks this assignment while preserving all marginals.
+
+Standard RNNs are order-sensitive by default; permutation invariance requires explicit regularization or architectural constraint. An i.i.d. random W_{zh} trained with Adam is exchangeable under channel permutation, so P\text{-}S is null by construction unless the controller has frequency-axis structure. Correction: The controller must be architecturally order-sensitive. We enforce this by replacing the flat input layer with a one-dimensional convolution along the channel axis:
+
+z_t^{\text{conv}} = \operatorname{ReLU}(W_{\text{conv}} * z_t + b_{\text{conv}}),
+
+where W_{\text{conv}} is a fixed random 1-D convolutional kernel of width w (e.g., w = 5). This ensures that adjacent channels are coupled and that channel order matters. The test of non-triviality is distributional: the learning-speed distribution of P\text{-}S must differ from that of P_{\text{Per}}. A single fixed-\theta output comparison is insufficient because it tests one instantiation, not the distribution induced by training.
+
+---
+
+3. Architecture
+
+3.1 Signal generator
+
+The spectral composition of each environment is specified as follows:
+
+\mathcal{E}_{\text{base}}:
+
+· A: energy in [20,50] Hz, plus f_\star = 100 Hz.
+· B: energy in [200,500] Hz, plus f_\star = 100 Hz.
+· \varnothing: noise only.
+
+\mathcal{E}_{\text{dist}}: same structure as \mathcal{E}_{\text{base}}, with shifted frequencies, amplitudes, and noise realizations.
+
+\mathcal{E}_{\text{sem}}:
+
+· A: energy in [20,50] Hz, without f_\star.
+· B: energy in [200,500] Hz, without f_\star.
+· C: f_\star = 100 Hz alone predicts C.
+
+In \mathcal{E}_{\text{base}} and \mathcal{E}_{\text{dist}}, f_\star is present in both A and B and is non-discriminative. In \mathcal{E}_{\text{sem}}, f_\star is the sole predictor of C. This resolves the inconsistency between the environment table and the signal parameters: A and B are not unchanged in \mathcal{E}_{\text{sem}} with respect to f_\star; they lose it. The semantic shift is that the same physical feature (f_\star) acquires new predictive meaning (C rather than nothing).
+
+3.2 Filter bank layer
+
+· Gammatone filters of order n=4.
+· m = 32 channels, log-spaced in [20,1000] Hz.
+· b_i = 1.019 \, \operatorname{ERB}(f_i).
+· \tau_i = k/f_i with k = 3.
+· Envelope via leaky integrator.
+· Inactive slots zeroed after distillation.
+
+3.3 Controller
+
+· Hidden dimension d_h = 64, input dimension m = 32, output dimension |\mathcal{Y}| = 4.
+· Input layer: 1-D convolution along channel axis with fixed random kernel W_{\text{conv}} of width w = 5.
+· Order sensitivity is architectural, not incidental.
+
+3.4 Intergenerational loop with corrected data handling
+
+1. Generation 0: initialize G_0, train \theta_0 on \mathcal{E}_{\text{base}}.
+2. For t = 1,2,\dots,N_{\text{gen}}:
+   · (a) Sample \mathcal{D}_{\text{sel}} from the parent’s environment \mathcal{E}_{t-1}, not the current environment \mathcal{E}_t. This eliminates the generational data leakage that would otherwise allow distillation to see post-shift data in the first generation of Phase 3.
+   · (b) Compute \Delta_i for all i on \mathcal{D}_{\text{sel}} using \theta_{t-1}.
+   · (c) G_t \leftarrow \Pi(G_{t-1}) according to group.
+   · (d) G_t \leftarrow \mathcal{V}_\sigma(G_t).
+   · (e) Reset \theta \leftarrow random init for all groups except L\text{-}\theta and L\text{-}G\theta.
+   · (f) Train \theta_t on \mathcal{D}_{\text{train}} \sim \mathcal{E}_t with budget B.
+   · (g) Evaluate \theta_t on \mathcal{D}_{\text{test}} \sim \mathcal{E}_t.
+3. Report \{J_t\}.
+
+Parental selection. Single-parent transmission: the best individual of the previous generation. Fixed across conditions.
+
+---
+
+4. Experimental Design
+
+4.1 Groups
+
+Group Inherited perceptual structure Inherited controller Purpose
+D None (random) No Baseline
+L\text{-}\theta Fixed shared genome Yes Lamarckian controller inheritance only
+L\text{-}G\theta Inherited genome Yes Lamarckian controller and genome inheritance
+P_{\text{Sup}} Supervised distillation No Utility-based inheritance
+P_{\text{Per}} Perceptual distillation No Diversity-based inheritance
+P_R Random subset, size m' No Dimensionality-reduction control
+P_S Permuted organization No Organizational-structure control
+
+All groups use identical m, identical budgets B, identical controller architectures, and identical random seeds. Active filter capacity is equalized: group D uses m' = 16 active filters (not 32), matching the distillation target size of the P groups.
+
+4.2 Environments and transitions
+
+Phase Training environment Test environment
+Phase 1 \mathcal{E}_{\text{base}} \mathcal{E}_{\text{base}}
+Phase 2 \mathcal{E}_{\text{dist}} \mathcal{E}_{\text{dist}}
+Phase 3 \mathcal{E}_{\text{sem}} \mathcal{E}_{\text{sem}}
+
+Phase 3 is the semantic-shift test: the inherited f_\star filter becomes informative only here.
+
+4.3 Metrics
+
+Primary metric. N^\star_{85}: number of training episodes required to reach 85\% balanced accuracy on \mathcal{E}_{\text{sem}}.
+
+Secondary metrics.
+
+· Pre-learning accuracy on \mathcal{E}_{\text{sem}} (untrained controller).
+· Generalization gap: |\text{acc}_{\mathcal{E}_{\text{base}}} - \text{acc}_{\mathcal{E}_{\text{dist}}}|.
+· Prototype stability: variance of inherited f_i across generations.
+· Confusion matrix on (A, B, C, \varnothing).
+
+4.4 Oracle and anti-oracle brackets
+
+To interpret the magnitude of any inheritance effect, include two additional conditions:
+
+· Oracle: genome containing a single filter at f_\star = 100 Hz plus noise-matched filters.
+· Anti-oracle: genome with all filters placed in the noise-only band, containing no filter near f_\star.
+
+These bracket the best and worst possible perceptual starting points and contextualize the performance of P_{\text{Per}} and P_{\text{Sup}}.
+
+4.5 Manipulation checks
+
+1. Spectral separability: Verify that the ERB-overlap between the f_\star filter and all filters in [20,50] Hz is below \rho_{\max} = 0.3.
+2. G^{\text{per}} retains f_\star: After Phase 1 perceptual distillation, confirm that at least one filter in G^{\text{per}} has center frequency within \pm 10\% of f_\star. If not, the diversity criterion is not preserving the semantically relevant filter, and the interpretation of P_{\text{Per}} is undermined.
+3. Order sensitivity: Verify that the learning-speed distribution of P\text{-}S differs from that of P_{\text{Per}} via a Kolmogorov–Smirnov test on N^\star_{85} across seeds.
+
+4.6 Falsification criteria
+
+Favorable outcome. P_{\text{Per}} significantly reduces N^\star_{85} versus D, P_R, and P_S after correction, while matching D on \mathcal{E}_{\text{base}}.
+
+Unfavorable outcome. P_{\text{Per}} is indistinguishable from D, P_R, or P_S; or its advantage disappears when m', B, and controller capacity are equalized.
+
+Ambiguous outcome. P_{\text{Per}} accelerates learning on \mathcal{E}_{\text{dist}} but not on \mathcal{E}_{\text{sem}}. This indicates local adaptation without reinterpretation.
+
+Interpretation of P\text{-}S. If P\text{-}S \approx P_{\text{Per}}, organization is not functionally relevant; marginals suffice. If P\text{-}S < P_{\text{Per}}, organization matters.
+
+Interpretation of P_{\text{Sup}} vs P_{\text{Per}}. In \mathcal{E}_{\text{sem}}, P_{\text{Sup}} is expected to lose the f_\star filter during Phase 1 distillation because f_\star is not discriminative for A vs B. P_{\text{Per}} is expected to retain it. If P_{\text{Per}} outperforms P_{\text{Sup}} on Phase 3, this is direct evidence for the tension between present utility and future reusability.
+
+---
+
+5. Statistical Analysis
+
+5.1 Primary comparison and correction
+
+Pre-registered primary comparison: P_{\text{Per}} vs D on N^\star_{85} in Phase 3. Five pairwise comparisons with Holm correction (not Bonferroni): Holm is uniformly more powerful and controls family-wise error without the unnecessary conservatism of Bonferroni. Corrected significance threshold for the primary comparison is \alpha = 0.05/5 = 0.01.
+
+5.2 Power analysis
+
+With n = 10 paired observations, the Wilcoxon signed-rank test at \alpha = 0.01 and r_{rb} = 0.5 has approximately 10\% power, not 80\%. To achieve 80\% power for r_{rb} = 0.5, approximately n \approx 55 seeds are required. To achieve 80\% power for r_{rb} = 0.9, n = 10 is sufficient. Pre-registered seed count: n = 55 per group per phase. If computational constraints require n = 10, the study is explicitly underpowered for moderate effects and must be reported as such.
+
+5.3 Censoring of N^\star_{85}
+
+N^\star_{85} is right-censored: some runs may not reach 85\% accuracy within the budget B. Treat N^\star_{85} as a censored survival time and use a log-rank test or a Cox proportional hazards model with group as the covariate. Report the censoring rate per group. If censoring exceeds 20\%, the primary analysis is the survival model, not the Wilcoxon test.
+
+5.4 Effect size
+
+Matched-pairs rank-biserial correlation r_{rb}. Interpretation: |r_{rb}| \approx 0.1 (small), \approx 0.3 (moderate), \ge 0.5 (large).
+
+---
+
+6. Limitations and Open Questions
+
+1. Label availability. Both distillation operators assume labeled data. Unsupervised alternatives (predictive error, information gain) remain to be defined.
+2. Order sensitivity. The P\text{-}S control is non-trivial only if the controller is architecturally order-sensitive. The 1-D convolutional input layer ensures this, but the distributional test in Section 4.5 must confirm it empirically.
+3. Novelty status. No systematic review has been completed. The claim of novelty is provisional.
+4. Semantic shift as a design choice. The specific shift (f_\star predicts C) is one of many. Results should be replicated with at least two alternative shifts.
+5. Relation to existing receptive-field evolution. AISE-0.3 should be compared against a direct co-evolution baseline in which filters and controllers are evolved jointly, to verify that distillation adds value beyond direct evolution.
+6. Baldwinian positioning. AISE transmits perceptual structure, not learning rules. The relation to Baldwinian meta-learning is one of complementary mechanisms, not competition.
+
+---
+
+7. Conclusion
+
+AISE-0.3 corrects the mathematical ambiguities of the previous specification and separates two failure modes: present utility (supervised distillation) and future reusability (perceptual distillation). The organizational control P\text{-}S is well posed and preserves all marginal distributions. The experimental design eliminates generational data leakage, equalizes active filter capacity, enforces architectural order sensitivity, and pre-registers a primary comparison with a correctly powered statistical plan. The central scientific question remains:
+
+Can a sensory representation selected during one generation retain features useful for a future task, even when the predictive meaning of those features is not preserved and the controller must be relearned?
+
+AISE-0.3 is built to answer this question with a design that produces an informative result whether the hypothesis is confirmed or refuted.
+
+Appendices
+
+Appendix A — Mathematical Derivations
+
+A.1 Gammatone Filter Bank: Bandwidth and Temporal Integration
+
+The gammatone impulse response of order  n  is
+
+h_{f,b}(t) = t^{\,n-1} e^{-2\pi b t} \cos(2\pi f t + \varphi),
+\qquad t \ge 0.
+
+The bandwidth parameter is related to the equivalent rectangular bandwidth (ERB) by
+
+b = 1.019 \, \operatorname{ERB}(f),
+\qquad
+\operatorname{ERB}(f) = 24.7(0.00437 f + 1)
+= 24.7 + 0.108 f,
+
+where the factor  1.019  accounts for the difference between the gammatone bandwidth and the ERB scale. The temporal-integration constant is initialized to span several carrier periods:
+
+\tau_i = \frac{k}{f_i},
+\qquad k \ge 3.
+
+This ensures that the integrator cutoff  1/\tau_i  is well below the carrier frequency  f_i , so that ripple at  2f_i  is attenuated by at least a factor of  k/(2\pi) . The ERB floors near  25  Hz, so filters in  [20,50]  Hz and a filter at  f_\star = 100  Hz overlap heavily. Spectral separability is verified explicitly in Appendix D.5.
+
+A.2 Leaky Integrator Envelope Detector
+
+The envelope  z_{i,t}  is computed by the first-order recursion
+
+z_{i,t} = \alpha_i z_{i,t-1} + (1-\alpha_i) |u_{i,t}|,
+\qquad
+\alpha_i = \exp\!\left(-\frac{\Delta t}{\tau_i}\right),
+
+with  \Delta t = 1/f_s  and  z_{i,0}=0 . This is a standard leaky integrator with unity DC gain. For a constant input  |u_{i,t}| = c , the steady-state response is
+
+z_{i,\infty} = \alpha_i z_{i,\infty} + (1-\alpha_i) c
+\quad\Longrightarrow\quad
+z_{i,\infty} = c.
+
+The system is stable for  0 < \alpha_i < 1 , which holds for all  \tau_i > 0  and  \Delta t > 0 . The effective integration window is  \tau_{\text{eff}} = \tau_i .
+
+A.3 Zero-Ablation: Dimension Preservation
+
+For a trained controller  \theta^\star  with input dimension  m , the zero-ablation operator sets  z_{i,t} \leftarrow 0  for all  t  while leaving all other channels unchanged:
+
+\Phi_G^{(i \to 0)} = (z_{1,t}, \dots, z_{i-1,t}, 0, z_{i+1,t}, \dots, z_{m,t})^\top.
+
+The input dimension remains  m , so the controller’s weight matrices  W_{zh} \in \mathbb{R}^{d_h \times m}  are unchanged. This isolates the contribution of channel  i  without requiring retraining.
+
+A.4 Max-Min Dispersion: Greedy Farthest-First Traversal
+
+The perceptual distillation problem is
+
+G^{\text{per}} = \arg\max_{I \subseteq \{1,\dots,m\}, \, |I|=m'} \min_{\substack{i,j \in I \\ i \neq j}} d\big((f_i,b_i,\tau_i), (f_j,b_j,\tau_j)\big).
+
+This is the max-min dispersion problem (remote-edge problem). The greedy farthest-first traversal proceeds as follows:
+
+1. Start with an arbitrary point  i_0 \in \{1,\dots,m\} .
+2. For  k = 2,\dots,m' , select
+
+i_k = \arg\max_{i \notin \{i_0,\dots,i_{k-1}\}} \min_{j \in \{i_0,\dots,i_{k-1}\}} d\big((f_i,b_i,\tau_i), (f_j,b_j,\tau_j)\big).
+
+Ravi, Rosenkrantz, and Tayi (1994) show that when distances satisfy the triangle inequality, this heuristic provides a performance guarantee of  2 , and obtaining a guarantee of less than  2  is NP-hard. The  2 -approximation is the best possible in general metric spaces unless  P = NP . No  (1-1/e)  guarantee applies to the max-min objective; that guarantee belongs to a different problem class (sum-min diversity with LP-based methods). The initialization in Algorithm 2 uses
+
+i_0 = \arg\max_i \sum_{j \neq i} d\big((f_i,b_i,\tau_i), (f_j,b_j,\tau_j)\big),
+
+which selects the most isolated point. The  2 -approximation guarantee holds for any initial point, so this initialization is valid, but it is outlier-seeking rather than densest-point-seeking.
+
+---
+
+Appendix B — Proofs and Lemmas
+
+B.1 Proof of Proposition 1 (Marginal Preservation Under Permutation)
+
+Proposition. Let  G = ((f_i,b_i,\tau_i))_{i=1}^m  be an ordered genome and let  \pi  be a permutation of  \{1,\dots,m\} . Define
+
+G^{\text{P-S}} = ((f_{\pi(i)}, b_{\pi(i)}, \tau_{\pi(i)}))_{i=1}^m.
+
+Then the multisets  \{f_i\}_{i=1}^m ,  \{b_i\}_{i=1}^m , and  \{\tau_i\}_{i=1}^m  are invariant under  G \mapsto G^{\text{P-S}} . Consequently, the marginal distributions of  f ,  b , and  \tau  are preserved exactly.
+
+Proof. A multiset is a pair  (S, \mu)  where  S  is a set and  \mu : S \to \mathbb{N}_{>0}  is a multiplicity function. The permutation  \pi  acts on the index set  \{1,\dots,m\}  by reindexing. For any value  v \in \mathbb{R}_{>0} ,
+
+\mu_{G^{\text{P-S}}}(v) = |\{ i : f_{\pi(i)} = v \}| = |\{ \pi(i) : f_{\pi(i)} = v \}| = |\{ j : f_j = v \}| = \mu_G(v),
+
+where the second equality follows because  \pi  is a bijection. The same argument applies to  b  and  \tau . Hence the multisets are invariant, and therefore all marginal distributions are preserved.  \square 
+
+B.2 Lemma: Order Sensitivity of Recurrent Controllers with 1-D Convolution
+
+Lemma. A recurrent network of the form
+
+z_t^{\text{conv}} = \operatorname{ReLU}(W_{\text{conv}} * z_t + b_{\text{conv}}),
+\qquad
+h_t = \tanh(W_{hh} h_{t-1} + W_{zh} z_t^{\text{conv}} + b_h),
+
+where  W_{\text{conv}}  is a fixed random 1-D convolutional kernel of width  w \ge 3 , is order-sensitive with respect to the input channels  z_{1,t},\dots,z_{m,t} .
+
+Proof. A 1-D convolution with a non-constant kernel  W_{\text{conv}}  does not commute with arbitrary permutations of the input channels. For a permutation matrix  P  that is not a circular shift,  W_{\text{conv}} * (P z) \neq P (W_{\text{conv}} * z)  in general. Consequently, the hidden-state update depends on the order of the input channels, and the outputs  \hat{y}_t  differ. Therefore the network is order-sensitive.  \square 
+
+Remark. An i.i.d. random  W_{zh}  trained with Adam is exchangeable under channel permutation, so the organizational control  P\text{-}S  would be null by construction without the convolutional input layer. The 1-D convolution is the architectural feature that makes  P\text{-}S  non-trivial.
+
+B.3 Lemma: Stability of the Multiplicative Mutation Operator
+
+Lemma. Let  G = ((f_i,b_i,\tau_i))_{i=1}^m  and let  \mathcal{V}_\sigma(G) = ((f_i e^{\eta_i}, b_i e^{\beta_i}, \tau_i e^{\gamma_i}))_{i=1}^m  with  \eta_i,\beta_i,\gamma_i \sim \mathcal{N}(0,\sigma^2) . Then the expected log-parameters are preserved:
+
+\mathbb{E}[\log f_i'] = \log f_i,
+\qquad
+\mathbb{E}[\log b_i'] = \log b_i,
+\qquad
+\mathbb{E}[\log \tau_i'] = \log \tau_i.
+
+Proof.  \log f_i' = \log f_i + \eta_i , and  \mathbb{E}[\eta_i] = 0 . The same holds for  b_i  and  \tau_i .  \square 
+
+---
+
+Appendix C — Implementation Details
+
+C.1 Signal Generation Parameters
+
+Parameter Value
+Sampling rate  f_s  4000 Hz
+Signal duration  T  500 ms (2000 samples)
+Base frequencies for  A  20–50 Hz (random per trial)
+Base frequencies for  B  200–500 Hz (random per trial)
+Shared component  f_\star  100 Hz
+Noise standard deviation  \sigma  0.1
+Event onset  t_{\text{evt}}  Uniform in  [100,400]  ms
+Pulse shape  g  Gaussian with  \sigma_k = 20  ms
+
+Environment definitions.
+
+·  \mathcal{E}_{\text{base}} :  A  has energy in  [20,50]  Hz plus  f_\star ;  B  has energy in  [200,500]  Hz plus  f_\star ;  \varnothing  is noise only.
+·  \mathcal{E}_{\text{dist}} : same structure as  \mathcal{E}_{\text{base}} , with shifted frequencies, amplitudes, and noise realizations.
+·  \mathcal{E}_{\text{sem}} :  A  has energy in  [20,50]  Hz without  f_\star ;  B  has energy in  [200,500]  Hz without  f_\star ;  C  is  f_\star = 100  Hz alone.
+
+In  \mathcal{E}_{\text{base}}  and  \mathcal{E}_{\text{dist}} ,  f_\star  is present in both  A  and  B  and is non-discriminative. In  \mathcal{E}_{\text{sem}} ,  f_\star  is the sole predictor of  C . This resolves the inconsistency:  A  and  B  are not unchanged in  \mathcal{E}_{\text{sem}}  with respect to  f_\star ; they lose it.
+
+C.2 Filter Bank Implementation
+
+· Order  n = 4 .
+· Number of filters  m = 32 .
+· Center frequencies  f_i  log-spaced in  [20,1000]  Hz.
+· Bandwidth  b_i = 1.019 \cdot \operatorname{ERB}(f_i) .
+· Temporal-integration constant  \tau_i = k/f_i  with  k = 3 .
+· Envelope via the leaky integrator in Appendix A.2.
+· Inactive slots (after distillation) are set to zero in  \Phi_G .
+
+C.3 Controller Architecture
+
+· Hidden dimension  d_h = 64 .
+· Input dimension  m = 32 .
+· Output dimension  |\mathcal{Y}| = 4 .
+· Input layer: 1-D convolution along channel axis with fixed random kernel  W_{\text{conv}}  of width  w = 5 .
+·  W_{zh} \in \mathbb{R}^{64 \times 32}  initialized from  \mathcal{U}(-1/\sqrt{32}, 1/\sqrt{32}) .
+
+C.4 Training Protocol
+
+· Optimizer: Adam with learning rate  10^{-3} .
+· Batch size: 32.
+· Training budget  B : 5000 episodes.
+· Early stopping: validation loss with patience 500.
+· Selection set  \mathcal{D}_{\text{sel}} : 500 fresh samples from the parent’s environment (not the current environment), to eliminate generational data leakage.
+· Test set  \mathcal{D}_{\text{test}} : 1000 samples from the current environment.
+
+C.5 Distillation Parameters
+
+· Supervised distillation threshold  \varepsilon = 0.05 .
+· Perceptual distillation target size  m' = 16 .
+· Mutation standard deviation  \sigma = 0.1 .
+
+---
+
+Appendix D — Experimental Protocols
+
+D.1 Group Definitions
+
+Group Inherited perceptual structure Inherited controller
+ D  None (random genome) No
+ L\text{-}\theta  Fixed shared genome Yes
+ L\text{-}G\theta  Inherited genome Yes
+ P_{\text{Sup}}  Supervised distillation No
+ P_{\text{Per}}  Perceptual distillation No
+ P_R  Random subset of size  m'  No
+ P_S  Permuted organization No
+
+All groups use identical  m , identical budgets  B , identical controller architectures, and identical random seeds. Active filter capacity is equalized: group  D  uses  m' = 16  active filters, matching the distillation target size of the  P  groups.
+
+D.2 Phase Structure
+
+Phase 1 — Base environment. All groups train on  \mathcal{E}_{\text{base}} . Perceptual-inheritance groups distill and transmit  G . Lamarckian groups transmit  \theta .
+
+Phase 2 — Distribution shift. All groups continue from Phase 1. Training and testing on  \mathcal{E}_{\text{dist}} .
+
+Phase 3 — Semantic shift. All groups continue from Phase 2. Training and testing on  \mathcal{E}_{\text{sem}} . The  f_\star  filter becomes informative only here.
+
+D.3 Generation Loop (Detailed)
+
+For  t = 1,\dots,N_{\text{gen}} :
+
+1. Sample  \mathcal{D}_{\text{sel}} \sim \mathcal{E}_{t-1}  (parent’s environment).
+2. Compute  \Delta_i^{\text{zero}}  for all  i  on  \mathcal{D}_{\text{sel}}  using  \theta_{t-1} .
+3. Distill:  G_t \leftarrow \Pi(G_{t-1})  according to group.
+4. Mutate:  G_t \leftarrow \mathcal{V}_\sigma(G_t) .
+5. Reset  \theta : random init for all groups except  L\text{-}\theta  and  L\text{-}G\theta .
+6. Train  \theta_t  on  \mathcal{D}_{\text{train}} \sim \mathcal{E}_t  with budget  B .
+7. Evaluate  \theta_t  on  \mathcal{D}_{\text{test}} \sim \mathcal{E}_t .
+8. Record  J_t .
+
+D.4 Oracle and Anti-Oracle Brackets
+
+· Oracle: genome containing a single filter at  f_\star = 100  Hz plus noise-matched filters.
+· Anti-oracle: genome with all filters placed in the noise-only band, containing no filter near  f_\star .
+
+These bracket the best and worst possible perceptual starting points.
+
+D.5 Manipulation Checks
+
+1. Spectral separability: Verify that the ERB-overlap between the  f_\star  filter and all filters in  [20,50]  Hz is below  \rho_{\max} = 0.3 . If not, adjust  f_\star  or  m .
+2.  G^{\text{per}}  retains  f_\star : After Phase 1 perceptual distillation, confirm that at least one filter in  G^{\text{per}}  has center frequency within  \pm 10\%  of  f_\star . If not, the diversity criterion is not preserving the semantically relevant filter.
+3. Order sensitivity: Verify that the learning-speed distribution of  P\text{-}S  differs from that of  P_{\text{Per}}  via a Kolmogorov–Smirnov test on  N^\star_{85}  across seeds.
+
+D.6 Statistical Plan
+
+· Primary comparison:  P_{\text{Per}}  vs  D  on  N^\star_{85}  in Phase 3.
+· Correction: Holm correction (not Bonferroni) for five pairwise comparisons.
+· Power analysis: With  n = 10  paired observations, the Wilcoxon signed-rank test at  \alpha = 0.01  and  r_{rb} = 0.5  has approximately  10\%  power, not  80\% . To achieve  80\%  power for  r_{rb} = 0.5 , approximately  n \approx 55  seeds are required. Pre-registered seed count:  n = 55  per group per phase. If computational constraints require  n = 10 , the study is explicitly underpowered for moderate effects.
+· Censoring:  N^\star_{85}  is right-censored. Use a log-rank test or Cox proportional hazards model. Report censoring rate per group. If censoring exceeds  20\% , the primary analysis is the survival model.
+· Effect size: Matched-pairs rank-biserial correlation  r_{rb} .
+
+---
+
+Appendix E — Statistical Analysis Plan
+
+E.1 Primary Comparison
+
+The pre-registered primary comparison is  P_{\text{Per}}  vs  D  on  N^\star_{85}  in Phase 3.  N^\star_{85}  is the number of training episodes required to reach  85\%  balanced accuracy on  \mathcal{E}_{\text{sem}} .
+
+E.2 Secondary Comparisons
+
+Five pairwise comparisons with Holm correction:
+
+1.  P_{\text{Per}}  vs  D 
+2.  P_{\text{Per}}  vs  P_{\text{Sup}} 
+3.  P_{\text{Per}}  vs  P_R 
+4.  P_{\text{Per}}  vs  P_S 
+5.  P_{\text{Sup}}  vs  D 
+
+Holm is uniformly more powerful than Bonferroni and controls family-wise error without unnecessary conservatism.
+
+E.3 Power Analysis
+
+With  n = 10  paired observations, the Wilcoxon signed-rank test at  \alpha = 0.01  and  r_{rb} = 0.5  has approximately  10\%  power. To achieve  80\%  power for  r_{rb} = 0.5 , approximately  n \approx 55  seeds are required. To achieve  80\%  power for  r_{rb} = 0.9 ,  n = 10  is sufficient.
+
+E.4 Censoring
+
+ N^\star_{85}  is right-censored: some runs may not reach  85\%  accuracy within budget  B . Treat  N^\star_{85}  as a censored survival time and use a log-rank test or Cox proportional hazards model with group as the covariate. Report the censoring rate per group. If censoring exceeds  20\% , the primary analysis is the survival model, not the Wilcoxon test.
+
+E.5 Effect Size
+
+Matched-pairs rank-biserial correlation  r_{rb} . Interpretation:  |r_{rb}| \approx 0.1  (small),  \approx 0.3  (moderate),  \ge 0.5  (large).
+
+
+Bibliography
+
+1. Bongard, J. C. (2011). Morphological change in machines accelerates the evolution of robust behavior. Proceedings of the National Academy of Sciences, 108(4), 1234–1239. https://doi.org/10.1073/pnas.1015390108 
+2. de Bruin, K. E., Glette, K., & Ellefsen, K. O. (2026). Lamarckian inheritance in dynamic environments: How key variables affect evolutionary dynamics. In Proceedings of the ALIFE 2026 Conference (Paper No. ISAL.a.961, p. 35). MIT Press. https://doi.org/10.1162/ISAL.a.961 
+3. Floreano, D., Suzuki, M., & Mattiussi, C. (2005). Active vision and receptive field development in evolutionary robots. Evolutionary Computation, 13(4), 527–544. https://doi.org/10.1162/106365605774666912 
+4. Harada, K., & Iba, H. (2024). Lamarckian co-design of soft robots via transfer learning. In Proceedings of the Genetic and Evolutionary Computation Conference (GECCO ’24) (pp. 1–9). ACM. https://doi.org/10.1145/3638529.3654180 
+5. Mertan, A., & Cheney, N. (2024). Towards multi-morphology controllers with diversity and knowledge distillation. In Proceedings of the Genetic and Evolutionary Computation Conference (GECCO ’24) (pp. 367–376). ACM. https://doi.org/10.1145/3638529.3654013 
+6. Nolfi, S., & Floreano, D. (2000). Evolutionary robotics: The biology, intelligence, and technology of self-organizing machines. MIT Press. 
+7. Peniak, M., Marocco, D., & Cangelosi, A. (2009). Co-evolving controller and sensing abilities in a simulated Mars Rover explorer. In Proceedings of the IEEE Congress on Evolutionary Computation (CEC 2009) (pp. 2772–2779). IEEE. https://doi.org/10.1109/CEC.2009.4988293 
+8. Ravi, S. S., Rosenkrantz, D. J., & Tayi, G. K. (1994). Heuristic and special case algorithms for dispersion problems. Operations Research, 42(2), 299–310. https://doi.org/10.1287/opre.42.2.299 
+9. Rohde, M., & Di Paolo, E. (2006). The problem with semantic drift: A close inspection of dedicated learning mechanisms with evolutionary robotics. In Proceedings of the 10th International Conference on the Simulation and Synthesis of Living Systems (pp. 1–8). MIT Press. 
+10. Rusu, A. A., Colmenarejo, S. G., Gulcehre, C., Desjardins, G., Kirkpatrick, J., Pascanu, R., Mnih, V., Kavukcuoglu, K., & Hadsell, R. (2016). Policy distillation. In International Conference on Learning Representations (ICLR). 
+11. Stanley, K. O., & Miikkulainen, R. (2002). Evolving neural networks through augmenting topologies. Evolutionary Computation, 10(2), 99–127. https://doi.org/10.1162/106365602320169811 
+12. Sugiura, K., Shiose, T., Kawakami, H., & Katai, O. (2004). Co-evolution of sensors and controllers. IEEJ Transactions on Electronics, Information and Systems, 124(10), 1938–1943. https://doi.org/10.1541/ieejeiss.124.1938 
