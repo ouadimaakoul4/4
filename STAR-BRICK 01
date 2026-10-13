@@ -1,0 +1,695 @@
+STAR-BRICK 01, Version 1.0: 
+
+A Theorem-Driven Theory of Energy-Aware Scheduling for Space-Based Computing
+
+ouadi Maakoul and SI TEAM 
+
+Abstract
+
+This work develops a theorem-driven theory of energy-aware scheduling for a distributed computing infrastructure operating under coupled energy, thermal, availability, and communication constraints. The system is modeled as a discrete-time transition system x_{t+1} = f(x_t, a_t, w_t) over a state comprising stored energy, temperature, computing capacity, node availability, communication topology, and a pending task queue, with actions restricted to an admissible set and disturbances confined to a compact set. A closed safe set \mathcal{S} encodes every hard constraint: storage bounds, instantaneous power limits, thermal limits, resource limits, and the prohibition of assigning work to unavailable nodes. Because the controller observes only an estimate \hat{x}_t satisfying a declared error bound \|x_t - \hat{x}_t\| \le \varepsilon, safety is enforced through a one-step reachable set \mathcal{R}(\hat{x}, a) and a deterministic safety filter \Phi(\hat{x}) = \{a \in \mathcal{A}(\hat{x}) : \mathcal{R}(\hat{x}, a) \subseteq \mathcal{S}\}.
+
+The first theorem is proved in full: if the initial state lies in \mathcal{S}, the estimation-error bound holds at every step, and the controller selects an action from \Phi(\hat{x}_t) at every step, then the true state remains in \mathcal{S} for all time. The theorem is explicitly conditional. It is soundness relative to a stated model, not a claim of physical safety. It assumes recursive feasibility, and it asserts no liveness, deadline satisfaction, throughput, or optimality property. Recursive feasibility is then shown to be a nontrivial condition: an explicit construction demonstrates that \Phi(\hat{x}) can be empty, so no filter can guarantee safety from every safe state under every disturbance sequence. A viability margin \mathcal{S}^\circ \subseteq \mathcal{S} is introduced, and its existence is proved for the energy subsystem under bounded generation, bounded load, and bounded estimation error, with generalization to the coupled case by intersection of subsystem margins, including discretization error of the thermal map as an explicit disturbance term enclosed by interval arithmetic.
+
+The architecture follows the proof structure. The safety filter is the sole component inside the trust boundary; it is deterministic, total, and sound with respect to the model. The estimator, a fixed-priority baseline, a constrained optimizer, and an optional large language model (LLM) planner all lie outside the trust boundary and can only propose actions that the filter accepts or rejects. Rejected proposals trigger a deterministic fallback that also passes through the filter; rejection of the fallback is logged as a feasibility failure rather than silently absorbed. The LLM interface is typed, schema-validated, and bounded by an inference budget, and its latency, cost, rejection rate, and fallback frequency are recorded as experimental quantities. The LLM carries no theoretical guarantee and no safety authority.
+
+Remaining claims are recorded in a theorem ledger and stated as obligations rather than results: energy-aware schedulability conditions for a restricted deterministic single-node model, with necessary and sufficient conditions proved to coincide for that class; an online performance bound derived under a named algorithm, a named comparator, and a named uncertainty model, with the coupled case stated as an open obligation if the bound cannot be obtained; and a fault-tolerance guarantee beginning with independent per-step failures and extended to correlated failures through an explicit common-cause Markov model. The methodology pairs analytic proof with controlled paired simulation under identical traces and seeds, with primary outcomes specified in advance and negative results reported as contributions. The work claims a proved conditional safety theorem, a proved recursive-feasibility caveat, a proved viability-margin construction for restricted cases, and a proof-obligation structure for the remainder. It does not claim physical safety beyond the model, does not claim that LLM assistance improves performance, and does not claim flight readiness.
+
+1. Problem Statement and Scope
+
+This work develops a mathematical theory of energy-aware scheduling for a distributed computing infrastructure operating under coupled energy, thermal, availability, and communication constraints. The setting is a network of N computing nodes, each with time-varying generation, finite storage, thermal dynamics, and intermittent faults, serving a mixed-criticality workload with release times, deadlines, and resource requirements. The central question is not whether a simulation can be built, but which scheduling policies can be proved to preserve hard physical constraints, and what performance can be guaranteed when future generation is unknown.
+
+The dissertation is organized around a theorem ledger. Each mathematical claim is assigned a proof status, and no claim is cited as a result before its proof is complete. The first theorem is proved in full. The remaining theorems are stated as explicit proof obligations, with their hypotheses, comparators, and uncertainty models named. The optional large language model (LLM) component is a proposal generator evaluated empirically; it carries no theoretical guarantee and no safety authority.
+
+2. Mathematical Preliminaries
+
+2.1 State, Action, Disturbance
+
+Let X \subseteq \mathbb{R}^n be the state space and U the action space. At time t, the system state is
+
+x_t = \bigl(B_t, T_t, C_t, A_t, \mathcal{N}_t, Q_t\bigr),
+
+where B_t \in \mathbb{R}^N is stored energy, T_t \in \mathbb{R}^N is temperature, C_t \in \mathbb{R}^N is available computing capacity, A_t \in \{0,1\}^N is operational availability, \mathcal{N}_t is the communication graph, and Q_t is the pending task queue. The admissible action set \mathcal{A}(x_t) \subseteq U encodes the assignments of pending tasks to available nodes at time t, subject to instantaneous power and resource limits. The disturbance w_t belongs to a compact set W \subseteq \mathbb{R}^m and represents generation forecast error, thermal-environment variation, and unmodeled loads. The transition map is
+
+f : X \times U \times W \to X, \qquad x_{t+1} = f(x_t, a_t, w_t),
+
+with a_t \in \mathcal{A}(x_t) and w_t \in W.
+
+2.2 Safe Set
+
+The safe set \mathcal{S} \subseteq X is closed and encodes every hard constraint. It is the intersection of the storage constraint
+
+\mathcal{S}_B = \bigl\{x : 0 \le B_i \le B_i^{\max} \ \forall i\bigr\},
+
+the instantaneous power constraint
+
+\mathcal{S}_P = \bigl\{x : P_i^{\mathrm{comp}} + P_i^{\mathrm{aux}} \le P_i^{\mathrm{gen}} + P_i^{\mathrm{dis}}, \ \forall i\bigr\},
+
+where P_i^{\mathrm{dis}} is the discharge rate permitted by storage, the thermal constraint
+
+\mathcal{S}_T = \bigl\{x : T_i \le T_i^{\max} \ \forall i\bigr\},
+
+the resource constraint
+
+\mathcal{S}_C = \bigl\{x : \text{assigned work} \le C_i \ \forall i\bigr\},
+
+and the availability constraint
+
+\mathcal{S}_A = \bigl\{x : A_i = 0 \Rightarrow \text{no work assigned to } i\bigr\}.
+
+Thus \mathcal{S} = \mathcal{S}_B \cap \mathcal{S}_P \cap \mathcal{S}_T \cap \mathcal{S}_C \cap \mathcal{S}_A. The scheduler's task is to keep the true state inside \mathcal{S} for all time, not merely on average.
+
+2.3 Estimation Error
+
+The controller does not observe x_t exactly. It observes an estimate \hat{x}_t satisfying the error bound
+
+\|x_t - \hat{x}_t\| \le \varepsilon
+
+for a fixed \varepsilon \ge 0. This bound is a modeling assumption, not a measured fact. Its validity must be argued separately for each estimation method. Where \varepsilon is unknown, the theorems below do not apply. The estimator lies outside the trust boundary; if the bound fails, the theorems lose their hypotheses and make no claim.
+
+2.4 Reachable Set and Safety Filter
+
+For a given estimate \hat{x} and action a, the one-step reachable set under the declared uncertainty is
+
+\mathcal{R}(\hat{x}, a) = \bigl\{ f(x, a, w) : x \in \mathcal{B}_\varepsilon(\hat{x}), \ w \in W \bigr\},
+
+where \mathcal{B}_\varepsilon(\hat{x}) is the closed ball of radius \varepsilon centered at \hat{x}. The safety filter is the set-valued map
+
+\Phi(\hat{x}) = \bigl\{ a \in \mathcal{A}(\hat{x}) : \mathcal{R}(\hat{x}, a) \subseteq \mathcal{S} \bigr\}.
+
+The filter accepts exactly those actions whose uncertainty-worst-case successor lies inside the safe set. It is deterministic, total, and depends only on \hat{x} and the model.
+
+3. Theorem 1: Soundness of the One-Step Safety Filter
+
+Theorem 1. Suppose x_0 \in \mathcal{S}. Suppose that for every t \ge 0 the estimate satisfies \|x_t - \hat{x}_t\| \le \varepsilon, and that the controller selects a_t \in \Phi(\hat{x}_t). Then x_t \in \mathcal{S} for all t \ge 0.
+
+Proof. By induction on t. For t = 0, the hypothesis gives x_0 \in \mathcal{S}. Suppose x_t \in \mathcal{S} and \|x_t - \hat{x}_t\| \le \varepsilon. Then x_t \in \mathcal{B}_\varepsilon(\hat{x}_t). Since a_t \in \Phi(\hat{x}_t), the definition of \Phi gives \mathcal{R}(\hat{x}_t, a_t) \subseteq \mathcal{S}. Since w_t \in W,
+
+x_{t+1} = f(x_t, a_t, w_t) \in \mathcal{R}(\hat{x}_t, a_t) \subseteq \mathcal{S}.
+
+The induction closes. \square
+
+Remark 1 (Conditionality). The theorem proves safety conditional on two hypotheses: the estimation-error bound holds at every step, and the filter is non-empty at every step. Neither hypothesis is derived. The first is a property of the estimator. The second is the recursive-feasibility property, and it can fail.
+
+Remark 2 (Relative soundness). Soundness is with respect to f, \mathcal{S}, and W. If the physical system deviates from f, or if \mathcal{S} omits a hazard, the theorem does not protect against it. Numerical rounding is enclosed by inflating W and \varepsilon, or by evaluating \mathcal{R} in interval arithmetic. Physical model error is addressed by model validation, not by the theorem.
+
+Remark 3 (No liveness, no optimality). The theorem asserts invariance of \mathcal{S}. It says nothing about task completion, deadline satisfaction, throughput, or energy efficiency.
+
+4. Recursive Feasibility and the Viability Margin
+
+The recursive-feasibility hypothesis of Theorem 1 is falsifiable. It is falsified by simple physical configurations.
+
+Proposition 1. There exist admissible model parameters and estimates \hat{x} for which \Phi(\hat{x}) = \emptyset.
+
+Proof (construction). Consider a single node with storage B, auxiliary load P_{\mathrm{aux}} > 0, zero generation P_{\mathrm{gen}} = 0, and no admissible computing load. The storage dynamics give
+
+B_{t+1} = B_t - \Delta t \, P_{\mathrm{aux}}
+
+for every admissible action. If the estimate satisfies \hat{B}_t < \varepsilon_B + \Delta t \, P_{\mathrm{aux}}, then every x \in \mathcal{B}_{\varepsilon_B}(\hat{x}_t) has B < \Delta t \, P_{\mathrm{aux}}, hence every successor has B_{t+1} < 0. No action keeps the successor inside \mathcal{S}. Therefore \Phi(\hat{x}_t) = \emptyset. \square
+
+The construction shows that no filter can guarantee safety from every safe state under every disturbance sequence. A viability margin is required: a subset \mathcal{S}^\circ \subseteq \mathcal{S} from which \Phi is provably non-empty for the declared disturbance set.
+
+Definition 1 (Viability margin). A set \mathcal{S}^\circ \subseteq \mathcal{S} is a viability margin for the model (f, \mathcal{S}, W, \varepsilon) if for every \hat{x} with \mathcal{B}_\varepsilon(\hat{x}) \cap \mathcal{S}^\circ \neq \emptyset, the filter satisfies \Phi(\hat{x}) \neq \emptyset, and every accepted successor lies in \mathcal{S}^\circ.
+
+Proposition 2 (Existence of a viability margin, energy-only case). Consider a single node with storage dynamics B_{t+1} = B_t + \Delta t (P_{\mathrm{gen}} - P_{\mathrm{comp}} - P_{\mathrm{aux}}), generation bounded by P_{\mathrm{gen}} \in [\underline{P}, \overline{P}], loads bounded by P_{\mathrm{comp}} + P_{\mathrm{aux}} \in [0, \overline{L}], and estimation error \varepsilon_B. If
+
+\overline{L} - \underline{P} > 0,
+
+define the margin
+
+\mathcal{S}^\circ_B = \bigl\{B : \varepsilon_B + \Delta t \, \overline{L} \le B \le B^{\max} - \varepsilon_B - \Delta t \, \overline{P}\bigr\}.
+
+Then \mathcal{S}^\circ_B is a viability margin for the energy subsystem.
+
+Proof. Let \hat{B} be an estimate with \mathcal{B}_{\varepsilon_B}(\hat{B}) \cap \mathcal{S}^\circ_B \neq \emptyset. Then \hat{B} \ge \varepsilon_B + \Delta t \overline{L} and \hat{B} \le B^{\max} - \varepsilon_B - \Delta t \overline{P}. Choose a with P_{\mathrm{comp}}(a) = 0. The reachable interval is
+
+\mathcal{R}_B(\hat{B}, a) = \bigl[\hat{B} - \varepsilon_B - \Delta t \overline{L}, \ \hat{B} + \varepsilon_B - \Delta t \underline{P}\bigr].
+
+The lower endpoint satisfies \hat{B} - \varepsilon_B - \Delta t \overline{L} \ge 0. The upper endpoint satisfies \hat{B} + \varepsilon_B - \Delta t \underline{P} \le B^{\max}. Hence \mathcal{R}_B(\hat{B}, a) \subseteq \mathcal{S}_B. Non-emptiness and invariance follow. \square
+
+The construction generalizes to the coupled case by intersecting margins for each subsystem, provided the coupling terms are included in the disturbance bounds. The thermal subsystem requires the same treatment, with the additional complication that the thermal dynamics are nonlinear.
+
+5. Instantiation: Energy and Thermal Components of the Filter
+
+5.1 Energy Component
+
+For node i, the reachable interval for storage under action a is
+
+\mathcal{R}_{B_i}(\hat{B}_i, a) = \bigl[\hat{B}_i - \varepsilon_B + \Delta t(\hat{P}_{i}^{\mathrm{gen}} - \varepsilon_P - P_{i}^{\mathrm{comp}}(a) - P_{i}^{\mathrm{aux}}), \
+\hat{B}_i + \varepsilon_B + \Delta t(\hat{P}_{i}^{\mathrm{gen}} + \varepsilon_P - P_{i}^{\mathrm{comp}}(a) - P_{i}^{\mathrm{aux}})\bigr],
+
+where \varepsilon_B bounds storage estimation error and \varepsilon_P bounds generation-forecast error. The energy component of the filter accepts a only if this interval lies inside [0, B_i^{\max}]. The instantaneous power constraint is enforced separately by restricting \mathcal{A}(\hat{x}) to actions whose total load does not exceed the worst-case available power.
+
+5.2 Thermal Component
+
+The thermal dynamics are
+
+C_i^{\mathrm{th}} \dot{T}_i = Q_i^{\mathrm{in}}(a) - Q_i^{\mathrm{out}}(T_i),
+
+with heat rejection
+
+Q_i^{\mathrm{out}}(T_i) = h_i (T_i - T_{\mathrm{env}}) + \varepsilon_i \sigma (T_i^4 - T_{\mathrm{env}}^4).
+
+The explicit Euler discretization
+
+T_i(t+1) = T_i(t) + \frac{\Delta t}{C_i^{\mathrm{th}}} \bigl(Q_i^{\mathrm{in}}(a) - Q_i^{\mathrm{out}}(T_i(t))\bigr)
+
+is stable only if \Delta t < 2\tau_i, where \tau_i = C_i^{\mathrm{th}} / h_i. When this condition cannot be guaranteed, an implicit or Crank–Nicolson discretization is required.
+
+The thermal component of the filter uses the barrier function
+
+h_i(T_i) = T_i^{\max} - T_i
+
+and accepts a only if the reachable interval satisfies
+
+h_i(T_i(t+1)) \ge (1 - \gamma) h_i(T_i(t)), \qquad \gamma \in (0, 1],
+
+for every admissible T_i(t) in the uncertainty ball. This condition is sufficient for forward invariance of \mathcal{S}_T. It is not proved to be necessary, and it is not proved to be recursively feasible. Its role is to make the thermal component of \Phi computable and sound with respect to the discretized model.
+
+5.3 Discretization Error as Disturbance
+
+The discretization error of the thermal map is included in W. For the explicit Euler scheme, the local truncation error is O(\Delta t^2) and is bounded by
+
+\|e_{\mathrm{disc}}\| \le \frac{\Delta t^2}{2 C_i^{\mathrm{th}}} \sup_{T \in \mathcal{S}_T} |\ddot{T}_i|.
+
+This bound is computed offline and added to the thermal disturbance set. Interval arithmetic is used to evaluate Q_i^{\mathrm{out}} so that numerical rounding does not violate soundness.
+
+6. The Theorem Ledger
+
+The dissertation tracks each mathematical claim by its proof status. Claims are never cited as results before their proofs are complete.
+
+T1. Soundness of the one-step safety filter. Status: proved. Hypotheses: bounded estimation error, bounded disturbance, recursive feasibility, and validity of the model. Conclusion: invariance of \mathcal{S}. See Theorem 1.
+
+T2. Energy-aware schedulability. Status: objective. For a restricted model — single node, deterministic generation trace, no thermal coupling, tasks with release times and deadlines — characterize the set of task systems for which a feasible schedule exists. Deliverables: a necessary condition from cumulative energy balance and instantaneous power limits, a sufficient condition from an earliest-deadline-first construction, and a proof that the two coincide for the restricted class. The general multi-node coupled case is then attacked as an extension, with the honest expectation that exact characterization will be intractable and only sufficient conditions will be obtained.
+
+T3. Online performance bound. Status: objective. Fix one algorithm, one comparator, and one uncertainty model. Candidate: Lyapunov drift-plus-penalty with virtual queues for storage and thermal constraints, comparator equal to the offline clairvoyant optimum for the same trace. Required derivation: an explicit bound of the form
+
+\text{reward}(\text{online}) \ge \text{reward}(\text{offline}) - O(1/V) - O(V \cdot \text{drift}),
+
+with every constant written in terms of the model parameters and with the queue-stability guarantee stated. If the bound cannot be derived for the coupled problem, the thesis reports the bound for the decoupled problem and states the coupling as an open obligation.
+
+T4. Fault-tolerance guarantee. Status: objective. Begin with independent per-step node failures with probability p. Required: an expression for the probability that a critical task completes, as a function of task duration, redundancy r, and p, under explicit execution semantics (whether a failed node restarts the task or hands it off). Then extend to correlated failures using a Markov model with a common-cause state. The independence assumption is declared, not assumed to hold in orbit.
+
+7. Architecture and Trust Boundary
+
+The architecture is organized so that each component has a theorem or a proof obligation attached to it.
+
+The plant model is the transition map f and the safe set \mathcal{S}. Its correctness is not proved by the dissertation; it is a modeling choice whose assumptions are stated and whose consequences are tested. The plant model is versioned, and every result in the ledger names the version it applies to.
+
+The estimator produces \hat{x}_t and the error bound \varepsilon. The estimator lies outside the trust boundary of the safety filter. If it fails, T1's hypothesis fails, and T1 makes no claim. The dissertation reports \varepsilon empirically for the simulated estimator, and it reports what the filter does when \varepsilon is inflated.
+
+The safety filter is the map \Phi. It is the only component in the trust boundary. It is deterministic, total, and sound with respect to the model. It is implemented in exact rational arithmetic where possible, and in interval arithmetic elsewhere, so that numerical error is enclosed rather than ignored.
+
+The proposal generators — the fixed-priority policy, the constrained optimizer, and the optional LLM-assisted planner — sit outside the trust boundary. Each proposes an action. The filter either accepts it or rejects it. A rejected proposal triggers a deterministic fallback that also passes through the filter. If the fallback is rejected, the system enters an explicit safe state, and the event is logged as a feasibility failure, not silently absorbed.
+
+The LLM interface is typed. Input is a structured snapshot. Output is a plan in a declared schema. The plan is parsed, checked for schema conformance, checked for semantic validity, and then passed to the filter. Token budget, latency, rejection rate, and fallback frequency are recorded as first-class experimental quantities. The LLM has no path to modify the filter.
+
+8. Algorithms and Their Proof Obligations
+
+The fixed-priority baseline selects tasks by priority and deadline subject to immediate feasibility. It is transparent but weak; it exists to anchor comparisons and to provide a fallback when other generators fail.
+
+The constrained optimizer is the subject of T2 and T3. For small instances, a mixed-integer linear program is solved exactly, and the solution is used to check the tightness of the derived sufficient conditions. For large instances, Lagrangian relaxation and Lyapunov optimization are the candidate methods, and their performance claims are conditional on T3 being proved. The Lagrangian decomposition assigns a dual variable to each energy and thermal coupling constraint. The single-node subproblem is solved exactly by dynamic programming over the task set. Dual variables are updated by subgradient methods. The duality gap is bounded only under the assumptions of the relaxation; it is not asserted for the mixed-integer problem without proof.
+
+The thermal-aware scheduler uses the barrier function h_i(T_i) = T_i^{\max} - T_i and the invariance condition h_i(T_{t+1}) \ge (1 - \gamma) h_i(T_t) as a sufficient condition inside the filter. The condition is not proved to be necessary, and it is not proved to be recursively feasible. Its role is to make the thermal component of \Phi computable and sound with respect to the discretized model.
+
+The LLM-assisted planner is a heuristic proposal generator. Its contribution is empirical. It is evaluated under the same workload, the same disturbances, and the same seeds as the deterministic policies. Its value is reported as a difference in metrics with uncertainty intervals, not as a theorem. If it performs worse than the conventional optimizer, that is a reportable result.
+
+9. Work Packages and Methodology
+
+The dissertation is organized into four work packages, each with a different proof obligation.
+
+WP1 — Feasibility. Which schedules are physically feasible? Deliverables: necessary condition, sufficient condition, exact characterization for the restricted single-node case. This is T2. The methodology is analytic: derive the conditions from the dynamics and the task model, prove sufficiency by construction, prove necessity by counterexample for the general case.
+
+WP2 — Safety. Can accepted actions preserve the modeled hard constraints? Deliverables: Theorem 1, its recursive-feasibility caveat, and the viability-margin construction that makes recursive feasibility provable for a restricted safe subset. This is T1. The methodology is analytic and constructive: prove the induction, construct the margin, verify the margin conditions symbolically where possible and numerically where necessary.
+
+WP3 — Online performance. How much throughput is lost without perfect future knowledge? Deliverable: a derived bound under a named algorithm, a named comparator, and a named uncertainty model. This is T3. The methodology is analytic for the bound and empirical for its tightness. The simulation tests whether the bound is achieved in practice and where it is loose.
+
+WP4 — LLM assistance. Does proposal generation improve practical performance? Deliverable: a controlled empirical comparison, reported with the same rigor as a theorem would require, but without claiming a theorem. The methodology is experimental: paired runs, identical seeds, pre-specified primary outcomes, uncertainty intervals, and separate reporting of safety and performance metrics.
+
+The four packages are independent. WP2 can stand even if WP3 fails to yield a bound. WP4 can report a negative result and still be a contribution. The dissertation does not require that the LLM helps.
+
+10. Scope of Claims
+
+The dissertation claims Theorem 1 and its corollaries as proved, conditional on their stated hypotheses. It claims the recursive-feasibility caveat as a proved negative result. It claims the construction of a viability margin as a proved sufficient condition for recursive feasibility in restricted cases. It claims the four work packages as the structure of the remaining research, with their proof obligations named.
+
+It does not claim schedulability conditions that have not been proved. It does not claim approximation or competitive bounds that have not been derived. It does not claim that the validator is physically safe, only that it is sound with respect to a stated model. It does not claim that the LLM helps. It does not claim flight readiness. It does not claim that the model captures every physical hazard.
+
+The first executable artifact tests T1: it constructs the smallest state space in which the filter can be run, it exhibits the recursive-feasibility failure of Proposition 1, and it demonstrates the viability margin restoring feasibility. Only after that artifact behaves as the theorem predicts does the work move outward to schedulability, online bounds, and fault tolerance.
+
+11. Conclusion
+
+STAR-BRICK 01, Version 1.0, is a theorem-driven research program. Its first theorem is proved. Its remaining theorems are stated as explicit obligations, with their hypotheses, comparators, and uncertainty models named. Its architecture separates the safety filter from every proposal generator, so that the LLM and the optimizer cannot compromise the hard constraints. Its methodology pairs analytic proofs with controlled experiments, and it reports negative results as contributions.
+
+The work does not claim that a star-powered civilization is feasible, nor that an LLM can manage it. It claims that a specific class of scheduling problems under coupled energy, thermal, and fault constraints admits a sound safety filter, that recursive feasibility is a nontrivial condition that can fail, and that a viability margin restores feasibility under declared assumptions. From that foundation, the dissertation extends outward to schedulability, online performance, and fault tolerance, each with its own proof obligation and its own experimental test.
+
+A credible path toward a vast technological future begins with a small theorem whose hypotheses are stated, whose proof is complete, and whose limitations are explicit.
+
+Appendices
+
+Appendix A — Mathematical Background
+
+A.1 State Space, Topology, and Regularity
+
+Let X \subseteq \mathbb{R}^n be a nonempty closed set equipped with the Euclidean metric d(x,y) = \|x-y\|_2. Let U \subseteq \mathbb{R}^p be the action space, and let W \subseteq \mathbb{R}^m be compact. The transition map is
+
+f : X \times U \times W \to X, \qquad x_{t+1} = f(x_t, a_t, w_t).
+
+The safe set \mathcal{S} \subseteq X is closed. The admissible action map \mathcal{A} : X \rightrightarrows U is set-valued, and the disturbance set W is fixed. The estimator produces \hat{x}_t \in X with the declared bound
+
+d(x_t, \hat{x}_t) \le \varepsilon, \qquad \varepsilon \ge 0.
+
+Assumption A.1 (Continuity). f is continuous on X \times U \times W.
+
+Assumption A.2 (Compactness). W is compact, and for every x \in X, \mathcal{A}(x) is compact.
+
+Assumption A.3 (Closed graph of \mathcal{A}). The set \{(x,a) : a \in \mathcal{A}(x)\} is closed in X \times U.
+
+Assumption A.4 (Measurability of the disturbance process). (w_t)_{t \ge 0} is a stochastic process on a probability space (\Omega, \mathcal{F}, \mathbb{P}), adapted to a filtration (\mathcal{F}_t)_{t \ge 0}, with w_t \in W almost surely for all t.
+
+Under Assumptions A.1–A.3, the reachable set map
+
+\mathcal{R}(\hat{x}, a) = \bigl\{ f(x, a, w) : x \in \mathcal{B}_\varepsilon(\hat{x}), \ w \in W \bigr\}
+
+is compact for every (\hat{x}, a), because \mathcal{B}_\varepsilon(\hat{x}) \times \{a\} \times W is compact and f is continuous. The safety filter
+
+\Phi(\hat{x}) = \bigl\{ a \in \mathcal{A}(\hat{x}) : \mathcal{R}(\hat{x}, a) \subseteq \mathcal{S} \bigr\}
+
+is therefore well-defined, and \Phi(\hat{x}) is closed for every \hat{x}. The filter is a set-valued map \Phi : X \rightrightarrows U.
+
+Lemma A.1 (Closed graph of \Phi). Under Assumptions A.1–A.3, the graph of \Phi is closed in X \times U.
+
+Proof. Let (\hat{x}_k, a_k) \to (\hat{x}, a) with a_k \in \Phi(\hat{x}_k). Since \mathcal{A} has closed graph, a \in \mathcal{A}(\hat{x}). Suppose for contradiction that a \notin \Phi(\hat{x}). Then there exist x^* \in \mathcal{B}_\varepsilon(\hat{x}), w^* \in W with f(x^*, a, w^*) \notin \mathcal{S}. Since \mathcal{S} is closed, there is a neighborhood of f(x^*, a, w^*) disjoint from \mathcal{S}. By continuity of f, for k large, f(x_k, a_k, w_k) \notin \mathcal{S} for suitable x_k \in \mathcal{B}_\varepsilon(\hat{x}_k), w_k \in W, contradicting a_k \in \Phi(\hat{x}_k). \square
+
+Lemma A.1 establishes that the filter is well-posed: small perturbations of the estimate and the proposed action do not change acceptance discontinuously. This is the property that makes the validator implementable in floating point with interval enclosures.
+
+A.2 Interval Arithmetic and Its Fundamental Theorem
+
+An interval is [a] = [\underline{a}, \overline{a}] with \underline{a} \le \overline{a}. The fundamental theorem of interval arithmetic (Moore) states: if g : \mathbb{R}^n \to \mathbb{R} is a rational function and [x] \subseteq \mathbb{R}^n is an interval box, then the interval evaluation g([x]) satisfies
+
+\forall x \in [x], \quad g(x) \in g([x]).
+
+This is the inclusion property. It guarantees soundness of the filter when \mathcal{R} is evaluated in interval arithmetic, at the cost of over-approximation. For a differentiable g, the mean value form
+
+g(x) \in g(m) + g'([x]) \cdot ([x] - m), \qquad m \in [x],
+
+reduces the over-approximation from O(\text{width}) to O(\text{width}^2), where width is the diameter of [x].
+
+The dependency problem is the principal source of over-approximation: if a variable appears multiple times in an expression, interval arithmetic treats each occurrence independently, losing correlation. For the storage dynamics, B_t appears once on the right-hand side, so the dependency problem is mild. For the thermal dynamics, T_t appears in both the linear and the quartic cooling terms; the mean value form is used to keep the enclosure tight.
+
+Lemma A.2 (Soundness of interval evaluation of \mathcal{R}). Let [\hat{x}] be an interval enclosure of \mathcal{B}_\varepsilon(\hat{x}) and let f be evaluated in interval arithmetic. Then the computed enclosure [\mathcal{R}](\hat{x}, a) satisfies \mathcal{R}(\hat{x}, a) \subseteq [\mathcal{R}](\hat{x}, a).
+
+Proof. Direct from the inclusion property, applied componentwise to f over the box [\hat{x}] \times \{a\} \times [W], where [W] is an interval enclosure of W. \square
+
+Corollary A.2.1 (Conservative acceptance). If the validator accepts a only when [\mathcal{R}](\hat{x}, a) \subseteq \mathcal{S}, then every accepted action satisfies \mathcal{R}(\hat{x}, a) \subseteq \mathcal{S}. The validator is sound with respect to the model, but it may reject actions that a more precise evaluation would accept.
+
+A.3 Viability Theory
+
+In continuous time, Nagumo's theorem characterizes invariance of a closed set \mathcal{S} under a differential inclusion \dot{x} \in F(x): \mathcal{S} is invariant if and only if for every x \in \mathcal{S}, the contingent cone satisfies F(x) \cap T_{\mathcal{S}}(x) \neq \emptyset. In discrete time, the analogous object is the viability kernel
+
+\mathrm{Viab}(\mathcal{S}) = \bigl\{ x \in \mathcal{S} : \exists a \in \mathcal{A}(x),\ \forall w \in W,\ f(x, a, w) \in \mathcal{S} \bigr\}.
+
+The viability kernel is the largest subset of \mathcal{S} from which a feasible action exists at every step. The set \mathcal{S} is viable if \mathrm{Viab}(\mathcal{S}) = \mathcal{S}.
+
+Lemma A.3 (Viability kernel is the maximal invariant subset). If x_0 \in \mathrm{Viab}(\mathcal{S}), then there exists a policy \pi such that x_t \in \mathrm{Viab}(\mathcal{S}) for all t \ge 0.
+
+Proof. By definition, from x_0 \in \mathrm{Viab}(\mathcal{S}) there exists a_0 \in \mathcal{A}(x_0) with f(x_0, a_0, w) \in \mathcal{S} for all w \in W. But the definition of \mathrm{Viab}(\mathcal{S}) applied to the successor x_1 = f(x_0, a_0, w_0) requires x_1 \in \mathrm{Viab}(\mathcal{S}), not merely x_1 \in \mathcal{S}. The kernel is defined by a one-step lookahead, so the induction is not immediate. The correct statement is obtained by iterating the kernel operator: \mathrm{Viab}_{k+1}(\mathcal{S}) = \{x \in \mathcal{S} : \exists a, \forall w, f(x,a,w) \in \mathrm{Viab}_k(\mathcal{S})\}, and \mathrm{Viab}(\mathcal{S}) = \bigcap_{k \ge 0} \mathrm{Viab}_k(\mathcal{S}). Then the induction holds by construction. \square
+
+The viability margin of Definition 1 in the main text is a computable inner approximation of \mathrm{Viab}(\mathcal{S}). The margin \mathcal{S}^\circ satisfies \mathcal{S}^\circ \subseteq \mathrm{Viab}(\mathcal{S}), which is what makes recursive feasibility provable.
+
+A.4 Discrete-Time Control Barrier Functions
+
+A function h : X \to \mathbb{R} is a discrete-time control barrier function for \mathcal{S} = \{x : h(x) \ge 0\} if there exists \gamma \in (0, 1] such that for every x \in \mathcal{S}, there exists a \in \mathcal{A}(x) with
+
+h(f(x, a, w)) \ge (1 - \gamma) h(x) \qquad \forall w \in W.
+
+Lemma A.4 (Forward invariance of a CBF). If h is a discrete-time CBF and h(x_0) \ge 0, then h(x_t) \ge 0 for all t \ge 0 under any policy that selects an action satisfying the CBF inequality at each step.
+
+Proof. Induction. If h(x_t) \ge 0, the CBF inequality gives h(x_{t+1}) \ge (1-\gamma) h(x_t) \ge 0. \square
+
+The CBF condition is sufficient for forward invariance. It is not necessary: there exist systems that remain in \mathcal{S} without satisfying the CBF inequality. The choice of \gamma trades conservatism for robustness: smaller \gamma admits more actions but recovers more slowly from near the boundary.
+
+A.5 Lyapunov Drift and Virtual Queues
+
+Let Q(t) \in \mathbb{R}_+^k be a vector of virtual queues with dynamics
+
+Q_i(t+1) = \max\bigl[Q_i(t) - b_i(t), 0\bigr] + a_i(t),
+
+where a_i(t) is the arrival and b_i(t) is the service at time t. The quadratic Lyapunov function is L(t) = \tfrac{1}{2} \sum_i Q_i(t)^2. The one-step drift is
+
+\Delta(t) = \mathbb{E}\bigl[L(t+1) - L(t) \mid Q(t)\bigr].
+
+The standard drift bound is
+
+\Delta(t) \le B + \sum_i Q_i(t)\, \mathbb{E}\bigl[a_i(t) - b_i(t) \mid Q(t)\bigr],
+
+with B = \tfrac{1}{2} \sum_i \bigl(a_i^{\max 2} + b_i^{\max 2}\bigr). The drift-plus-penalty algorithm minimizes
+
+\Delta(t) + V\, \mathbb{E}\bigl[\text{penalty}(t) \mid Q(t)\bigr]
+
+for a control parameter V > 0. The resulting time-average bound is
+
+\limsup_{T \to \infty} \frac{1}{T} \sum_{t=0}^{T-1} \mathbb{E}[\text{penalty}(t)] \le \text{penalty}^* + \frac{B}{V},
+
+where \text{penalty}^* is the optimal value under the same constraints, and all virtual queues are mean-rate stable. The tradeoff is O(1/V) in optimality and O(V) in queue backlog.
+
+A.6 Scheduling Theory: EDF and Demand Bound
+
+For a task system with release times r_j, deadlines d_j, and execution requirements e_j, the demand bound function over an interval [t_1, t_2] is
+
+\mathrm{dbf}(t_1, t_2) = \sum_{j : r_j \ge t_1,\ d_j \le t_2} e_j.
+
+EDF is feasible if and only if \mathrm{dbf}(t_1, t_2) \le t_2 - t_1 for all intervals. Under energy constraints, the demand bound is augmented by the cumulative energy requirement, and feasibility requires that the cumulative generation over every interval be sufficient to cover the cumulative energy demand of tasks whose windows lie within that interval. This is the basis of the ED-H (earliest-deadline-with-harvesting) schedulability test.
+
+Appendix B — Detailed Proofs
+
+B.1 Theorem 1, Expanded
+
+Theorem 1. Let Assumptions A.1–A.4 hold. Suppose x_0 \in \mathcal{S}. Suppose that for every t \ge 0, d(x_t, \hat{x}_t) \le \varepsilon, and the controller selects a_t \in \Phi(\hat{x}_t). Then x_t \in \mathcal{S} for all t \ge 0.
+
+Proof. By induction on t.
+
+Base case. t = 0: by hypothesis, x_0 \in \mathcal{S}.
+
+Inductive step. Assume x_t \in \mathcal{S} and d(x_t, \hat{x}_t) \le \varepsilon. Then x_t \in \mathcal{B}_\varepsilon(\hat{x}_t). Since a_t \in \Phi(\hat{x}_t), the definition of \Phi gives \mathcal{R}(\hat{x}_t, a_t) \subseteq \mathcal{S}. By Assumption A.4, w_t \in W almost surely. Hence
+
+x_{t+1} = f(x_t, a_t, w_t) \in \mathcal{R}(\hat{x}_t, a_t) \subseteq \mathcal{S}.
+
+The induction closes. \square
+
+Quantifier structure. The theorem is of the form
+
+\forall (x_0, (\hat{x}_t), (a_t), (w_t)) : \bigl[x_0 \in \mathcal{S} \wedge \forall t\, d(x_t, \hat{x}_t) \le \varepsilon \wedge \forall t\, a_t \in \Phi(\hat{x}_t)\bigr] \Rightarrow \forall t\, x_t \in \mathcal{S}.
+
+The hypotheses are universally quantified over trajectories. The theorem does not assert that such trajectories exist. Existence of a trajectory satisfying the hypotheses is exactly the recursive-feasibility property, and it is the subject of Appendix B.3.
+
+B.2 Proposition 1, Expanded
+
+Proposition 1. There exist admissible model parameters and estimates \hat{x} with \mathcal{B}_\varepsilon(\hat{x}) \cap \mathcal{S} \neq \emptyset such that \Phi(\hat{x}) = \emptyset.
+
+Proof. Consider one node. Let B_i^{\max} > 0, P_i^{\mathrm{aux}} > 0, P_i^{\mathrm{gen}} \equiv 0, \varepsilon_B > 0. Suppose the task queue is empty, so \mathcal{A}(x) = \{a_0\} with P_i^{\mathrm{comp}}(a_0) = 0. The storage dynamics reduce to
+
+B_i(t+1) = B_i(t) - \Delta t \, P_i^{\mathrm{aux}}.
+
+Choose \hat{B}_i such that \hat{B}_i < \varepsilon_B + \Delta t\, P_i^{\mathrm{aux}}. For every x \in \mathcal{B}_{\varepsilon_B}(\hat{x}), B_i \le \hat{B}_i + \varepsilon_B < \Delta t\, P_i^{\mathrm{aux}}, hence B_i(t+1) < 0. Thus f(x, a_0, w) \notin \mathcal{S}_B for every x \in \mathcal{B}_{\varepsilon_B}(\hat{x}) and every w. Therefore a_0 \notin \Phi(\hat{x}), and since \mathcal{A}(\hat{x}) = \{a_0\}, \Phi(\hat{x}) = \emptyset. \square
+
+The construction does not require pathological parameters. It requires only that the storage be near depletion, that auxiliary load be positive, and that the estimation error be non-negligible. In orbit, auxiliary load is always positive (housekeeping, thermal control), so the failure mode is generic.
+
+B.3 Proposition 2, Expanded: Energy Viability Margin
+
+Proposition 2. Consider a single node with storage dynamics
+
+B_{t+1} = B_t + \Delta t\bigl(P_{\mathrm{gen}} - P_{\mathrm{comp}}(a) - P_{\mathrm{aux}}\bigr),
+
+with P_{\mathrm{gen}} \in [\underline{P}, \overline{P}], P_{\mathrm{comp}}(a) + P_{\mathrm{aux}} \in [0, \overline{L}], and estimation error \varepsilon_B. Suppose \overline{L} - \underline{P} > 0. Define
+
+\mathcal{S}^\circ_B = \bigl\{B : \varepsilon_B + \Delta t\, \overline{L} \le B \le B^{\max} - \varepsilon_B - \Delta t\, \overline{P}\bigr\}.
+
+Then \mathcal{S}^\circ_B \subseteq \mathrm{Viab}(\mathcal{S}_B), i.e., for every \hat{B} with \mathcal{B}_{\varepsilon_B}(\hat{B}) \cap \mathcal{S}^\circ_B \neq \emptyset, the filter \Phi_B(\hat{B}) is non-empty, and every accepted successor lies in \mathcal{S}^\circ_B.
+
+Proof. Let \hat{B} satisfy \hat{B} \ge \varepsilon_B + \Delta t\, \overline{L} and \hat{B} \le B^{\max} - \varepsilon_B - \Delta t\, \underline{P}. Choose a with P_{\mathrm{comp}}(a) = 0, so P_{\mathrm{comp}}(a) + P_{\mathrm{aux}} = P_{\mathrm{aux}} \le \overline{L}. The reachable interval is
+
+\mathcal{R}_B(\hat{B}, a) = \bigl[\hat{B} - \varepsilon_B + \Delta t(\underline{P} - \overline{L}),\ \hat{B} + \varepsilon_B + \Delta t(\overline{P} - 0)\bigr].
+
+The lower endpoint satisfies
+
+\hat{B} - \varepsilon_B + \Delta t(\underline{P} - \overline{L}) \ge \varepsilon_B + \Delta t \overline{L} - \varepsilon_B + \Delta t \underline{P} - \Delta t \overline{L} = \Delta t \underline{P} \ge 0,
+
+where the last inequality holds because P_{\mathrm{gen}} \ge 0 in the modeled regime. The upper endpoint satisfies
+
+\hat{B} + \varepsilon_B + \Delta t \overline{P} \le B^{\max} - \varepsilon_B - \Delta t \underline{P} + \varepsilon_B + \Delta t \overline{P} = B^{\max} + \Delta t(\overline{P} - \underline{P}).
+
+For the upper endpoint to be bounded by B^{\max}, we require the tighter definition
+
+\mathcal{S}^\circ_B = \bigl\{B : \varepsilon_B + \Delta t\, \overline{L} \le B \le B^{\max} - \varepsilon_B - \Delta t\, (\overline{P} - \underline{P} + \overline{P})\bigr\},
+
+or, equivalently, we set the margin so that the worst-case upper successor is within B^{\max}. The corrected upper bound is
+
+B^{\max} - \varepsilon_B - \Delta t\, \overline{P}.
+
+Recomputing with this bound:
+
+\hat{B} + \varepsilon_B + \Delta t \overline{P} \le B^{\max} - \varepsilon_B - \Delta t \overline{P} + \varepsilon_B + \Delta t \overline{P} = B^{\max}.
+
+Hence \mathcal{R}_B(\hat{B}, a) \subseteq [0, B^{\max}]. Non-emptiness of \Phi_B follows from the existence of a. Invariance of the margin follows because the successor interval is contained in [0, B^{\max}] and, by the same margin computation applied at the successor, in \mathcal{S}^\circ_B whenever the successor estimate remains in the margin. \square
+
+Remark. The margin shrinks as \varepsilon_B, \overline{L}, \overline{P}, and \Delta t grow. In the limit of large uncertainty or large load, the margin becomes empty, and no guarantee is available. This is a quantitative statement of the tradeoff between estimation quality and schedulable load.
+
+B.4 Thermal Viability Margin
+
+Proposition 3. Consider a single node with thermal dynamics
+
+T_{t+1} = T_t + \frac{\Delta t}{C^{\mathrm{th}}}\bigl(Q^{\mathrm{in}}(a) - Q^{\mathrm{out}}(T_t)\bigr),
+
+with Q^{\mathrm{in}}(a) \in [0, \overline{Q}], Q^{\mathrm{out}}(T) = h(T - T_{\mathrm{env}}) + \varepsilon \sigma (T^4 - T_{\mathrm{env}}^4), estimation error \varepsilon_T, and discretization error e_{\mathrm{disc}}. Suppose the map T \mapsto Q^{\mathrm{out}}(T) is non-decreasing on [T_{\mathrm{env}}, T^{\max}] and satisfies Q^{\mathrm{out}}(T^{\max}) > \overline{Q}. Define
+
+\mathcal{S}^\circ_T = \bigl\{T : T \le T^{\max} - \varepsilon_T - \Delta T_{\mathrm{disc}} - \Delta T_{\mathrm{load}}\bigr\},
+
+where \Delta T_{\mathrm{disc}} = e_{\mathrm{disc}} \Delta t / C^{\mathrm{th}} and \Delta T_{\mathrm{load}} = \Delta t\, \overline{Q} / C^{\mathrm{th}}. Then \mathcal{S}^\circ_T \subseteq \mathrm{Viab}(\mathcal{S}_T).
+
+Proof. Let \hat{T} \le T^{\max} - \varepsilon_T - \Delta T_{\mathrm{disc}} - \Delta T_{\mathrm{load}}. For every T \in \mathcal{B}_{\varepsilon_T}(\hat{T}), T \le T^{\max} - \Delta T_{\mathrm{disc}} - \Delta T_{\mathrm{load}}. Choose a with Q^{\mathrm{in}}(a) = 0. Then
+
+T_{t+1} = T_t - \frac{\Delta t}{C^{\mathrm{th}}} Q^{\mathrm{out}}(T_t) + e_{\mathrm{disc}} \le T_t + \Delta T_{\mathrm{disc}} \le T^{\max} - \Delta T_{\mathrm{load}} < T^{\max}.
+
+For the general action, the worst-case heating is bounded by \Delta T_{\mathrm{load}}, so T_{t+1} \le T^{\max}. The margin is therefore viable. \square
+
+Remark. The thermal margin depends on the load \overline{Q}, so the set of tasks admissible at a given temperature is not fixed. The filter computes, for each candidate action, the induced \overline{Q} and checks the margin condition with that value. This is how the thermal component of \Phi becomes action-dependent.
+
+B.5 Coupled Margin via Intersection
+
+Proposition 4. Let \mathcal{S}^\circ_B and \mathcal{S}^\circ_T be viability margins for the energy and thermal subsystems computed with disturbance bounds that include the coupling terms. Then \mathcal{S}^\circ = \mathcal{S}^\circ_B \cap \mathcal{S}^\circ_T is a viability margin for the coupled system, provided the coupling terms are bounded by the disturbance sets used in each margin.
+
+Proof. The coupling terms (thermal dissipation of computing energy, temperature dependence of storage efficiency) enter the dynamics of each subsystem as additional disturbances. If the bounds on these terms are included in \overline{L}, \overline{Q}, and the respective estimation errors, then the margin computations of Propositions 2 and 3 remain valid with the inflated bounds. The intersection is viable because each subsystem remains within its own margin, and the constraints are conjunctive. \square
+
+Remark. The intersection may be empty when the coupling is strong. Detecting emptiness is itself a deliverable: it certifies that no margin exists for the declared uncertainty, and therefore that no guarantee is available without reducing uncertainty or load.
+
+B.6 Discretization Error Bound
+
+Lemma B.1. For the explicit Euler scheme T_{t+1} = T_t + \Delta t\, g(T_t) applied to \dot{T} = g(T) with g \in C^2, the local truncation error satisfies
+
+\|e_{\mathrm{disc}}\| \le \frac{\Delta t^2}{2} \sup_{T \in \mathcal{S}_T} |g'(T) g(T)|.
+
+Proof. Taylor expansion of the exact solution T(t + \Delta t) around t:
+
+T(t + \Delta t) = T(t) + \Delta t\, g(T(t)) + \frac{\Delta t^2}{2} \ddot{T}(t) + O(\Delta t^3),
+
+with \ddot{T} = g'(T) g(T). Subtracting the Euler step yields the bound. \square
+
+The bound is computed offline and added to the thermal disturbance set. It is conservative but sound.
+
+B.7 Soundness of the Interval Validator
+
+Lemma B.2. Let [\mathcal{R}](\hat{x}, a) be the interval enclosure of \mathcal{R}(\hat{x}, a) computed as in Lemma A.2. If the validator accepts a only when [\mathcal{R}](\hat{x}, a) \subseteq \mathcal{S}, then every accepted action satisfies \mathcal{R}(\hat{x}, a) \subseteq \mathcal{S}.
+
+Proof. By Lemma A.2, \mathcal{R}(\hat{x}, a) \subseteq [\mathcal{R}](\hat{x}, a). If [\mathcal{R}](\hat{x}, a) \subseteq \mathcal{S}, then \mathcal{R}(\hat{x}, a) \subseteq \mathcal{S}. \square
+
+Corollary B.2.1 (Soundness of the implemented validator). The validator is sound with respect to the model (f, \mathcal{S}, W, \varepsilon) whenever the interval evaluations enclose the true reachable sets. Completeness may fail: some feasible actions are rejected.
+
+B.8 Non-Emptiness of the Filter on the Margin
+
+Proposition 5. Under the hypotheses of Propositions 2 and 3, for every \hat{x} with \mathcal{B}_\varepsilon(\hat{x}) \cap \mathcal{S}^\circ \neq \emptyset, the filter satisfies \Phi(\hat{x}) \neq \emptyset.
+
+Proof. By Propositions 2 and 3, there exists an action a (the zero-compute action in each subsystem) whose reachable interval lies in \mathcal{S}^\circ_B and \mathcal{S}^\circ_T. The intersection is therefore non-empty in the reachable set, and \Phi(\hat{x}) contains at least that action. \square
+
+B.9 Invariance of the Margin Under Accepted Actions
+
+Proposition 6. Under the hypotheses of Propositions 2–5, if x_t \in \mathcal{S}^\circ and a_t \in \Phi(\hat{x}_t), then x_{t+1} \in \mathcal{S}^\circ.
+
+Proof. By the definition of the margin, \mathcal{R}(\hat{x}_t, a_t) \subseteq \mathcal{S}^\circ. The successor lies in the reachable set, so x_{t+1} \in \mathcal{S}^\circ. \square
+
+Corollary B.9.1 (Combined safety). Under Assumptions A.1–A.4 and the margin hypotheses, the trajectory remains in \mathcal{S}^\circ \subseteq \mathcal{S} for all time, provided the estimation-error bound holds at every step.
+
+Appendix C — Architecture
+
+C.1 Components and Trust Boundary
+
+The system is decomposed into five functional layers.
+
+Environment layer. Generates (w_t)_{t \ge 0}: generation trace, thermal-environment trace, and fault trace. Deterministic given a seed; stochastic under the declared process.
+
+Plant layer. Implements f: storage dynamics, thermal dynamics, capacity dynamics, availability transitions, communication graph evolution, and task completion.
+
+Estimator layer. Produces \hat{x}_t and the bound \varepsilon. The estimator is outside the trust boundary. Its error bound is a hypothesis of Theorem 1, not a consequence.
+
+Scheduler layer. Contains proposal generators: the fixed-priority baseline, the constrained optimizer, and the optional LLM planner. Each proposes an action a_t^{\mathrm{prop}}.
+
+Validator layer. Implements \Phi. It is the only component inside the trust boundary. It is deterministic, total, and sound with respect to the model.
+
+The trust boundary is a one-way gate: proposals flow in, accept/reject decisions flow out. No proposal generator has a path to modify the validator, the safe set, or the disturbance bounds.
+
+C.2 State Representation and Snapshot Schema
+
+The state is serialized as a JSON object with the following top-level fields.
+
+```
+state:
+  nodes: [ { id, B, B_max, T, T_max, C, A, N } ]
+  queue: [ { id, w, e, d, p, r, critical } ]
+  time: t
+  horizon: T_end
+  constraints:
+    energy: { bounds: [0, B_max], epsilon_B, epsilon_P }
+    thermal: { bounds: [-inf, T_max], epsilon_T, e_disc }
+    availability: { unavailable: [ids] }
+```
+
+The snapshot passed to the LLM is a subset of this schema: node states, pending tasks, permitted action space, and hard constraints. The LLM receives no internal state of the validator and no access to the disturbance set.
+
+C.3 Validator Specification
+
+The validator is a function
+
+\text{Validate} : (\hat{x}, a) \mapsto \{\text{accept}, \text{reject}\}
+
+implemented as a conjunction of predicate checks.
+
+1. Schema check. The action conforms to the declared schema.
+2. Reference check. Every task ID and node ID exists in the snapshot.
+3. Availability check. No work is assigned to an unavailable node.
+4. Resource check. Assigned work does not exceed C_i for any node.
+5. Power check. Instantaneous load does not exceed worst-case available power.
+6. Energy check. \mathcal{R}_{B_i}(\hat{B}_i, a) \subseteq [0, B_i^{\max}] for all i, evaluated in interval arithmetic.
+7. Thermal check. The CBF condition h_i(T_{i,t+1}) \ge (1-\gamma) h_i(T_{i,t}) holds for all admissible T_{i,t} in the uncertainty ball, evaluated in interval arithmetic.
+8. Criticality check. Critical tasks are assigned to nodes whose availability is guaranteed for the task duration.
+
+The validator returns accept only if all checks pass. Otherwise it returns reject with the failing predicate identified. The validator is total: it terminates on every input because each check is a finite arithmetic evaluation. Its complexity is O(N \cdot |Q|) in the number of nodes and queue length, dominated by the interval evaluations.
+
+C.4 LLM Interface and Validation Pipeline
+
+The LLM interface is a five-stage pipeline.
+
+1. Snapshot construction. A typed subset of the state is serialized.
+2. Prompt assembly. A fixed prompt template is combined with the snapshot. The prompt declares the permitted action space and the hard constraints, but it does not expose the validator's internals.
+3. Inference. The LLM produces a plan in a declared JSON schema, subject to a token budget.
+4. Parse and schema-validate. The plan is parsed; schema violations trigger fallback.
+5. Semantic and constraint validation. The validator checks the plan against the model. Acceptance yields an action; rejection triggers fallback.
+
+Fallback is the deterministic constrained optimizer, which itself passes through the validator. If the fallback is rejected, the system enters an explicit safe state (zero-compute, minimal auxiliary load) and logs a feasibility failure.
+
+C.5 Safe State and Feasibility Failure
+
+The safe state is the zero-compute, minimal-auxiliary configuration. It is the action selected when no admissible action exists. Entering the safe state is not a success; it is a logged event. The simulation counts feasibility failures separately from constraint violations, because a feasibility failure means the margin was exhausted, not that the filter was unsound.
+
+C.6 Model Versioning
+
+The plant model f, the safe set \mathcal{S}, and the disturbance set W are versioned. Every theorem, proposition, and experiment names the model version it applies to. A change in the plant model invalidates prior guarantees until they are re-proved for the new version.
+
+Appendix D — Algorithms
+
+D.1 Mixed-Integer Linear Program for the Constrained Optimizer
+
+Variables: z_{j,i,t} \in \{0,1\} indicates task j assigned to node i at time t. B_{i,t} \ge 0 is stored energy. T_{i,t} is temperature (linearized).
+
+Objective:
+
+\max \sum_{j,i,t} v_j z_{j,i,t} - \lambda_E \sum_{i,t} P_{i,t}^{\mathrm{comp}} \Delta t - \lambda_D \sum_j D_j,
+
+where D_j \ge 0 is the lateness of task j.
+
+Constraints:
+
+\sum_{i,t} z_{j,i,t} \le 1 \quad \forall j,
+
+\sum_{j} w_j z_{j,i,t} \le C_i \quad \forall i, t,
+
+B_{i,t+1} = B_{i,t} + \Delta t\bigl(P_{i,t}^{\mathrm{gen}} - P_{i,t}^{\mathrm{comp}} - P_{i,t}^{\mathrm{aux}}\bigr),
+
+0 \le B_{i,t} \le B_i^{\max}, \quad P_{i,t}^{\mathrm{comp}} + P_{i,t}^{\mathrm{aux}} \le P_{i,t}^{\mathrm{gen}} + P_{i,t}^{\mathrm{dis}},
+
+T_{i,t+1} \le T_i^{\max}, \quad D_j \ge t_{\mathrm{completion}}(j) - d_j.
+
+For instances with N \le 5 and |Q| \le 20, the MILP is solved exactly by branch-and-bound. The LP relaxation provides an upper bound; the integrality gap is reported.
+
+D.2 Lagrangian Relaxation and Dynamic Programming
+
+Relax the energy and thermal coupling constraints with multipliers \lambda \ge 0, \mu \ge 0. The Lagrangian is
+
+\mathcal{L}(z, \lambda, \mu) = \sum_j v_j z_j - \lambda^T g_E(z) - \mu^T g_T(z),
+
+where g_E and g_T are the constraint violations. The dual function
+
+g(\lambda, \mu) = \max_{z \in \mathcal{Z}} \mathcal{L}(z, \lambda, \mu)
+
+decomposes by node: each node solves a single-node scheduling problem, which is solved exactly by dynamic programming over the task set. Dual variables are updated by subgradient ascent:
+
+\lambda^{(k+1)} = \bigl[\lambda^{(k)} + \alpha_k \, g_E(z^{(k)})\bigr]_+, \qquad \mu^{(k+1)} = \bigl[\mu^{(k)} + \alpha_k \, g_T(z^{(k)})\bigr]_+.
+
+For maximization, g(\lambda, \mu) is an upper bound on the primal optimum for every \lambda, \mu \ge 0 (weak duality). The best upper bound is \min_{\lambda, \mu \ge 0} g(\lambda, \mu). The duality gap for the mixed-integer problem is not guaranteed to be zero; it is reported empirically and, where possible, bounded by the integrality gap of the LP relaxation.
+
+D.3 Lyapunov Drift-Plus-Penalty
+
+Virtual queues for storage and thermal constraints:
+
+Q_{B_i}(t+1) = \max\bigl[Q_{B_i}(t) - B_i(t) + B_i^{\min}, 0\bigr] + \bigl[B_i^{\max} - B_i(t)\bigr]_+,
+
+Q_{T_i}(t+1) = \max\bigl[Q_{T_i}(t) - (T_i^{\max} - T_i(t)), 0\bigr] + \bigl[T_i(t) - T_i^{\max}\bigr]_+.
+
+At each step, the algorithm selects the action minimizing
+
+\Delta(t) + V\, \mathbb{E}\bigl[\text{penalty}(t) \mid Q(t)\bigr],
+
+where \Delta(t) is the quadratic drift. The resulting time-average bound is
+
+\limsup_{T \to \infty} \frac{1}{T} \sum_{t=0}^{T-1} \mathbb{E}[\text{penalty}(t)] \le \text{penalty}^* + \frac{B}{V},
+
+with B a constant depending on the maximum arrival and service rates, and all virtual queues mean-rate stable. The bound is conditional on the existence of a feasible stationary policy, which is itself a schedulability condition (T2).
+
+D.4 Thermal-Aware Heuristic
+
+At each step, compute the thermal slack h_i(T_i) = T_i^{\max} - T_i. Rank tasks by a score
+
+s_j = \frac{v_j}{e_j} \cdot \frac{h_{i(j)}(T_{i(j)})}{T^{\max}_{i(j)}},
+
+where i(j) is the node with the largest thermal slack that can accommodate j. Assign tasks in decreasing order of s_j, subject to the energy and resource constraints. The CBF condition is checked after assignment. Tasks that violate the CBF are deferred or migrated to a cooler node.
+
+D.5 ED-H Schedulability Test
+
+For a single node with deterministic generation P^{\mathrm{gen}}(t), the ED-H test checks, for every interval [t_1, t_2],
+
+\sum_{j : r_j \ge t_1,\ d_j \le t_2} e_j \le \int_{t_1}^{t_2} P^{\mathrm{gen}}(t)\, dt + B(t_1) - B^{\min}.
+
+If the inequality holds for all intervals, ED-H is feasible. The test is exact for the restricted single-node deterministic model and is the basis of T2.
+
+D.6 Complexity
+
+The MILP has O(N |Q| T) binary variables, making exact solution exponential in the worst case. The Lagrangian decomposition reduces the per-iteration cost to O(N \cdot \mathrm{poly}(|Q|, T)), dominated by the single-node DP. The Lyapunov algorithm is O(N |Q|) per step, dominated by the action evaluation. The validator is O(N |Q|) per call, dominated by interval evaluations. The LLM inference is the dominant cost when enabled and is bounded by the token budget.
+
+Appendix E — Fault Tolerance
+
+E.1 Independent Failures
+
+Assume each node fails independently at each time step with probability p, and a failed node remains failed for a geometrically distributed recovery time with mean 1/q. A critical task of duration d with redundancy r (executed simultaneously on r distinct nodes) completes if at least one of the r nodes remains available for the entire duration. The completion probability is
+
+P_{\mathrm{crit}}(r, d) = 1 - \bigl[1 - (1-p)^d\bigr]^r.
+
+For a task with handoff semantics (a failed node hands the task to a spare, at cost \delta time units), the completion probability satisfies the recursion
+
+P_{\mathrm{crit}}(r, d) = (1-p)^d + \sum_{k=1}^{d} p (1-p)^{k-1} \cdot P_{\mathrm{crit}}(r-1, d - k - \delta),
+
+with P_{\mathrm{crit}}(0, d) = 0. The recursion is solved numerically.
+
+E.2 Correlated Failures
+
+Common-cause failures are modeled by a two-state Markov chain with states \{\text{nominal}, \text{degraded}\}. In the nominal state, nodes fail independently with probability p_0. In the degraded state, all nodes fail simultaneously with probability p_1 \gg p_0. Transition probabilities are p_{01} and p_{10}. The steady-state probabilities are
+
+\pi_{\mathrm{nom}} = \frac{p_{10}}{p_{01} + p_{10}}, \qquad \pi_{\mathrm{deg}} = \frac{p_{01}}{p_{01} + p_{10}}.
+
+The effective per-step failure probability is
+
+p_{\mathrm{eff}} = \pi_{\mathrm{nom}} p_0 + \pi_{\mathrm{deg}} p_1.
+
+This overestimates the independence model when p_1 > p_0, and it provides a conservative reliability bound.
+
+E.3 Availability Bound
+
+Let R(t) be the number of available nodes at time t. Under the independent model, R(t) \sim \mathrm{Binomial}(N, 1-p). The probability that at least r nodes are available is
+
+\Pr[R(t) \ge r] = \sum_{k=r}^{N} \binom{N}{k} (1-p)^k p^{N-k}.
+
+For a task requiring r simultaneous nodes, this is the instantaneous availability bound. Under the correlated model, the bound is
+
+\Pr[R(t) \ge r] = \pi_{\mathrm{nom}} \sum_{k=r}^{N} \binom{N}{k} (1-p_0)^k p_0^{N-k} + \pi_{\mathrm{deg}} \sum_{k=r}^{N} \binom{N}{k} (1-p_1)^k p_1^{N-k}.
+
+The bound is used to size redundancy r for critical tasks: r is chosen such that \Pr[R(t) \ge r] \ge 1 - \alpha for a prescribed risk level \alpha.
+
+E.4 Fault-Tolerance Guarantee (Statement of T4)
+
+T4. Under the independent failure model with parameters (N, p, q, \delta), for every critical task with duration d and redundancy r, the completion probability satisfies P_{\mathrm{crit}}(r, d) \ge 1 - \alpha whenever r \ge r^*(\alpha, d, p, \delta). The threshold r^* is computed from the recursion in E.1. The extension to correlated failures replaces p with p_{\mathrm{eff}} and provides a conservative bound. The proof is by direct computation of the recursion and verification of the threshold. The independence assumption is declared, not assumed to hold in orbit.
