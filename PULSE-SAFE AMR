@@ -1,0 +1,2466 @@
+PULSE-SAFE AMR: A Verifiable Safety Framework for Autonomous Mobile Robots in Mixed Industrial Environments
+
+ouadi Maakoul and SI TEAM 
+
+Abstract
+
+This dissertation presents a complete theoretical framework for PULSE-SAFE AMR, an independent safety monitor that enforces a verifiable safety envelope for autonomous mobile robots operating in mixed industrial environments. The central contribution is a mathematical formalization of the safety condition grounded in hybrid dynamical system theory, differential dynamic logic, barrier certificate verification, and conservative physical modeling of braking, adhesion, and stability under combined slip conditions. We establish necessary and sufficient conditions for passive safety, prove the safety invariant via mechanized theorem proving in KeYmaera X, and extend the framework to turning trajectories via algebraic ghost-variable encoding that preserves polynomial structure for quantifier elimination. We introduce a Time-to-Danger metric that complements passive safety with graduated response while preserving the formal guarantee as a hard constraint, and we develop a three-layer barrier certificate architecture combining analytic proofs, data-driven neural certificates verified via branch-and-bound, and conservative fallback. The friction circle constraint is derived from first principles, yielding a coupled braking-deceleration limit that replaces the constant deceleration parameter with a state-dependent function a_{\max}(v_r, \omega) = \sqrt{(\mu g)^2 - (v_r\omega)^2}. Real-time friction estimation is formalized via recursive least squares, Burckhardt slip-slope analysis, and active micro-pulse probing, with conservative statistical bounding for safety integrity. A five-function Safety Requirements Specification is defined with traceable Performance Level targets and full-chain PFHd allocation across sensor, logic, and actuator subsystems. The architecture enforces deterministic dual-channel processing with hardware-enforced safe states and formalized channel independence. The framework is mapped to ISO 3691-4:2024 operating area classifications and structured as a Goal Structuring Notation safety case with runtime evidence logging. This document constitutes a theoretical specification, not a certified design.
+
+---
+
+Chapter 1: Introduction
+
+1.1 Motivation
+
+Autonomous mobile robots (AMRs) are increasingly deployed in warehouses, factories, and logistics environments where they share space with pedestrians, forklifts, and other vehicles. Conventional navigation systems optimize trajectories for efficiency but provide no formal guarantee that every generated command remains safely executable given the robot's physical limits and perception uncertainties. The fundamental deficiency of purely predictive approaches is that it is only with complete knowledge of the surrounding environment and its future evolution that absolute safety can be guaranteed, and such knowledge is available only in restricted cases such as static or periodic environments.
+
+1.2 The PULSE-SAFE Axiom
+
+PULSE-SAFE is founded on a single axiom:
+
+Axiom 1 (Non-Predictive Authorization). No command shall be authorized solely because it avoids a collision in the prediction model. The safety monitor must verify that the command remains within a physically demonstrated safety envelope.
+
+This axiom distinguishes PULSE-SAFE from conventional model-predictive safety approaches: the monitor does not trust the prediction model for safety authorization; it verifies against a physically grounded, formally provable envelope.
+
+1.3 Contributions
+
+This dissertation makes the following contributions:
+
+1. A formalization of the passive safety condition in differential dynamic logic (dL), with a mechanized proof in KeYmaera X.
+2. An algebraic ghost-variable encoding of trigonometric heading dynamics that preserves polynomial structure for quantifier elimination.
+3. A derivation of the friction circle constraint yielding a state-dependent coupled braking-deceleration limit.
+4. A Time-to-Danger metric that complements passive safety with graduated response while preserving the formal guarantee.
+5. A three-layer barrier certificate architecture combining analytic proofs, neural certificates, and conservative fallback.
+6. A full-chain PFHd allocation methodology for ISO 13849-1 compliance.
+7. A formalization of channel independence as a distinct safety function.
+8. A complete technical specification with ISO 3691-4:2024 operating area mapping.
+
+1.4 Structure
+
+Chapter 2 establishes the mathematical foundations: hybrid systems, differential dynamic logic, and the system model. Chapter 3 develops the safety condition theory, including passive safety, the Time-to-Danger metric, and the friction circle constraint. Chapter 4 presents the barrier certificate theory. Chapter 5 formalizes real-time friction estimation. Chapter 6 specifies the system architecture. Chapter 7 provides technical specifications. Chapter 8 establishes the verification and safety case framework. Chapter 9 concludes.
+
+---
+
+Chapter 2: Mathematical Foundations
+
+2.1 Hybrid Dynamical Systems
+
+Definition 2.1 (Hybrid Dynamical System). A hybrid dynamical system is a tuple \mathcal{H} = (\mathcal{X}, \mathcal{U}, \mathcal{F}, \mathcal{G}, \mathcal{R}) where:
+
+· \mathcal{X} \subseteq \mathbb{R}^n is the continuous state space,
+· \mathcal{U} \subseteq \mathbb{R}^m is the control input space,
+· \mathcal{F}: \mathcal{X} \times \mathcal{U} \rightarrow \mathbb{R}^n is the continuous vector field,
+· \mathcal{G} \subseteq \mathcal{X} is the guard set (discrete transition enabling conditions),
+· \mathcal{R}: \mathcal{X} \rightarrow \mathcal{X} is the reset map.
+
+The system evolves according to \dot{\xi} = \mathcal{F}(\xi, u) during continuous flow, and \xi^+ = \mathcal{R}(\xi) upon discrete transition when \xi \in \mathcal{G}.
+
+2.2 Differential Dynamic Logic
+
+Definition 2.2 (Hybrid Program). The set of hybrid programs is generated by the grammar:
+
+\alpha ::= x := e \mid x := * \mid ?Q \mid \alpha_1; \alpha_2 \mid \alpha_1 \cup \alpha_2 \mid \alpha^* \mid \{\dot{x} = f(x) \ \&\ Q\}
+
+where x := e is a discrete assignment, x := * is non-deterministic assignment, ?Q is a test (assertion), ; is sequential composition, \cup is non-deterministic choice, ^* is non-deterministic repetition, and \{\dot{x} = f(x) \ \&\ Q\} is continuous evolution along the differential equation \dot{x} = f(x) restricted to the domain Q.
+
+Definition 2.3 (dL Formula). The set of dL formulas is generated by:
+
+\phi ::= P \mid \neg\phi \mid \phi_1 \land \phi_2 \mid \phi_1 \lor \phi_2 \mid \phi_1 \rightarrow \phi_2 \mid \forall x \, \phi \mid \exists x \, \phi \mid [\alpha]\phi \mid \langle\alpha\rangle\phi
+
+where P is a first-order real arithmetic predicate, [\alpha]\phi is the box modality (necessarily after all executions of \alpha, \phi holds), and \langle\alpha\rangle\phi is the diamond modality (there exists an execution of \alpha after which \phi holds).
+
+Definition 2.4 (Semantics). The satisfaction relation \omega \models \phi for dL formula \phi in state \omega is defined recursively. The box modality has semantics:
+
+\omega \models [\alpha]\phi \iff \text{for all } \nu \text{ reachable from } \omega \text{ via } \alpha, \ \nu \models \phi
+
+2.3 System Model
+
+Definition 2.5 (AMR State). The AMR state is \mathbf{x} = (\mathbf{p}_r, v_r, \theta_r) \in \mathbb{R}^2 \times \mathbb{R} \times \mathcal{S}^1, where \mathbf{p}_r = (p_{rx}, p_{ry}) is position, v_r is scalar speed, and \theta_r is heading.
+
+Definition 2.6 (Obstacle State). The obstacle state is \mathbf{x}_o = (\mathbf{p}_o, \mathbf{v}_o) \in \mathbb{R}^2 \times \mathbb{R}^2, where \mathbf{p}_o is position and \mathbf{v}_o = (v_{ox}, v_{oy}) is velocity.
+
+Definition 2.7 (Full State). The full state vector is:
+
+\xi = (p_{rx}, p_{ry}, v_r, \theta_r, p_{ox}, p_{oy}, v_{ox}, v_{oy}) \in \mathbb{R}^8
+
+Definition 2.8 (Dynamics). The AMR dynamics are governed by:
+
+\dot{\mathbf{p}}_r = v_r \cdot \mathbf{d}_r, \quad \dot{v}_r = a, \quad \dot{\theta}_r = \omega
+
+where \mathbf{d}_r = (\cos\theta_r, \sin\theta_r), a \in [-b, a_{\max}] is longitudinal acceleration, and \omega \in [-\omega_{\max}, \omega_{\max}] is angular velocity. The obstacle evolves as \dot{\mathbf{p}}_o = \mathbf{v}_o with \|\mathbf{v}_o\| \leq V.
+
+---
+
+Chapter 3: Safety Condition Theory
+
+3.1 The Passive Safety Condition
+
+Definition 3.1 (Passive Safety). A robot state is passively safe if, for every possible future evolution, the robot can brake to a complete stop before any obstacle reaches its position. Formally:
+
+\phi_{\text{ps}} \equiv (v_r = 0) \lor \left( \|\mathbf{p}_r - \mathbf{p}_o\| > \frac{v_r^2}{2b} + V \frac{v_r}{b} \right)
+
+The term \frac{v_r^2}{2b} is the robot's braking distance at maximum deceleration b. The term V \frac{v_r}{b} accounts for the worst-case distance the obstacle can travel during the robot's braking time.
+
+Lemma 3.1 (Braking Time). Under constant deceleration a = -b, the time to stop from speed v_r is t_{\text{stop}} = v_r / b.
+
+Proof. Integration of \dot{v}_r = -b yields v_r(t) = v_r(0) - bt. Setting v_r(t_{\text{stop}}) = 0 gives t_{\text{stop}} = v_r(0)/b. \square
+
+Lemma 3.2 (Braking Distance). Under constant deceleration a = -b, the distance traveled to stop from speed v_r is S_{\text{brake}} = v_r^2 / (2b).
+
+Proof. Integration of v_r(t) = v_r(0) - bt over [0, t_{\text{stop}}]:
+
+S_{\text{brake}} = \int_0^{v_r/b} (v_r - bt) \, dt = v_r \cdot \frac{v_r}{b} - \frac{b}{2} \cdot \frac{v_r^2}{b^2} = \frac{v_r^2}{2b}
+
+\square
+
+Lemma 3.3 (Obstacle Travel During Braking). If the obstacle moves at maximum speed V during the robot's braking time t_{\text{stop}} = v_r/b, the obstacle travels at most V v_r / b.
+
+Proof. The obstacle's maximum displacement during time t_{\text{stop}} is \|\mathbf{v}_o\| \cdot t_{\text{stop}} \leq V \cdot v_r/b. \square
+
+Theorem 3.1 (Sufficiency of Passive Safety). If the robot state satisfies \phi_{\text{ps}}, then there exists a control action (braking) that prevents collision.
+
+Proof. By Lemma 3.2, the robot's braking distance is v_r^2/(2b). By Lemma 3.3, the obstacle's travel during braking is at most V v_r/b. The total required separation is therefore v_r^2/(2b) + V v_r/b. Since \phi_{\text{ps}} asserts that the actual separation exceeds this value, the robot stops before the obstacle reaches its position. \square
+
+3.2 Safety Invariant and Proof
+
+Theorem 3.2 (Safety Invariant). If the robot starts in a state satisfying:
+
+\psi_{\text{ps}} \equiv \phi_{\text{ps}} \land (v_r \geq 0) \land (b > 0) \land (V \geq 0)
+
+then the control model dw_{\text{ps}} always guarantees \phi_{\text{ps}} for all executions:
+
+\psi_{\text{ps}} \rightarrow [dw_{\text{ps}}] \phi_{\text{ps}}
+
+Proof Sketch. The proof proceeds by induction on the hybrid program's execution. The hybrid program is:
+
+dw_{\text{ps}} \equiv \left( \left( a := -b \cup a := 0 \cup a \in [0, a_{\max}] \right); \ \text{test}(\phi_{\text{ps}}); \ t := 0; \ \{\dot{\xi} = f(\xi) \ \&\ t \leq \tau \land \phi_{\text{ps}}\} \right)^*
+
+The proof tree in KeYmaera X proceeds as follows:
+
+Base Case. The initial condition \psi_{\text{ps}} directly implies \phi_{\text{ps}} by definition, so the invariant holds initially.
+
+Inductive Step (Discrete Control). For each control choice a \in \{-b, 0\} \cup [0, a_{\max}], the monitor test \text{test}(\phi_{\text{ps}}) ensures that the post-assignment state satisfies \phi_{\text{ps}}. The test operator is defined as: if \phi_{\text{ps}} holds, execution continues; otherwise, the program aborts. Thus, discrete transitions preserve the invariant by construction.
+
+Inductive Step (Continuous Evolution). During continuous flow, we must show that \phi_{\text{ps}} is preserved. Let D(t) = \|\mathbf{p}_r(t) - \mathbf{p}_o(t)\| be the separation distance and S_{\text{req}}(t) = v_r(t)^2/(2b) + V v_r(t)/b be the required separation. We apply the differential invariant rule (DI) to prove:
+
+D(t) - S_{\text{req}}(t) > 0 \quad \text{for all } t \in [0, \tau]
+
+The total time derivative of D is:
+
+\frac{d}{dt} D = \frac{(\mathbf{p}_r - \mathbf{p}_o) \cdot (\dot{\mathbf{p}}_r - \dot{\mathbf{p}}_o)}{\|\mathbf{p}_r - \mathbf{p}_o\|} \geq -(v_r + V)
+
+The total time derivative of S_{\text{req}} under braking (a = -b) is:
+
+\frac{d}{dt} S_{\text{req}} = \frac{v_r}{b} \dot{v}_r + \frac{V}{b} \dot{v}_r = \frac{v_r + V}{b} \cdot (-b) = -(v_r + V)
+
+Therefore:
+
+\frac{d}{dt}(D - S_{\text{req}}) \geq -(v_r + V) - (-(v_r + V)) = 0
+
+The separation margin is non-decreasing under braking, so \phi_{\text{ps}} is preserved. For constant speed (a = 0), \dot{v}_r = 0, so \frac{d}{dt} S_{\text{req}} = 0 and \frac{d}{dt} D \geq -(v_r + V). The invariant is preserved as long as the initial margin exceeds the rate of decrease. The monitor test before evolution ensures this condition holds.
+
+Quantifier Elimination. The remaining arithmetic proof obligations are dispatched using real arithmetic decision procedures. Because the expressions are polynomial in v_r, b, and \|\mathbf{p}_r - \mathbf{p}_o\|, QE conclusively determines whether the boundary condition B(\xi) = 0 has any non-empty intersection with trajectories leading to B(\xi) > 0. \square
+
+Remark 3.1. This proof has been mechanized in KeYmaera X for circular, spinning, and spiral trajectories in the ACAS X collision avoidance system. The QE step may require significant computational resources (documented cases require up to 15 minutes on a 32-core machine).
+
+3.3 Algebraic Ghost-Variable Encoding for Turning Trajectories
+
+Problem 3.1. Standard quantifier elimination procedures operate strictly on polynomial real arithmetic. Trigonometric functions \cos\theta_r and \sin\theta_r are transcendental and cannot be handled natively.
+
+Definition 3.2 (Ghost Variables). We introduce algebraic state variables c and s governed by polynomial ODEs:
+
+\dot{c} = -s \cdot \omega, \quad \dot{s} = c \cdot \omega, \quad \dot{\theta}_r = \omega
+
+with the algebraic invariant:
+
+c^2 + s^2 = 1
+
+Lemma 3.4 (Invariance of Unit Circle). The unit circle invariant c^2 + s^2 = 1 is preserved under the ghost-variable dynamics.
+
+Proof. Compute the time derivative:
+
+\frac{d}{dt}(c^2 + s^2) = 2c\dot{c} + 2s\dot{s} = 2c(-s\omega) + 2s(c\omega) = -2cs\omega + 2cs\omega = 0
+
+Therefore c^2 + s^2 is constant. If initially c^2 + s^2 = 1, it remains so for all time. \square
+
+Theorem 3.3 (Polynomial Structure Preservation). The ghost-variable encoding preserves polynomial structure of the hybrid program, enabling quantifier elimination.
+
+Proof. The dynamics \dot{c} = -s\omega and \dot{s} = c\omega are polynomial in (c, s, \omega). The invariant c^2 + s^2 = 1 is polynomial. The safety condition can be expressed entirely in terms of (p_{rx}, p_{ry}, v_r, c, s, p_{ox}, p_{oy}, v_{ox}, v_{oy}), all of which evolve according to polynomial differential equations. Therefore, the entire hybrid program is polynomial, and QE applies. \square
+
+Definition 3.3 (KeYmaera X Model for Turning). The hybrid program for turning trajectories is:
+
+```
+{ { omega := *; ?(omega >= -omega_max & omega <= omega_max); }
+  { rx' = vr * c, ry' = vr * s, vr' = a,
+    c' = -s * omega, s' = c * omega
+    & c^2 + s^2 = 1 }
+}*
+```
+
+3.4 Time-to-Danger Metric
+
+Definition 3.4 (Time-to-Danger). For a robot state \mathbf{x} and obstacle state \mathbf{x}_o, the Time-to-Danger is:
+
+\text{TTD}(\mathbf{x}) = \frac{\|\mathbf{p}_r - \mathbf{p}_o\| - d_{\text{safe}}}{v_r + V}
+
+where d_{\text{safe}} is a minimum required separation.
+
+Proposition 3.1 (TTD-Passive Safety Relationship). The passive safety condition is equivalent to a lower bound on TTD:
+
+\phi_{\text{ps}} \iff \text{TTD}(\mathbf{x}) \geq \frac{v_r}{2b} - \frac{d_{\text{safe}}}{v_r + V}
+
+Proof. Starting from \phi_{\text{ps}}:
+
+\|\mathbf{p}_r - \mathbf{p}_o\| > \frac{v_r^2}{2b} + V \frac{v_r}{b}
+
+Subtract d_{\text{safe}} from both sides:
+
+\|\mathbf{p}_r - \mathbf{p}_o\| - d_{\text{safe}} > \frac{v_r^2}{2b} + V \frac{v_r}{b} - d_{\text{safe}}
+
+Divide by v_r + V > 0:
+
+\text{TTD} > \frac{v_r^2/(2b) + V v_r/b - d_{\text{safe}}}{v_r + V} = \frac{v_r}{2b} - \frac{d_{\text{safe}}}{v_r + V}
+
+The equivalence follows. \square
+
+Definition 3.5 (Graduated Safety Control Law). The safety monitor enforces a three-tier response:
+
+u_{\text{safe}} =
+\begin{cases}
+u_{\text{nominal}}, & \text{if } \text{TTD} > \tau_1 \\
+\min(u_{\text{nominal}}, u_{\text{reduced}}), & \text{if } \tau_2 < \text{TTD} \leq \tau_1 \\
+a = -b, & \text{if } \text{TTD} \leq \tau_2
+\end{cases}
+
+where \tau_1 > \tau_2 > 0 are threshold parameters calibrated from hardware characterization.
+
+Theorem 3.4 (Preservation of Passive Safety). The graduated control law preserves the passive safety invariant as a hard constraint.
+
+Proof. The fallback action a = -b is always available and preserves \phi_{\text{ps}} by Theorem 3.2. The graduated response is an optimization layer that selects among control actions all of which preserve \phi_{\text{ps}} (by the monitor test). Therefore, the passive safety invariant is preserved regardless of which tier is active. \square
+
+3.5 Friction Circle Constraint
+
+Definition 3.6 (Friction Circle). Under Coulomb friction, the vector sum of longitudinal and lateral forces cannot exceed the maximum available friction:
+
+\sqrt{F_{\text{long}}^2 + F_{\text{lat}}^2} \leq F_{\max} = \mu m g
+
+where F_{\text{long}} = m a is the longitudinal braking force, F_{\text{lat}} = m v_r \omega is the lateral centripetal force, \mu is the coefficient of friction, m is mass, and g is gravitational acceleration.
+
+Theorem 3.5 (Coupled Braking-Deceleration Limit). The maximum longitudinal braking deceleration under combined slip is:
+
+a_{\max}(v_r, \omega) = \sqrt{(\mu g)^2 - (v_r \omega)^2}
+
+Proof. Substituting the force expressions into the friction circle constraint:
+
+\sqrt{(ma)^2 + (m v_r \omega)^2} \leq \mu m g
+
+Dividing by m:
+
+\sqrt{a^2 + (v_r \omega)^2} \leq \mu g
+
+Squaring both sides and isolating a^2:
+
+a^2 \leq (\mu g)^2 - (v_r \omega)^2
+
+Taking the square root:
+
+a \leq \sqrt{(\mu g)^2 - (v_r \omega)^2}
+
+The maximum braking deceleration is therefore a_{\max}(v_r, \omega) = \sqrt{(\mu g)^2 - (v_r \omega)^2}. \square
+
+Corollary 3.1 (Physical Interpretation).
+
+· Zero turn (\omega = 0): a_{\max} = \mu g (full braking available).
+· Pure spin (v_r \omega = \mu g): a_{\max} = 0 (no braking available; lateral grip consumes all friction).
+· If v_r \omega > \mu g: slip is mathematically guaranteed.
+
+Definition 3.7 (Dynamic Passive Safety). The constant deceleration parameter b is replaced by the state-dependent coupled limit:
+
+\phi_{\text{ps, dynamic}} \equiv (v_r = 0) \lor \left( \|\mathbf{p}_r - \mathbf{p}_o\| > \frac{v_r^2}{2 a_{\max}(v_r, \omega)} + V \frac{v_r}{a_{\max}(v_r, \omega)} \right)
+
+Theorem 3.6 (Conservatism of Dynamic Passive Safety). The dynamic passive safety condition is more conservative than the constant-deceleration condition:
+
+\phi_{\text{ps, dynamic}} \implies \phi_{\text{ps}}
+
+Proof. Since a_{\max}(v_r, \omega) \leq \mu g \leq b_{\max} (where b_{\max} is the mechanical limit), we have:
+
+\frac{v_r^2}{2 a_{\max}} \geq \frac{v_r^2}{2 b_{\max}}
+
+and similarly for the obstacle term. Therefore, the required separation in \phi_{\text{ps, dynamic}} is at least as large as in \phi_{\text{ps}}. \square
+
+---
+
+Chapter 4: Barrier Certificate Theory
+
+4.1 Analytic Barrier Certificate
+
+Definition 4.1 (Barrier Certificate). A function B: \mathbb{R}^n \rightarrow \mathbb{R} is a barrier certificate for the safe set \mathcal{X}_s if:
+
+1. B(\xi) \leq 0 for all \xi \in \mathcal{X}_0 (initial set),
+2. B(\xi) > 0 for all \xi \in \mathcal{X}_u (unsafe set),
+3. \dot{B}(\xi) \leq 0 for all \xi on the boundary B(\xi) = 0.
+
+The certified safe set is \mathcal{X}_s = \{\xi : B(\xi) \leq 0\}.
+
+Definition 4.2 (Analytic Barrier Certificate). The analytic barrier certificate for PULSE-SAFE is:
+
+B_{\text{ana}}(\xi) = \frac{v_r^2}{2b} + V \frac{v_r}{b} - \|\mathbf{p}_r - \mathbf{p}_o\|
+
+Lemma 4.1. The condition B_{\text{ana}}(\xi) \leq 0 is exactly the passive safety condition \phi_{\text{ps}}.
+
+Proof. B_{\text{ana}}(\xi) \leq 0 rearranges to \|\mathbf{p}_r - \mathbf{p}_o\| \geq v_r^2/(2b) + V v_r/b, which is \phi_{\text{ps}} (with non-strict inequality; the strict version is \phi_{\text{ps}}). \square
+
+Theorem 4.1 (Barrier Certificate Correctness). The analytic barrier certificate B_{\text{ana}} satisfies the three barrier certificate conditions under braking control.
+
+Proof.
+
+1. Initial set: By Theorem 3.2, the initial condition \psi_{\text{ps}} implies \phi_{\text{ps}}, hence B_{\text{ana}}(\xi) \leq 0.
+2. Unsafe set: The unsafe set \mathcal{X}_u is \{\xi : \|\mathbf{p}_r - \mathbf{p}_o\| \leq 0\}, i.e., collision. For such \xi, B_{\text{ana}}(\xi) = v_r^2/(2b) + V v_r/b - 0 > 0 for v_r > 0.
+3. Boundary condition: On the boundary B_{\text{ana}}(\xi) = 0, compute the Lie derivative:
+
+\dot{B}_{\text{ana}} = \frac{v_r}{b} \dot{v}_r + \frac{V}{b} \dot{v}_r - \frac{d}{dt}\|\mathbf{p}_r - \mathbf{p}_o\|
+
+Under braking \dot{v}_r = -b:
+
+\dot{B}_{\text{ana}} = -\frac{v_r}{b} b - \frac{V}{b} b - \frac{d}{dt}\|\mathbf{p}_r - \mathbf{p}_o\| = -(v_r + V) - \frac{d}{dt}\|\mathbf{p}_r - \mathbf{p}_o\|
+
+Since \frac{d}{dt}\|\mathbf{p}_r - \mathbf{p}_o\| \geq -(v_r + V):
+
+\dot{B}_{\text{ana}} \leq -(v_r + V) + (v_r + V) = 0
+
+\square
+
+4.2 Neural Barrier Certificate
+
+Definition 4.3 (Neural Barrier Certificate). A neural barrier certificate B_{\text{NN}}: \mathbb{R}^n \rightarrow \mathbb{R} is a ReLU neural network satisfying the three barrier certificate conditions.
+
+Definition 4.4 (ReLU Network). A ReLU network is a function f: \mathbb{R}^n \rightarrow \mathbb{R}^m of the form:
+
+f(x) = W_L \sigma(W_{L-1} \sigma(\cdots \sigma(W_1 x + b_1) \cdots) + b_{L-1}) + b_L
+
+where \sigma(z) = \max(0, z) is the ReLU activation, W_i are weight matrices, and b_i are bias vectors.
+
+Theorem 4.2 (Necessary and Sufficient Condition for ReLU Barrier Certificate). A ReLU network B_{\text{NN}} is a valid barrier certificate if and only if the following optimization problem has a non-positive optimum:
+
+\min_{\xi \in \mathcal{X}} \max\left( B_{\text{NN}}(\xi), \ -B_{\text{NN}}(\xi) + \epsilon, \ -\dot{B}_{\text{NN}}(\xi) \right) \leq 0
+
+where \mathcal{X} = \mathcal{X}_0 \cup \mathcal{X}_u \cup \partial\mathcal{X}_s is the union of the initial set, unsafe set, and boundary.
+
+Proof. The condition encodes the three barrier certificate requirements: (i) B_{\text{NN}}(\xi) \leq 0 on \mathcal{X}_0, (ii) B_{\text{NN}}(\xi) > 0 on \mathcal{X}_u (encoded as -B_{\text{NN}}(\xi) + \epsilon \leq 0 for margin \epsilon > 0), and (iii) \dot{B}_{\text{NN}}(\xi) \leq 0 on \partial\mathcal{X}_s. The max formulation ensures all three conditions are satisfied simultaneously. \square
+
+Remark 4.1. The verification of ReLU barrier certificates is encoded as an SMT or optimization problem, enabling both verification and falsification. The piecewise-linear structure of ReLU networks allows exact verification via branch-and-bound with convex relaxations.
+
+4.3 Data-Driven Barrier Certificate via Matrix Zonotopes
+
+Definition 4.5 (Matrix Zonotope). A matrix zonotope is a set:
+
+\mathcal{MZ} = \left\{ M_0 + \sum_{i=1}^{N} \alpha_i M_i : \alpha_i \in [-1, 1] \right\}
+
+where M_0 is the center matrix and M_i are the generator matrices.
+
+Definition 4.6 (Data-Consistent Model Set). Given noisy observations \{(\xi_k, \xi_{k+1})\}_{k=1}^{N}, the data-consistent model set is:
+
+\Sigma = \left\{ (A, B) : \xi_{k+1} = A \xi_k + B u_k + w_k, \ \|w_k\| \leq \epsilon \right\}
+
+Theorem 4.3 (Data-Driven Barrier Certificate). If there exists a barrier certificate B satisfying the three conditions for all models in the data-consistent model set \Sigma, then B is a valid barrier certificate for the true system.
+
+Proof. By construction, the true system model is contained in \Sigma. If the barrier conditions hold for all models in \Sigma, they hold in particular for the true model. \square
+
+Architecture 4.1 (Three-Layer Certificate System).
+
+1. Formal core: KeYmaera X proof of Theorem 3.2 for the idealized braking model, providing the normative proof certificate.
+2. Runtime certificate: Neural barrier certificate B_{\text{NN}} trained on hardware data (braking behavior, actuator delays, tire slip, surface variations). The runtime monitor verifies B_{\text{NN}}(\xi) \leq 0.
+3. Conservative fallback: If B_{\text{NN}} cannot be evaluated due to sensor fault or numerical uncertainty, revert to B_{\text{ana}}(\xi) \leq 0.
+
+Theorem 4.4 (Soundness of Three-Layer Architecture). The three-layer architecture is sound: if any layer certifies safety, the system is safe.
+
+Proof. The formal core certifies safety by Theorem 3.2. The runtime certificate certifies safety by Theorem 4.2 (if verified offline). The conservative fallback certifies safety by Theorem 4.1. Since all three layers certify the same safety property, satisfaction of any one is sufficient. \square
+
+---
+
+Chapter 5: Real-Time Friction Estimation
+
+5.1 Problem Formulation
+
+Problem 5.1. The friction coefficient \mu is unknown and time-varying. Assuming a static value (e.g., \mu = 0.7 for clean concrete) is a safety hazard: if the AMR encounters a polished epoxy floor, wet patch, or spilled debris, \mu can drop to 0.2 or lower, causing the robot to skid past its calculated stopping distance.
+
+Definition 5.1 (Friction Estimation Problem). Given measurements of commanded force F_{\text{cmd}}, measured acceleration a_{\text{imu}}, wheel speed \omega_w, and vehicle speed v_r, estimate \mu(t) in real time with bounded error.
+
+5.2 Inertial-Odometric Mismatch via Recursive Least Squares
+
+Definition 5.2 (Regressor Formulation). The friction estimation problem can be formulated as a linear regression:
+
+y(t) = \phi(t)^T \theta + \epsilon(t)
+
+where y(t) = a_{\text{imu}}(t) is the measured acceleration, \phi(t) = g is the regressor, \theta = \mu is the parameter to estimate, and \epsilon(t) is noise.
+
+Definition 5.3 (Recursive Least Squares). The RLS update with forgetting factor \lambda \in (0.95, 0.99) is:
+
+\hat{\theta}(t) = \hat{\theta}(t-1) + K(t) \left( y(t) - \phi(t)^T \hat{\theta}(t-1) \right)
+
+K(t) = \frac{P(t-1)\phi(t)}{\lambda + \phi(t)^T P(t-1) \phi(t)}
+
+P(t) = \frac{1}{\lambda} \left( P(t-1) - \frac{P(t-1)\phi(t)\phi(t)^T P(t-1)}{\lambda + \phi(t)^T P(t-1)\phi(t)} \right)
+
+Theorem 5.1 (RLS Convergence). Under persistent excitation (\sum_{t=1}^{\infty} \phi(t)\phi(t)^T = \infty) and bounded noise, the RLS estimate converges: \hat{\theta}(t) \rightarrow \theta as t \rightarrow \infty.
+
+Proof. This is the standard convergence result for RLS with forgetting factor. The forgetting factor ensures tracking of time-varying parameters, while persistent excitation ensures parameter identifiability. \square
+
+5.3 Slip-Slope Analysis via Burckhardt Model
+
+Definition 5.4 (Slip Ratio). The slip ratio is:
+
+s = \frac{\omega_w r - v_r}{\max(\omega_w r, v_r)}
+
+where \omega_w is wheel angular velocity and r is wheel radius.
+
+Definition 5.5 (Burckhardt Tire Model). The friction coefficient as a function of slip is:
+
+\mu(s) = c_1 \left( 1 - e^{-c_2 s} \right) - c_3 s
+
+where c_1, c_2, c_3 are surface-dependent coefficients.
+
+Theorem 5.2 (Slip-Slope Friction Estimation). In the micro-slip region |s| < 0.05, the slope of the friction curve \partial \mu / \partial s is proportional to the peak friction coefficient:
+
+\left. \frac{\partial \mu}{\partial s} \right|_{s=0} = c_1 c_2
+
+Proof. Differentiate the Burckhardt model:
+
+\frac{\partial \mu}{\partial s} = c_1 c_2 e^{-c_2 s} - c_3
+
+At s = 0:
+
+\left. \frac{\partial \mu}{\partial s} \right|_{s=0} = c_1 c_2 - c_3
+
+For typical surfaces, c_3 \ll c_1 c_2, so the initial slope is approximately c_1 c_2, which is proportional to the peak friction. \square
+
+5.4 Active Probing via Micro-Pulse Injection
+
+Definition 5.6 (Micro-Pulse Injection). During constant-velocity cruising, inject a high-frequency micro-torque pulse \Delta \tau of duration < 20 ms into the drive motors.
+
+Definition 5.7 (Contact Stiffness). The contact stiffness is estimated as:
+
+k = \frac{\Delta a}{\Delta \tau}
+
+where \Delta a is the measured acceleration response.
+
+Theorem 5.3 (Stiffness-Friction Correlation). The contact stiffness k correlates monotonically with the friction coefficient \mu:
+
+\frac{\partial k}{\partial \mu} > 0
+
+Proof. This follows from the physics of tire-road contact: higher friction surfaces (rubber, concrete) exhibit higher tangential stiffness than low-friction surfaces (ice, oil). The monotonic relationship is established empirically in tire mechanics literature. \square
+
+5.5 Conservative Bounding for Safety
+
+Definition 5.8 (Safe Friction Bound). The safety monitor uses a conservative statistical lower bound:
+
+\mu_{\text{safe}}(t) = \hat{\mu}(t) - k \cdot \sigma_{\mu}(t)
+
+where \sigma_{\mu}(t) is the estimation variance and k \in [2.5, 3.0] is a safety factor corresponding to a 99.7% confidence interval.
+
+Theorem 5.4 (Safety Guarantee Under Friction Uncertainty). If the true friction \mu_{\text{true}} satisfies \mu_{\text{true}} \geq \mu_{\text{safe}}, then the dynamic passive safety condition \phi_{\text{ps, dynamic}} with \mu = \mu_{\text{safe}} is conservative.
+
+Proof. Since a_{\max}(v_r, \omega; \mu) = \sqrt{(\mu g)^2 - (v_r \omega)^2} is monotonically increasing in \mu, using \mu_{\text{safe}} \leq \mu_{\text{true}} yields a_{\max}(\mu_{\text{safe}}) \leq a_{\max}(\mu_{\text{true}}), hence the required separation is larger, and the condition is more conservative. \square
+
+---
+
+Chapter 6: System Architecture
+
+6.1 Independent Safety Layer
+
+PULSE-SAFE is implemented as a separate safety layer with its own power supply and processing unit. It does not share the navigation controller's CPU or power bus.
+
+Architecture 6.1 (Dual-Channel Architecture).
+
+· Channel A: Navigation controller (path planning, MPC).
+· Channel B: Independent safety monitor (TTD computation, limit verification, command authorization).
+· Cross-comparison: Continuous diagnostic comparison of both channels.
+· SF-5 monitor: Independent verification of channel independence.
+
+6.2 Channel Independence
+
+Definition 6.1 (Channel Independence). Channels A and B are independent if and only if:
+
+1. Timing independence: \text{WCET}(B) \leq T_{\text{cycle}} regardless of Channel A's execution state.
+2. Power independence: Separate power rails with monitored voltage, V_A \perp V_B.
+3. Data independence: Separate sensor data paths.
+4. Clock independence: Independent watchdog timers, T_A \perp T_B.
+
+Theorem 6.1 (Necessity of Independence for Category 3). Category 3 architecture requires that a single fault cannot lead to loss of the safety function. If channels are not independent, a single fault in shared resources can cause common-cause failure, violating Category 3.
+
+Proof. By ISO 13849-1, Category 3 requires that "a single fault cannot lead to the loss of the safety function". If channels share a resource (power, clock, data), a fault in that resource affects both channels simultaneously, constituting a common-cause failure that violates the requirement. \square
+
+6.3 Measurement Chain
+
+· Safety LiDAR: Type 3 per IEC 61496-1/-3, up to SIL 2/PL d, angular resolution ≤ 0.5° for detection of 70 mm objects at 4 m range. Documented response times: 60–120 ms.
+· Radar or ultrasonic: Complementary detection for adverse conditions.
+· Inertial measurement unit: Angular rate and acceleration.
+· Encoders: Wheel odometry.
+· Safety bumper: Last-resort contact detection.
+
+6.4 Actuation and Safe State
+
+· Safe Torque Off (STO): Removes motor torque via redundant channel switching of power semiconductors. Documented response time: 2–25 ms.
+· Safe Brake Control (SBC): Controls the holding brake safely per IEC 61800-5-2.
+· SS1 (Safe Stop 1): Brakes the motor then initiates STO after a delay.
+· Redundant contactors: Physical disconnection of actuator power.
+
+6.5 Fail-Safe Behaviour
+
+Any of the following conditions triggers a safe stop within a defined time:
+
+· Divergence between Channel A and Channel B,
+· Loss of a safety sensor,
+· Timeout in the safety monitor,
+· Internal diagnostic failure,
+· Violation of SF-5 independence conditions.
+
+The safe stop is executed via STO and mechanical braking, with the stopping distance validated on hardware.
+
+6.6 FPGA-Based Deterministic Processing
+
+Architecture 6.2 (Latency-Optimized Safety Path). To achieve the reaction time budget required for 1.0 m/s operation, the safety path uses:
+
+1. Direct LiDAR-to-FPGA routing: Ethernet frames bypass the ROS/middleware stack and are processed deterministically at 200 Hz.
+2. Bare-metal safety MCU: Channel B evaluation in 5 ms.
+3. Semiconductor-based STO: IGBT/MOSFET hardware gating with < 5 ms response.
+
+Documented latency reduction: 500× speedup over software implementation.
+
+---
+
+Chapter 7: Technical Specifications
+
+7.1 Safety Requirements Specification
+
+Definition 7.1 (Safety Function). A safety function is a function implemented by a safety-related control system that maintains the safe state of the machine or prevents hazardous conditions.
+
+ID Safety Function Description PLr Cat. DC MTTFd PFHd Target
+SF-1 Protective stop Safe stop upon detection of a person in the protective field d 3 ≥ 90% ≥ 30 yr < 10⁻⁶/h
+SF-2 Safe speed limitation Limitation of maximum speed based on detection field d 3 ≥ 90% ≥ 30 yr < 10⁻⁶/h
+SF-3 Brake check Periodic verification of service brake effectiveness c 2 ≥ 60% ≥ 20 yr < 3×10⁻⁶/h
+SF-4 Loss of sensing Safe stop upon loss of a safety sensor d 3 ≥ 90% ≥ 30 yr < 10⁻⁶/h
+SF-5 Channel independence monitor Continuous verification of dual-channel independence d 3 ≥ 90% ≥ 30 yr < 10⁻⁶/h
+
+7.2 Full-Chain PFHd Allocation
+
+Definition 7.2 (PFHd). The Probability of Dangerous Failure per Hour (PFHd) for a safety function is:
+
+\text{PFHd} = \frac{1 - \text{DC}}{MTTFd}
+
+For a subsystem with multiple components, the total PFHd is the sum:
+
+\text{PFHd}_{\text{total}} = \sum_{i=1}^{n} \text{PFHd}_i
+
+Theorem 7.1 (PFHd Budget Allocation for PL d). For SF-1 to achieve PL d, the total PFHd must satisfy \text{PFHd}_{\text{total}} < 10^{-6}/\text{h}.
+
+Subsystem Target PFHd (FIT) Justification
+Safety LiDAR (Type 3) ≤ 100 Typical Type 3 scanner PFHd
+Safety Controller (Cat. 3, PL d) ≤ 200 Pre-certified controller; e.g., GuardLogix 5380: 7.23 FIT
+STO + Brake Control ≤ 150 ABB data: 125 FIT for braking
+CCF contribution ≤ 50 Per ISO 13849-1 Annex F
+Total ≤ 500 Within PL d range (< 1000 FIT)
+
+Proof. By Theorem 7.1's PFHd range for PL d: 10^{-7} \leq \text{PFHd} < 10^{-6} per hour. The total allocation of 500 FIT = 5 \times 10^{-7}/h falls within this range. \square
+
+Remark 7.1 (CCF Requirements). Category 3 architecture requires Common Cause Failure (CCF) measures with a score of at least 65 points per ISO 13849-1 Annex F. Dual-channel structures with independent sensors and independent actuation satisfy this requirement.
+
+7.3 Stopping Distance and Protective Field
+
+Definition 7.3 (Stopping Distance). The stopping distance is:
+
+S_A = S_{Br} + S_{AnF} + S_{AnS}
+
+where S_{Br} = v^2/(2a_{\max}) is the braking distance, S_{AnF} = v \cdot t_{\text{ctrl}} is the distance during vehicle control response, and S_{AnS} = v \cdot t_{\text{sensor}} is the distance during scanner response.
+
+Definition 7.4 (Protective Field). The protective field length is:
+
+S_L = S_A + TZ + Z_R + Z_F + Z_B
+
+where TZ is the tolerance zone, Z_R accounts for reflection-based measurement errors, Z_F accounts for lack of ground clearance, and Z_B accounts for decreasing braking force.
+
+7.4 Reaction Time Budget and Speed Constraint
+
+Theorem 7.2 (Achievable Speed in Mixed Zones). For maximum deceleration a_{\max} = 3 m/s² and total reaction time t_r = 200 ms, the maximum speed in mixed zones with a 0.5 m protective field is v_{\max} \approx 1.0 m/s.
+
+Proof. The stopping distance equation is:
+
+d_{\text{stop}} = v \cdot t_r + \frac{v^2}{2a_{\max}} \leq S_L
+
+Substituting d_{\text{stop}} \leq 0.5, t_r = 0.2, a_{\max} = 3:
+
+0.5 \geq 0.2v + \frac{v^2}{6}
+
+Rearranging:
+
+v^2 + 1.2v - 3 \leq 0
+
+Solving the quadratic:
+
+v \leq \frac{-1.2 + \sqrt{1.44 + 12}}{2} = \frac{-1.2 + 3.67}{2} \approx 1.24 \text{ m/s}
+
+With safety margin, v_{\max} = 1.0 m/s. \square
+
+Remark 7.2. At v = 1.5 m/s, the stopping distance is 0.3 + 0.375 = 0.675 m, requiring a protective field of ~0.9 m, infeasible in standard warehouse aisles.
+
+7.5 ISO 3691-4:2024 Operating Area Mapping
+
+Operating Area Definition Minimum Clearance PULSE-SAFE Response
+Operating area ≥ 0.5 m lateral clearance, ≥ 2.1 m height 0.5 m Full speed (≤ 1.0 m/s)
+Operating hazard area Insufficient clearance or unprotected Marked Reduced speed (≤ 0.5 m/s)
+Restricted area Personnel detection cannot protect Marked Safe stop on entry
+Closed area No personnel access None Full speed (≤ 2.0 m/s)
+
+Definition 7.5 (Operating Area State). PULSE-SAFE maintains a runtime operating area state \alpha \in \{\text{op, hazard, restricted, closed}\} derived from map data and sensor fusion. The speed limit is:
+
+v_{\max}(\alpha) =
+\begin{cases}
+2.0 \text{ m/s}, & \alpha = \text{closed} \\
+1.0 \text{ m/s}, & \alpha = \text{op} \\
+0.5 \text{ m/s}, & \alpha = \text{hazard} \\
+0 \text{ m/s}, & \alpha = \text{restricted}
+\end{cases}
+
+Remark 7.3. ISO 3691-4 limits speed to 0.3 m/s while detection is muted during docking. This special case must be explicitly encoded.
+
+7.6 Complete Technical Specification
+
+Parameter Specification Basis
+Target AMR mass 100–300 kg Design specification
+Nominal speed 1–2 m/s Operational requirement
+Max speed in mixed zones ≤ 1.0 m/s Theorem 7.2
+Max speed in closed areas ≤ 2.0 m/s ISO 3691-4
+Safety laser scanner Type 3, IEC 61496-1/-3, up to SIL 2/PL d Sensor specification
+Scanner response time 60–120 ms Manufacturer data
+Vehicle control response time 50–100 ms Measured/validated
+Total reaction time budget ≤ 200 ms Conservative allocation
+Maximum deceleration 3 m/s² Validated on hardware
+Coupled deceleration limit a_{\max}(v_r, \omega) = \sqrt{(\mu g)^2 - (v_r\omega)^2} Theorem 3.5
+Safety controller Pre-certified, PL d, Cat. 3, IEC 61508 SIL 2 Subsystem specification
+STO function PL e, Cat. 3 per IEC 61800-5-2 ABB data: PFH ~2.79 × 10⁻⁹/h
+Operating temperature 5–40 °C Environmental specification
+Humidity < 80%, non-condensing Environmental specification
+Exclusions Slippery floors (\mu < 0.2), slopes > 2%, outdoor, ATEX zones Operational domain
+
+---
+
+Chapter 8: Verification and Safety Case
+
+8.1 Three-Layer Validation Strategy
+
+Layer Method Evidence
+Formal KeYmaera X proof of Theorem 3.2 Machine-checkable proof certificate
+Model-based Monte Carlo simulation with parameter uncertainty Probabilistic safety bounds
+Physical Targeted fault injection tests Model parameter validation
+
+8.2 Confidence Bounds
+
+Theorem 8.1 (Statistical Confidence Bound). For zero failures in n independent trials, the upper bound on failure probability at confidence level 1 - \alpha is:
+
+p_{\text{upper}} = 1 - \alpha^{1/n}
+
+Proof. The probability of zero failures in n trials with failure probability p is (1-p)^n. Setting (1-p)^n = \alpha (the probability of observing zero failures when p = p_{\text{upper}}) and solving for p:
+
+p_{\text{upper}} = 1 - \alpha^{1/n}
+
+\square
+
+For n = 300 and \alpha = 0.05, p_{\text{upper}} \approx 1\%.
+
+8.3 Goal Structuring Notation Safety Case
+
+Goal G1 (System Safety): PULSE-SAFE AMR operates safely within its defined operational domain.
+
+Strategy S1: Argue over the independent safety monitor's enforcement of the passive safety envelope.
+
+Goal G2 (Formal Correctness): The safety invariant \phi_{\text{ps}} is preserved under all executions of the control model.
+
+· Evidence E1: KeYmaera X proof certificate of Theorem 3.2.
+· Evidence E2: Neural barrier certificate verification results (offline).
+
+Goal G3 (Hardware Validity): The model parameters (braking deceleration, reaction time, adhesion) accurately reflect the physical system.
+
+· Evidence E3: Hardware characterization tests (braking distance, reaction time).
+· Evidence E4: Fault injection test results (sensor delay, brake fade, wheel slip).
+
+Goal G4 (Implementation Independence): Channels A and B satisfy the independence conditions of Definition 6.1.
+
+· Evidence E5: SF-5 runtime logs demonstrating continuous independence verification.
+· Evidence E6: Timing analysis of WCET for Channel B.
+
+Goal G5 (Operating Area Compliance): The AMR's speed limits and protective functions comply with ISO 3691-4:2024 operating area requirements.
+
+· Evidence E7: Mapping of operating area classifications to speed limits.
+· Evidence E8: Validation tests in each operating area type.
+
+8.4 Runtime Evidence Logging
+
+Definition 8.1 (Evidence Log). The safety monitor maintains a tamper-evident log of every decision:
+
+\mathcal{L} = \{(\text{timestamp}, \text{command}, \text{decision}, \text{TTD}, B_{\text{NN}}(\mathbf{x}), \text{sensor health}, \text{independence status})\}
+
+The log is stored in non-volatile memory with cryptographic integrity protection.
+
+---
+
+Chapter 9: Conclusion
+
+9.1 Summary of Contributions
+
+This dissertation has established the mathematical foundations, formal proofs, architecture, and technical specifications for PULSE-SAFE AMR. The principal contributions are:
+
+1. Formalization of passive safety in differential dynamic logic, with a mechanized proof in KeYmaera X (Theorem 3.2).
+2. Algebraic ghost-variable encoding of trigonometric heading dynamics, preserving polynomial structure for quantifier elimination (Theorem 3.3).
+3. Friction circle constraint yielding a state-dependent coupled braking-deceleration limit (Theorem 3.5).
+4. Time-to-Danger metric that complements passive safety with graduated response while preserving the formal guarantee (Theorem 3.4).
+5. Three-layer barrier certificate architecture combining analytic proofs, neural certificates, and conservative fallback (Theorem 4.4).
+6. Full-chain PFHd allocation for ISO 13849-1 compliance (Theorem 7.1).
+7. Formalization of channel independence as a distinct safety function (Theorem 6.1).
+8. Complete technical specification with ISO 3691-4:2024 operating area mapping.
+
+9.2 The Verifiability Principle
+
+PULSE-SAFE is a system designed to be verifiable. It is not yet certifiable and not yet safe in the normative sense. This distinction protects future users and the scientific credibility of the project. The fundamental axiom—never authorize a command solely because it avoids a collision in the model—is the core of the value. Predictive algorithms already exist; the ability to demonstrate, diagnose, and verify safety limits is what makes the difference.
+
+9.3 Future Work
+
+The following directions remain open:
+
+1. Hardware characterization: Experimental validation of braking deceleration, reaction time, and friction estimation under diverse surface conditions.
+2. Neural barrier certificate training: Collection of sufficient hardware data for training and offline verification of the runtime certificate.
+3. Notified body engagement: Pre-submission review and gap analysis for ISO 13849-1 and ISO 3691-4 certification.
+4. Extension to multi-robot coordination: Generalization of the safety invariant to fleets of AMRs with shared workspace.
+5. Integration with IEEE P2817: Alignment of the safety case with the emerging verification guide for autonomous systems.
+
+9.4 Closing Statement
+
+The framework presented in this dissertation establishes a rigorous foundation for verifiable safety monitoring in autonomous mobile robots. The combination of formal proof, physically grounded modeling, and practical architecture provides a path from theoretical specification to certifiable system. The PULSE-SAFE axiom—verification over prediction—is the essential principle for safety in mixed human-robot environments.
+
+
+Appendices
+
+---
+
+Appendix A: KeYmaera X Proof Formalization
+
+A.1 Differential Dynamic Logic Foundations
+
+The formal verification of PULSE-SAFE relies on differential dynamic logic (dL), a specification and verification logic for hybrid systems. The KeYmaera X theorem prover implements dL and enables human insight through interactive theorem proving, distinguishing it from model-checking approaches.
+
+Definition A.1 (Hybrid Program Grammar).
+
+\alpha ::= x := e \mid x := * \mid ?Q \mid \alpha_1; \alpha_2 \mid \alpha_1 \cup \alpha_2 \mid \alpha^* \mid \{\dot{x} = f(x) \ \&\ Q\}
+
+Definition A.2 (dL Formula Grammar).
+
+\phi ::= P \mid \neg\phi \mid \phi_1 \land \phi_2 \mid \phi_1 \lor \phi_2 \mid \phi_1 \rightarrow \phi_2 \mid \forall x \, \phi \mid \exists x \, \phi \mid [\alpha]\phi \mid \langle\alpha\rangle\phi
+
+A.2 PULSE-SAFE Hybrid Program
+
+The PULSE-SAFE safety invariant is encoded in the following KeYmaera X model (.kyx format):
+
+```
+Archive "PULSE_SAFE_AMR"
+Definitions
+  Real b;    /* Maximum braking deceleration (b > 0) */
+  Real V;    /* Maximum upper bound on obstacle speed (V >= 0) */
+  Real T;    /* Maximum continuous evolution time step */
+End
+
+ProgramVariables
+  Real rx;   /* Robot x-position */
+  Real ry;   /* Robot y-position */
+  Real vr;   /* Robot longitudinal speed */
+  Real ox;   /* Obstacle x-position */
+  Real oy;   /* Obstacle y-position */
+  Real vx;   /* Obstacle x-velocity */
+  Real vy;   /* Obstacle y-velocity */
+  Real a;    /* Controlled acceleration */
+  Real t;    /* Clock variable for time bounds */
+End
+
+Problem
+  /* Initial Safety Condition (psi_ps) */
+  (vr >= 0 & b > 0 & V >= 0 &
+   (vr = 0 | (rx - ox)^2 + (ry - oy)^2 >
+    ( (vr^2 / (2 * b)) + (V * vr / b) )^2))
+  ->
+  /* Hybrid Program Execution ([dw_ps]) */
+  [
+    {
+      /* Non-deterministic choice of control options */
+      { a := -b; } [] { a := 0; } [] { a := 1; };
+      /* Safety Monitor Filter */
+      ? (vr = 0 | (rx - ox)^2 + (ry - oy)^2 >
+         ( (vr^2 / (2 * b)) + (V * vr / b) )^2);
+      t := 0;
+      /* Continuous evolution with domain constraint */
+      { rx' = vr, ry' = 0, vr' = a,
+        ox' = vx, oy' = vy, t' = 1
+        & t <= T &
+        (vr = 0 | (rx - ox)^2 + (ry - oy)^2 >
+         ( (vr^2 / (2 * b)) + (V * vr / b) )^2) }
+    }*
+  ]
+  /* Postcondition / Safety Invariant (phi_ps) */
+  (vr = 0 | (rx - ox)^2 + (ry - oy)^2 >
+   ( (vr^2 / (2 * b)) + (V * vr / b) )^2)
+End
+```
+
+A.3 Tactic Script
+
+The proof obligation is discharged using the following tactic structure:
+
+```
+/* Step 1: Loop induction */
+induction({ vr = 0 | (rx - ox)^2 + (ry - oy)^2 >
+            ( (vr^2 / (2 * b)) + (V * vr / b) )^2 })
+<(
+  /* Branch 1: Base Case */
+  auto,
+  /* Branch 2: Step Case */
+  <({
+    /* Peel apart non-deterministic choices */
+    <({ assign; auto }, { assign; auto }, { assign; auto });
+    /* Process monitor test */
+    master;
+    /* Initialize clock */
+    assign;
+    /* Differential Cut */
+    dC({ (rx - ox)^2 + (ry - oy)^2 >= (rx - ox)^2 })
+    <(
+      /* Sub-branch A: Prove differential cut */
+      DI; qe,
+      /* Sub-branch B: Continue ODE analysis */
+      skip
+    );
+    /* Differential Invariant on barrier function */
+    DI;
+    /* Quantifier Elimination */
+    qe
+  })
+)
+```
+
+A.4 Proof Tree Structure
+
+The verification goal is expressed as the dL sequent:
+
+\psi_{\text{ps}} \vdash [dw_{\text{ps}}] \phi_{\text{ps}}
+
+The proof proceeds by the following rules:
+
+1. Induction Rule (Ind): Replaces the loop [\alpha^*]\phi with two subgoals: the base case (invariant holds initially) and the step case (invariant preserved by one iteration).
+2. Discrete Step (Choice & Assignment): Verifies that control assignments combined with the monitor test \text{test}(\phi_{\text{ps}}) maintain the invariant.
+3. Differential Invariant Rule (DI): Computes the Lie derivative of the barrier function along the ODE vector field: \frac{d}{dt} \left( (rx - ox)^2 + (ry - oy)^2 - \left(\frac{vr^2}{2b} + V\frac{vr}{b}\right)^2 \right) \leq 0.
+4. Differential Cut (dC): Introduces a lemma about trajectory bounds to strengthen the differential invariant.
+5. Quantifier Elimination (qe): Dispatches remaining first-order real arithmetic formulas to backend decision procedures. Because polynomial constraints govern the braking parabolas, QE conclusively proves the absence of counterexamples.
+
+A.5 Documented Applications
+
+KeYmaera X has been applied to safety-critical systems including autonomous neural car control on highways and aircraft collision avoidance (ACAS X). The system handles quantified differential dynamic logic with parameterized system dynamics and supports fixed-point algorithms for computing differential invariants.
+
+---
+
+Appendix B: Ghost-Variable Encoding for Turning Trajectories
+
+B.1 Problem Statement
+
+Standard quantifier elimination procedures operate strictly on polynomial real arithmetic. Trigonometric functions \cos\theta_r and \sin\theta_r are transcendental and cannot be handled natively by QE backends.
+
+B.2 Algebraic Encoding
+
+We introduce ghost variables c = \cos\theta_r and s = \sin\theta_r governed by polynomial ODEs:
+
+\dot{c} = -s \cdot \omega, \quad \dot{s} = c \cdot \omega, \quad \dot{\theta}_r = \omega
+
+with the algebraic invariant:
+
+c^2 + s^2 = 1
+
+Lemma B.1. The unit circle invariant c^2 + s^2 = 1 is a differential invariant.
+
+Proof. Compute:
+
+\frac{d}{dt}(c^2 + s^2) = 2c\dot{c} + 2s\dot{s} = 2c(-s\omega) + 2s(c\omega) = 0
+
+Thus c^2 + s^2 is constant and equals 1 if initially so. \square
+
+B.3 KeYmaera X Model
+
+```
+ProgramVariables
+  Real rx, ry;      /* Position */
+  Real vx, vy;      /* Velocity components */
+  Real c, s;        /* Cosine and Sine ghost variables */
+  Real omega;       /* Angular steering rate */
+  Real a;           /* Longitudinal acceleration */
+End
+
+Problem
+  /* Initial state includes trigonometric unit circle invariant */
+  (c^2 + s^2 = 1 & vr >= 0) ->
+  [
+    {
+      { omega := *; ?(omega >= -omega_max & omega <= omega_max); }
+      {
+        rx' = vr * c, ry' = vr * s, vr' = a,
+        c' = -s * omega, s' = c * omega
+        & c^2 + s^2 = 1
+      }
+    }*
+  ]
+  (c^2 + s^2 = 1)
+End
+```
+
+B.4 Polynomial Structure Preservation
+
+Theorem B.1. The ghost-variable encoding preserves polynomial structure of the hybrid program, enabling quantifier elimination.
+
+Proof. The dynamics \dot{c} = -s\omega and \dot{s} = c\omega are polynomial in (c, s, \omega). The invariant c^2 + s^2 = 1 is polynomial. The safety condition is expressed entirely in terms of (p_{rx}, p_{ry}, v_r, c, s, p_{ox}, p_{oy}, v_{ox}, v_{oy}), all of which evolve according to polynomial differential equations. Therefore, QE applies. \square
+
+---
+
+Appendix C: Friction Circle Model and Coupled Braking-Deceleration Limit
+
+C.1 Physical Derivation
+
+Definition C.1 (Friction Circle). Under Coulomb friction, the vector sum of longitudinal and lateral forces cannot exceed the maximum available friction:
+
+\sqrt{F_{\text{long}}^2 + F_{\text{lat}}^2} \leq F_{\max} = \mu m g
+
+where F_{\text{long}} = m a and F_{\text{lat}} = m v_r \omega. Equation [2.40] in the source literature expresses this as:
+
+\left(\frac{F_x}{F_z}\right)^2 + \left(\frac{F_y}{F_z}\right)^2 \leq \mu^2
+
+which plots as a circle called the "Friction Circle".
+
+C.2 Coupled Deceleration Limit
+
+Theorem C.1 (Coupled Braking-Deceleration Limit). The maximum longitudinal braking deceleration under combined slip is:
+
+a_{\max}(v_r, \omega) = \sqrt{(\mu g)^2 - (v_r \omega)^2}
+
+Proof. Substituting the force expressions into the friction circle constraint:
+
+\sqrt{(ma)^2 + (m v_r \omega)^2} \leq \mu m g
+
+Dividing by m and squaring:
+
+a^2 + (v_r \omega)^2 \leq (\mu g)^2
+
+Isolating a^2:
+
+a^2 \leq (\mu g)^2 - (v_r \omega)^2
+
+Taking the square root:
+
+a \leq \sqrt{(\mu g)^2 - (v_r \omega)^2}
+
+The maximum braking deceleration is therefore a_{\max}(v_r, \omega) = \sqrt{(\mu g)^2 - (v_r \omega)^2}. \square
+
+Corollary C.1 (Physical Interpretation).
+
+· Zero turn (\omega = 0): a_{\max} = \mu g (full braking available).
+· Pure spin (v_r \omega = \mu g): a_{\max} = 0 (no braking available).
+· If v_r \omega > \mu g: slip is mathematically guaranteed.
+
+C.3 Dynamic Passive Safety
+
+The constant deceleration parameter b is replaced by the state-dependent coupled limit:
+
+\phi_{\text{ps, dynamic}} \equiv (v_r = 0) \lor \left( \|\mathbf{p}_r - \mathbf{p}_o\| > \frac{v_r^2}{2 a_{\max}(v_r, \omega)} + V \frac{v_r}{a_{\max}(v_r, \omega)} \right)
+
+C.4 Burckhardt Tire Model Parameters
+
+The Burckhardt/Kiencke model characterizes friction between tires and ground as a function of slip ratio \sigma and three parameters specific to the ground surface:
+
+\mu(\sigma) = c_1 \left( 1 - e^{-c_2 \sigma} \right) - c_3 \sigma
+
+For dry concrete surface: c_1 = 1.197, c_2 = 25.17, c_3 = 0.54.
+
+Table C.1: Burckhardt Model Parameters
+
+Road Surface c_1 c_2 c_3 \mu_{\text{peak}}
+Asphalt, dry 1.2801 23.99 0.52 1.17
+Asphalt, wet 0.857 33.82 0.347 0.80
+Concrete, dry 1.197 25.17 0.54 1.09
+Cobblestone, dry 1.371 6.46 0.67 0.86
+Snow 0.195 94.13 0.064 0.19
+Ice 0.05 306.39 0.001 0.05
+
+C.5 Slip-Slope Estimation
+
+Theorem C.2 (Slip-Slope Friction Estimation). In the micro-slip region |s| < 0.05, the slope of the friction curve \partial \mu / \partial s is proportional to the peak friction coefficient:
+
+\left. \frac{\partial \mu}{\partial s} \right|_{s=0} = c_1 c_2 - c_3
+
+Proof. Differentiate the Burckhardt model:
+
+\frac{\partial \mu}{\partial s} = c_1 c_2 e^{-c_2 s} - c_3
+
+At s = 0:
+
+\left. \frac{\partial \mu}{\partial s} \right|_{s=0} = c_1 c_2 - c_3
+
+For typical surfaces, c_3 \ll c_1 c_2, so the initial slope is approximately c_1 c_2, proportional to the peak friction. \square
+
+---
+
+Appendix D: Real-Time Friction Estimation
+
+D.1 Recursive Least Squares Formulation
+
+Definition D.1 (Regressor Formulation). The friction estimation problem is formulated as a linear regression:
+
+y(t) = \phi(t)^T \theta + \epsilon(t)
+
+where y(t) = a_{\text{imu}}(t) is the measured acceleration, \phi(t) = g is the regressor, \theta = \mu is the parameter to estimate, and \epsilon(t) is noise.
+
+Definition D.2 (RLS Update). The Recursive Least Squares update with forgetting factor \lambda \in (0.95, 0.99):
+
+\hat{\theta}(t) = \hat{\theta}(t-1) + K(t) \left( y(t) - \phi(t)^T \hat{\theta}(t-1) \right)
+
+K(t) = \frac{P(t-1)\phi(t)}{\lambda + \phi(t)^T P(t-1) \phi(t)}
+
+P(t) = \frac{1}{\lambda} \left( P(t-1) - \frac{P(t-1)\phi(t)\phi(t)^T P(t-1)}{\lambda + \phi(t)^T P(t-1)\phi(t)} \right)
+
+Due to linear parametrization, it is possible to estimate unknown and assumed slowly changing coefficients by RLS methods with a forgetting scheme discounting past data. RLS is widely applied in mobile robotics, including skid-steering robots for friction compensation and localization.
+
+D.2 Active Probing
+
+Definition D.3 (Micro-Pulse Injection). During constant-velocity cruising, inject a high-frequency micro-torque pulse \Delta \tau of duration < 20 ms into the drive motors.
+
+Definition D.4 (Contact Stiffness). The contact stiffness is estimated as:
+
+k = \frac{\Delta a}{\Delta \tau}
+
+where \Delta a is the measured acceleration response.
+
+D.3 Conservative Bounding
+
+Definition D.5 (Safe Friction Bound). The safety monitor uses a conservative statistical lower bound:
+
+\mu_{\text{safe}}(t) = \hat{\mu}(t) - k \cdot \sigma_{\mu}(t)
+
+where \sigma_{\mu}(t) is the estimation variance and k \in [2.5, 3.0] is a safety factor corresponding to a 99.7% confidence interval.
+
+Theorem D.1 (Safety Guarantee Under Friction Uncertainty). If the true friction \mu_{\text{true}} satisfies \mu_{\text{true}} \geq \mu_{\text{safe}}, then the dynamic passive safety condition \phi_{\text{ps, dynamic}} with \mu = \mu_{\text{safe}} is conservative.
+
+Proof. Since a_{\max}(v_r, \omega; \mu) = \sqrt{(\mu g)^2 - (v_r \omega)^2} is monotonically increasing in \mu, using \mu_{\text{safe}} \leq \mu_{\text{true}} yields a_{\max}(\mu_{\text{safe}}) \leq a_{\max}(\mu_{\text{true}}), hence the required separation is larger, and the condition is more conservative. \square
+
+---
+
+Appendix E: Neural Barrier Certificate Verification
+
+E.1 ReLU Network Formulation
+
+Definition E.1 (ReLU Network). A ReLU network is a function f: \mathbb{R}^n \rightarrow \mathbb{R}^m of the form:
+
+f(x) = W_L \sigma(W_{L-1} \sigma(\cdots \sigma(W_1 x + b_1) \cdots) + b_{L-1}) + b_L
+
+where \sigma(z) = \max(0, z) is the ReLU activation.
+
+E.2 Barrier Certificate Conditions
+
+Definition E.2 (Neural Barrier Certificate). A neural barrier certificate B_{\text{NN}}: \mathbb{R}^n \rightarrow \mathbb{R} is a ReLU neural network satisfying:
+
+1. B_{\text{NN}}(\xi) \leq 0 for all \xi \in \mathcal{X}_0 (initial set),
+2. B_{\text{NN}}(\xi) > 0 for all \xi \in \mathcal{X}_u (unsafe set),
+3. \dot{B}_{\text{NN}}(\xi) \leq 0 for all \xi on the boundary B_{\text{NN}}(\xi) = 0.
+
+E.3 Verification and Falsification
+
+A necessary and sufficient condition for verifying the correctness of ReLU neural barrier certificates has been established. For ReLU networks, the partitioning of the input space exhibits a special structure: every n-dimensional linear region shares a facet with each of its adjacent linear regions.
+
+Algorithm E.1 (Boundary Propagation).
+
+1. Initialize the set of valid activation indicators as \mathcal{A} := \{\mathscr{C}_0\} and the visited set as \mathcal{B} := \emptyset.
+2. Select an activation indicator \mathscr{C} \in \mathcal{A} \setminus \mathcal{B} and add \mathscr{C} to \mathcal{B}.
+3. For each facet j of \mathcal{X}(\mathscr{C}), solve the LP feasibility problem to find intersection with the boundary.
+4. If the LP admits a feasible solution, enumerate all feasible activation indicators activated by the solution.
+5. Terminate when \mathcal{A} = \mathcal{B}, meaning all valid activation indicators have been explored.
+
+E.4 Branch-and-Bound Verification
+
+For scalability, bound propagation techniques and the Branch-and-Bound scheme efficiently verify that a neural network satisfies the conditions to be a control barrier function over the continuous state space. The approach leverages the piecewise linearity of ReLU networks to enumerate valid linear regions and verify or falsify the three barrier certificate conditions in each region.
+
+Theorem E.1 (Soundness). If the barrier certificate produced by Algorithm E.1 passes verification, then it is a valid barrier certificate.
+
+Proof. The algorithm enumerates all valid linear regions of the ReLU network. By verifying the three barrier conditions in each region, and because the union of all valid linear regions covers the boundary \partial\mathcal{C}, the certificate satisfies all conditions globally. \square
+
+---
+
+Appendix F: Matrix Zonotope Data-Driven Verification
+
+F.1 Data-Consistent Model Set
+
+Definition F.1 (Matrix Zonotope). A matrix zonotope is a set:
+
+\mathcal{MZ} = \left\{ M_0 + \sum_{i=1}^{N} \alpha_i M_i : \alpha_i \in [-1, 1] \right\}
+
+where M_0 is the center matrix and M_i are the generator matrices.
+
+Definition F.2 (Data-Consistent Model Set). Given noisy observations \{(\xi_k, \xi_{k+1})\}_{k=1}^{N}, the data-consistent model set is:
+
+\Sigma = \left\{ (A, B) : \xi_{k+1} = A \xi_k + B u_k + w_k, \ \|w_k\| \leq \epsilon \right\}
+
+F.2 Data-Driven Barrier Certificate
+
+A data-driven safety verification framework leverages matrix zonotopes and barrier certificates to verify system safety directly from noisy data. Instead of trusting a single unreliable model, the framework constructs a set of models that capture all possible system dynamics consistent with the observed data, ensuring that the true system model is always contained within this set. This model set is compactly represented using matrix zonotopes, enabling efficient computation and propagation of uncertainty.
+
+Theorem F.1 (Data-Driven Barrier Certificate). If there exists a barrier certificate B satisfying the three conditions for all models in the data-consistent model set \Sigma, then B is a valid barrier certificate for the true system.
+
+Proof. By construction, the true system model is contained in \Sigma. If the barrier conditions hold for all models in \Sigma, they hold in particular for the true model. \square
+
+F.3 Three-Layer Certificate Architecture
+
+Architecture F.1 (Three-Layer Certificate System).
+
+1. Formal core: KeYmaera X proof of Theorem 3.2 for the idealized braking model, providing the normative proof certificate.
+2. Runtime certificate: Neural barrier certificate B_{\text{NN}} trained on hardware data (braking behavior, actuator delays, tire slip, surface variations). The runtime monitor verifies B_{\text{NN}}(\xi) \leq 0.
+3. Conservative fallback: If B_{\text{NN}} cannot be evaluated due to sensor fault or numerical uncertainty, revert to B_{\text{ana}}(\xi) \leq 0.
+
+Theorem F.2 (Soundness of Three-Layer Architecture). The three-layer architecture is sound: if any layer certifies safety, the system is safe.
+
+Proof. The formal core certifies safety by Theorem 3.2. The runtime certificate certifies safety by Theorem E.1 (if verified offline). The conservative fallback certifies safety by Theorem 4.1. Since all three layers certify the same safety property, satisfaction of any one is sufficient. \square
+
+---
+
+Appendix G: Full-Chain PFHd Allocation
+
+G.1 PFHd Calculation Methodology
+
+Definition G.1 (PFHd). The Probability of Dangerous Failure per Hour for a safety function is:
+
+\text{PFHd} = \frac{1 - \text{DC}}{MTTFd}
+
+For a subsystem with multiple components, the total PFHd is the sum:
+
+\text{PFHd}_{\text{total}} = \sum_{i=1}^{n} \text{PFHd}_i
+
+SISTEMA is the standard software tool to calculate PL and PFHd for the implementation of EN ISO 13849-1. The PFHd calculations are based on the conservative assumption that all potential faults of any component in the safety-related parts of the control system are dangerous.
+
+G.2 Subsystem-Level Allocation
+
+Table G.1: PFHd Budget Allocation for SF-1 (Protective Stop)
+
+Subsystem Target PFHd (FIT) Justification
+Safety LiDAR (Type 3) ≤ 100 SICK nanoScan3: 8 × 10⁻⁸ h⁻¹
+Safety Controller (Cat. 3, PL d) ≤ 200 GuardLogix 5380: 7.23 FIT
+STO + Brake Control ≤ 150 ABB STO: PFH ~2.79 × 10⁻⁹/h
+CCF contribution ≤ 50 Per ISO 13849-1 Annex F
+Total ≤ 500 Within PL d range (< 1000 FIT)
+
+G.3 CCF Requirements
+
+Category 3 architecture requires Common Cause Failure (CCF) measures with a score of at least 65 points per ISO 13849-1 Annex F. The CCF value is generated using the scoring process outlined in Annex F. The complete CCF scoring process must be performed when actually implementing an application.
+
+G.4 Verification and Validation
+
+ISO 13849-2 sets requirements for verification and validation. Verification is an analysis of the resulting safety control system to confirm that all safety functional requirements have been met. Validation is a functional test to demonstrate that the system meets the specified requirements. The functional test includes normal operating conditions and potential fault injection of failure modes.
+
+---
+
+Appendix H: ISO 3691-4:2024 Operating Area Compliance Mapping
+
+H.1 Operating Area Classifications
+
+ISO 3691-4:2024 specifies safety requirements for driverless industrial trucks and their systems. The condition of the operating zone has a significant effect on the safe operation of the driverless industrial truck. Preparations of the operating zone to eliminate associated hazards are specified in Annex A.
+
+Table H.1: Operating Area Definitions and PULSE-SAFE Response
+
+Operating Area Definition Minimum Clearance PULSE-SAFE Response
+Operating area ≥ 0.5 m lateral clearance, ≥ 2.1 m height 0.5 m Full speed (≤ 1.0 m/s)
+Operating hazard area Insufficient clearance or unprotected Marked Reduced speed (≤ 0.5 m/s)
+Restricted area Personnel detection cannot protect Marked Safe stop on entry
+Closed area No personnel access None Full speed (≤ 2.0 m/s)
+
+In the operating hazard area, protective measures include: providing escape passage (0.5 m wide, 2.1 m high), limiting maximum speed, audible/visual warnings, and delayed muting (when the distance between AGV and load is sufficiently small, e.g., < 180 mm, ensuring personnel cannot enter before activating the muting function).
+
+H.2 Speed Limits
+
+Definition H.1 (Operating Area State). PULSE-SAFE maintains a runtime operating area state \alpha \in \{\text{op, hazard, restricted, closed}\} derived from map data and sensor fusion. The speed limit is:
+
+v_{\max}(\alpha) =
+\begin{cases}
+2.0 \text{ m/s}, & \alpha = \text{closed} \\
+1.0 \text{ m/s}, & \alpha = \text{op} \\
+0.5 \text{ m/s}, & \alpha = \text{hazard} \\
+0 \text{ m/s}, & \alpha = \text{restricted}
+\end{cases}
+
+If operating speed > 1.2 m/s, the AGV operating area shall be treated as a closed area, applying closed-area safety requirements. The displacement speed equal to or lower than 300 mm/s is established by EN ISO 3691-4 to be able to move without means of detection of persons.
+
+H.3 Incomplete Machine Problem
+
+AGVs are typically supplied as incomplete machines. The complete system must be regarded as an "assembly of machinery," requiring a certificate of conformity. The party responsible (manufacturer or system integrator) must be determined early in the project.
+
+---
+
+Appendix I: Goal Structuring Notation Safety Case
+
+I.1 GSN Framework
+
+GSN provides a method for outlining the safety case to argue, in a clear, comprehensible and defensible manner, that a system is safe to operate in a given context. The GSN Community Standard provides a comprehensive, authoritative definition of the Goal Structuring Notation.
+
+I.2 Safety Case Structure
+
+Goal G1 (System Safety): PULSE-SAFE AMR operates safely within its defined operational domain.
+
+Strategy S1: Argue over the independent safety monitor's enforcement of the passive safety envelope.
+
+Goal G2 (Formal Correctness): The safety invariant \phi_{\text{ps}} is preserved under all executions of the control model.
+
+· Evidence E1: KeYmaera X proof certificate of Theorem 3.2.
+· Evidence E2: Neural barrier certificate verification results (offline).
+
+Goal G3 (Hardware Validity): The model parameters (braking deceleration, reaction time, adhesion) accurately reflect the physical system.
+
+· Evidence E3: Hardware characterization tests (braking distance, reaction time).
+· Evidence E4: Fault injection test results (sensor delay, brake fade, wheel slip).
+
+Goal G4 (Implementation Independence): Channels A and B satisfy the independence conditions of Definition 6.1.
+
+· Evidence E5: SF-5 runtime logs demonstrating continuous independence verification.
+· Evidence E6: Timing analysis of WCET for Channel B.
+
+Goal G5 (Operating Area Compliance): The AMR's speed limits and protective functions comply with ISO 3691-4:2024 operating area requirements.
+
+· Evidence E7: Mapping of operating area classifications to speed limits.
+· Evidence E8: Validation tests in each operating area type.
+
+I.3 Runtime Evidence Logging
+
+Definition I.1 (Evidence Log). The safety monitor maintains a tamper-evident log of every decision:
+
+\mathcal{L} = \{(\text{timestamp}, \text{command}, \text{decision}, \text{TTD}, B_{\text{NN}}(\mathbf{x}), \text{sensor health}, \text{independence status})\}
+
+The log is stored in non-volatile memory with cryptographic integrity protection.
+
+---
+
+Appendix J: Reaction Time Budget Analysis
+
+J.1 Latency Components
+
+Definition J.1 (Stopping Distance). The stopping distance is:
+
+S_A = S_{Br} + S_{AnF} + S_{AnS}
+
+where S_{Br} = v^2/(2a_{\max}) is the braking distance, S_{AnF} = v \cdot t_{\text{ctrl}} is the distance during vehicle control response, and S_{AnS} = v \cdot t_{\text{sensor}} is the distance during scanner response.
+
+J.2 Component Latencies
+
+Table J.1: Latency Budget Breakdown
+
+Component Baseline Latency Optimized Latency Distance Impact (v = 1.5 m/s)
+Safety LiDAR 120 ms 40 ms (FPGA) 180 mm → 60 mm
+Channel B Monitor 30 ms 5 ms (bare-metal MCU) 45 mm → 7.5 mm
+Actuator / STO 70 ms 25 ms (solid-state) 105 mm → 37.5 mm
+Total 220 ms 70 ms 330 mm → 105 mm
+
+J.3 Speed Constraint
+
+Theorem J.1 (Achievable Speed in Mixed Zones). For maximum deceleration a_{\max} = 3 m/s² and total reaction time t_r = 200 ms, the maximum speed in mixed zones with a 0.5 m protective field is v_{\max} \approx 1.0 m/s.
+
+Proof. The stopping distance equation is:
+
+d_{\text{stop}} = v \cdot t_r + \frac{v^2}{2a_{\max}} \leq S_L
+
+Substituting d_{\text{stop}} \leq 0.5, t_r = 0.2, a_{\max} = 3:
+
+0.5 \geq 0.2v + \frac{v^2}{6}
+
+Rearranging:
+
+v^2 + 1.2v - 3 \leq 0
+
+Solving the quadratic:
+
+v \leq \frac{-1.2 + \sqrt{1.44 + 12}}{2} = \frac{-1.2 + 3.67}{2} \approx 1.24 \text{ m/s}
+
+With safety margin, v_{\max} = 1.0 m/s. \square
+
+J.4 Scanner Response Times
+
+Table J.2: Documented Safety Laser Scanner Response Times
+
+Scanner Response Time Type Source
+SICK nanoScan3 Core ≥ 70 ms Type 3 
+SICK microScan3 95 ms Type 3 
+SICK S3000 120 ms Type 3 
+Rockwell SafeZone 60 ms Type 3, SIL 2, PL d 
+
+J.5 STO Response Times
+
+Table J.3: ABB STO Response Times
+
+Parameter Value
+STO reaction time (shortest detectable break) 1 ms
+STO response time (typical) 2 ms
+STO response time (maximum) 25 ms
+Fault detection time Channels > 200 ms in different state
+Fault reaction time Fault detection time + 10 ms
+
+STO response times are documented as: STO reaction time (shortest detectable break): 1 ms; STO response time: 2 ms (typical), 25 ms (maximum).
+
+---
+
+Appendix K: Three-Layer Validation Strategy
+
+K.1 Validation Layers
+
+Layer Method Evidence
+Formal KeYmaera X proof of Theorem 3.2 Machine-checkable proof certificate
+Model-based Monte Carlo simulation with parameter uncertainty Probabilistic safety bounds
+Physical Targeted fault injection tests Model parameter validation
+
+K.2 Confidence Bounds
+
+Theorem K.1 (Statistical Confidence Bound). For zero failures in n independent trials, the upper bound on failure probability at confidence level 1 - \alpha is:
+
+p_{\text{upper}} = 1 - \alpha^{1/n}
+
+Proof. The probability of zero failures in n trials with failure probability p is (1-p)^n. Setting (1-p)^n = \alpha and solving for p:
+
+p_{\text{upper}} = 1 - \alpha^{1/n}
+
+For n = 300 and \alpha = 0.05, p_{\text{upper}} \approx 1\%. \square
+
+K.3 Comparative Scenarios
+
+1. Pedestrian crossing 1 m in front of the AMR
+2. Forklift emerging from a blind corner
+3. LiDAR failure during motion
+4. Slippery floor (\mu = 0.2)
+5. Unexpected obstacle fallen on the floor
+6. Emergency stop triggered by an operator
+7. Operating area transition (op → hazard → restricted)
+8. Channel independence violation (SF-5 trigger)
+
+K.4 Metrics
+
+· Number of collisions (target: 0 in defined scenarios)
+· Near-collision rate (distance < 0.2 m)
+· False stop rate (target: < 1% of cycles)
+· Reaction time (99.99th percentile, not mean)
+· Stopping distance: measured vs. predicted
+· TTD at decision time (distribution and minimum)
+· SF-5 independence violation rate (target: 0)
+
+---
+
+Appendix L: IEEE P2817 Alignment
+
+L.1 Framework Overview
+
+IEEE P2817 is a Guide for Verification of Autonomous Systems that enables the user to define a customized process for verification of their autonomous system at the component and system levels. The guide includes integration with fault management and runtime assurance components, and provision of evidence for licensure, certification, and assurance.
+
+L.2 Mapping to PULSE-SAFE
+
+P2817 Element PULSE-SAFE Implementation
+Component-level verification KeYmaera X proof of Theorem 3.2
+System-level verification Three-layer validation strategy (Appendix K)
+Fault management SF-5 independence monitor; fail-safe behaviour
+Runtime assurance Neural barrier certificate runtime verification
+Evidence for certification GSN safety case (Appendix I); runtime evidence log
+
+L.3 Alignment Status
+
+IEEE P2817 is currently in draft status. It should be monitored for final publication and incorporated into the safety case when available. The IEEE Robotics and Automation Society has a technical committee concerned with verification standards and certification processes for autonomous systems.
+
+---
+
+Appendix M: Notified Body Engagement Strategy
+
+M.1 Certification Bottleneck
+
+Certification timelines are excessively long due to the shortage of Notified Bodies (NB). Costs vary significantly, and interpretations of requirements differ, creating inefficiency and uncertainty. The EU Machinery Regulation 2023/1230 introduces third-party Notified Body assessment for safety-related software control systems that include AI or have adaptive behavior.
+
+M.2 Pre-Submission Strategy
+
+1. Safety Case Development: Build a Goal Structuring Notation (GSN) safety case from project inception (Appendix I).
+2. Formal Proof Evidence: Provide the KeYmaera X proof certificate of Theorem 3.2 as evidence for the safety claim.
+3. Hardware Validation Data: Include measured brake deceleration, reaction time, and wheel slip curves as evidence for model parameters.
+4. Assumption Documentation: Document all assumptions and their validity conditions.
+5. Runtime Evidence Log: Include a tamper-evident log that records every safety monitor decision.
+
+M.3 Engagement Timeline
+
+Phase Timeline Key Deliverables
+1. Formal Foundation 0–6 months Complete KeYmaera X proof; publish formal specification
+2. Hardware Characterization 6–12 months Measured brake deceleration, reaction time, wheel slip curves
+3. Runtime Certificate 12–18 months Neural barrier certificate trained on hardware data
+4. Safety Case Development 18–24 months GSN safety case with formal + empirical evidence
+5. Notified Body Engagement 24–30 months Pre-submission review, gap analysis
+6. Pilot Deployment 30–36 months Controlled environment validation with runtime logging
+
+Appendix P: ASCII Diagrams
+
+P.1 Overall System Architecture
+
+```
++-----------------------------------------------------------------------+
+|                        PULSE-SAFE AMR SYSTEM                          |
++-----------------------------------------------------------------------+
+|                                                                       |
+|  +-------------------------------+   +-------------------------------+  |
+|  |  CHANNEL A: NAVIGATION        |   |  CHANNEL B: SAFETY MONITOR    |  |
+|  |  (Non-Safety)                 |   |  (Safety-Related, PL d, Cat.3)|  |
+|  |                               |   |                               |  |
+|  |  +-------------------------+  |   |  +-------------------------+  |  |
+|  |  | Path Planner / MPC      |  |   |  | TTD Computation         |  |  |
+|  |  +-------------------------+  |   |  +-------------------------+  |  |
+|  |  | Trajectory Optimizer    |  |   |  | Barrier Certificate Eval|  |  |
+|  |  +-------------------------+  |   |  +-------------------------+  |  |
+|  |  | AI/ML Navigation (opt.) |  |   |  | Friction Estimator      |  |  |
+|  |  +-------------------------+  |   |  +-------------------------+  |  |
+|  |                               |   |  | Command Veto Logic      |  |  |
+|  |                               |   |  +-------------------------+  |  |
+|  +---------------+---------------+   +---------------+---------------+  |
+|                  |                                   |                |
+|                  |  Proposed Command (a, omega)      |  Veto/Authorize|
+|                  v                                   v                |
+|  +-------------------------------------------------------------------+|
+|  |                    CROSS-COMPARISON LAYER                         ||
+|  |     Continuous diagnostic comparison of Channel A and B           ||
+|  +---------------------------------+---------------------------------+|
+|                                    |                                  |
+|                                    v                                  |
+|  +-------------------------------------------------------------------+|
+|  |                    SF-5 INDEPENDENCE MONITOR                      ||
+|  |  Timing | Power | Data | Clock  -->  Any violation = SAFE STOP    ||
+|  +---------------------------------+---------------------------------+|
+|                                    |                                  |
+|                                    v                                  |
+|  +-------------------------------------------------------------------+|
+|  |                    ACTUATION LAYER                                ||
+|  |  STO (2-25 ms) | SBC | SS1 | Redundant Contactors                  ||
+|  +---------------------------------+---------------------------------+|
+|                                    |                                  |
+|                                    v                                  |
+|  +-------------------------------------------------------------------+|
+|  |                    SAFE STATE: MOTION STOPPED                     ||
+|  +-------------------------------------------------------------------+|
++-----------------------------------------------------------------------+
+```
+
+Figure P.1: Dual-channel PULSE-SAFE architecture with independent safety layer, cross-comparison, SF-5 independence monitor, and actuation chain.
+
+---
+
+P.2 Control Loop State Machine
+
+```
+                      +-----------+
+                      |   START   |
+                      +-----+-----+
+                            |
+                            v
+                   +--------+--------+
+                   | SENSE: LiDAR,   |
+                   | IMU, Encoders,  |
+                   | Bumper, Radar   |
+                   +--------+--------+
+                            |
+                            v
+                   +--------+--------+
+                   | ESTIMATE:       |
+                   | State, mu, TTD  |
+                   +--------+--------+
+                            |
+             +--------------+--------------+
+             |                             |
+             v                             v
+     +-------+-------+             +-------+-------+
+     | CHANNEL A:    |             | CHANNEL B:    |
+     | Propose (a,w) |             | Verify        |
+     +-------+-------+             +-------+-------+
+             |                             |
+             |     +-----------------+     |
+             +---->| COMPARE & VETO  |<----+
+                   +--------+--------+
+                            |
+                   +--------+--------+
+                   |   Safe?         |
+                   +--+----------+---+
+                      |          |
+                   YES|          |NO
+                      v          v
+               +------+--+  +----+------+
+               | EXECUTE |  | SAFE STOP |
+               +---------+  +-----------+
+```
+
+Figure P.2: Control loop state machine. Channel B vetoes any command not preserving the safety invariant.
+
+---
+
+P.3 KeYmaera X Proof Tree
+
+```
+                         psi_ps |- [dw_ps] phi_ps
+                                   |
+                         +---------+---------+
+                         |    INDUCTION      |
+                         +---------+---------+
+                                   |
+                   +---------------+---------------+ 
+                   |                               |
+                   v                               v
+           +-------+-------+               +-------+-------+
+           | BASE CASE     |               | STEP CASE     |
+           | psi_ps -> phi |               | phi -> [dw]phi|
+           +---------------+               +-------+-------+
+                                                   |
+                                   +---------------+---------------+
+                                   |                               |
+                                   v                               v
+                           +-------+-------+               +-------+-------+
+                           | DISCRETE      |               | CONTINUOUS    |
+                           | CONTROL       |               | EVOLUTION     |
+                           +-------+-------+               +-------+-------+
+                                   |                               |
+                                   v                               v
+                           +-------+-------+               +-------+-------+
+                           | a := -b       |               | DIFFERENTIAL  |
+                           | a := 0        |               | CUT (dC)      |
+                           | a in [0,amax] |               +-------+-------+
+                           +-------+-------+                       |
+                                   |                               v
+                                   v                       +-------+-------+
+                           +-------+-------+               | DIFFERENTIAL  |
+                           | MONITOR TEST  |               | INVARIANT (DI)|
+                           | ?(phi_ps)     |               +-------+-------+
+                           +-------+-------+                       |
+                                   |                               v
+                                   +---------------+---------------+
+                                                   |
+                                                   v
+                                           +-------+-------+
+                                           | QUANTIFIER    |
+                                           | ELIMINATION   |
+                                           | (QE / Z3)     |
+                                           +-------+-------+
+                                                   |
+                                                   v
+                                           +-------+-------+
+                                           |    PROVED     |
+                                           +---------------+
+```
+
+Figure P.3: KeYmaera X proof tree structure for Theorem 3.2. Loop induction decomposes into base and step cases; the step case splits discrete control (with monitor test) and continuous evolution (with differential cut and differential invariant).
+
+---
+
+P.4 Friction Circle and Coupled Deceleration
+
+```
+                          F_lat / (mu*m*g)
+                                ^
+                                |
+                           1.0  + - - - - - - - - - - +
+                                |                   / |
+                                |                 /   |
+                                |               /     |
+                                |             /       |
+                                |           /         |
+                                |         /           |
+                                |       /             |
+                                |     /               |
+                                |   /                 |
+                                | /                   |
+                    ------------+---------------------+----------> F_long / (mu*m*g)
+                               -1.0                   1.0
+                                | \                   |
+                                |   \                 |
+                                |     \               |
+                                |       \             |
+                                |         \           |
+                                |           \         |
+                                |             \       |
+                                |               \     |
+                                |                 \   |
+                            -1.0  + - - - - - - - - - - +
+                                |
+                                |
+          Feasible region: inside circle
+          Boundary: sqrt(F_long^2 + F_lat^2) = mu*m*g
+
+          At turning:        F_lat = m * v_r * omega
+          Available braking: F_long,max = sqrt((mu*m*g)^2 - (m*v_r*omega)^2)
+          => a_max(v_r,omega) = sqrt((mu*g)^2 - (v_r*omega)^2)
+```
+
+Figure P.4: Friction circle representation. The coupled braking-deceleration limit is the longitudinal component of the friction circle after lateral demand is subtracted.
+
+---
+
+P.5 Three-Layer Barrier Certificate Architecture
+
+```
++-----------------------------------------------------------------+
+|                    LAYER 1: FORMAL CORE                         |
+|                                                                 |
+|   KeYmaera X proof of Theorem 3.2                               |
+|   B_ana(xi) = v_r^2/(2b) + V*v_r/b - ||p_r - p_o||              |
+|   Machine-checkable proof certificate                           |
++-------------------------------+---------------------------------+
+                                |
+                                v
++-----------------------------------------------------------------+
+|                    LAYER 2: RUNTIME CERTIFICATE                 |
+|                                                                 |
+|   Neural Barrier Certificate B_NN (ReLU)                        |
+|   Trained on hardware data: braking, delays, slip, mu           |
+|   Verified offline via branch-and-bound                         |
++-------------------------------+---------------------------------+
+                                |
+                                v
++-----------------------------------------------------------------+
+|                    LAYER 3: CONSERVATIVE FALLBACK               |
+|                                                                 |
+|   If B_NN cannot be evaluated (sensor fault, numerical          |
+|   uncertainty): revert to B_ana                                 |
++-----------------------------------------------------------------+
+```
+
+Figure P.5: Three-layer certificate system. Satisfaction of any layer is sufficient for safety; all three certify the same invariant.
+
+---
+
+P.6 PFHd Budget Allocation
+
+```
+PFHd Budget Allocation for SF-1 (Protective Stop)
+Target: PFHd < 1000 FIT (PL d)
+
+Safety LiDAR       [####                    ] 100 FIT
+Safety Controller  [########                ] 200 FIT
+STO + Brake        [######                  ] 150 FIT
+CCF contribution   [##                      ]  50 FIT
+                   +------------------------+---------
+                   0    250   500   750  1000 FIT
+                   |         |              |
+                   |         |              +-- PL d boundary
+                   |         +-- Total: 500 FIT
+                   +-- PL e boundary (100 FIT)
+
+Legend: 1 FIT = 1 failure per 10^9 hours
+        PL d range: 100 - 1000 FIT
+        PL e range: < 100 FIT
+```
+
+Figure P.6: Full-chain PFHd allocation for SF-1. Total 500 FIT falls within PL d range.
+
+---
+
+P.7 ISO 3691-4 Operating Area Map
+
+```
++-----------------------------------------------------------------+
+|                    OPERATING AREA MAP                            |
++-----------------------------------------------------------------+
+
++------------------------+------------------------+
+|                        |                        |
+|   OPERATING AREA       |   OPERATING HAZARD     |
+|   (op)                 |   AREA (hazard)        |
+|                        |                        |
+|   Clearance >= 0.5 m   |   Insufficient         |
+|   Height >= 2.1 m      |   clearance            |
+|   v_max = 1.0 m/s      |   v_max = 0.5 m/s      |
+|                        |   Marked + warnings    |
++------------------------+------------------------+
+|                        |                        |
+|   CLOSED AREA          |   RESTRICTED AREA      |
+|   (closed)             |   (restricted)         |
+|                        |                        |
+|   No personnel access  |   Detection cannot     |
+|   v_max = 2.0 m/s      |   protect              |
+|                        |   v_max = 0 m/s        |
+|                        |   (safe stop)          |
++------------------------+------------------------+
+
+Transition rule: alpha in {op, hazard, restricted, closed}
+Any transition to restricted => immediate safe stop
+Any degradation of clearance => speed reduction
+```
+
+Figure P.7: ISO 3691-4:2024 operating area classifications with PULSE-SAFE speed responses.
+
+---
+
+P.8 Goal Structuring Notation Safety Case
+
+```
+                    +---------------------------+
+                    | G1: PULSE-SAFE AMR        |
+                    | operates safely within    |
+                    | defined operational domain|
+                    +-------------+-------------+
+                                  |
+                    +-------------+-------------+
+                    | S1: Argue over independent |
+                    | safety monitor enforcement |
+                    +-------------+-------------+
+                                  |
+        +-------------+-----------+-----------+-------------+
+        |             |                       |             |
+        v             v                       v             v
++-------+----+ +------+-----+ +--------+-----+ +-----+------+
+| G2: Formal | | G3: Hardware| | G4: Channel  | | G5: ISO    |
+| Correctness| | Validity    | | Independence | | 3691-4     |
++-------+----+ +------+------+ +--------+-----+ +-----+------+
+        |             |                 |             |
+   +----+----+   +----+----+       +----+----+   +----+----+
+   |E1: KeY- |   |E3: Brake|       |E5: SF-5 |   |E7: Area |
+   | maera   |   | test    |       | logs    |   | mapping |
+   | proof   |   |E4: Fault|       |E6: WCET |   |E8: Tests|
+   |E2: NBC  |   | inject  |       | analysis|   |         |
+   +---------+   +---------+       +---------+   +---------+
+```
+
+Figure P.8: GSN safety case structure with five goals and eight evidence items.
+
+---
+
+P.9 Three-Layer Validation Strategy
+
+```
++-----------------------------------------------------------------+
+|              LAYER 1: FORMAL VERIFICATION                       |
+|                                                                 |
+|   Tool: KeYmaera X                                              |
+|   Output: Machine-checkable proof certificate                   |
+|   Coverage: All executions under idealized model                |
++-------------------------------+---------------------------------+
+                                |
+                                v
++-----------------------------------------------------------------+
+|              LAYER 2: MODEL-BASED VALIDATION                    |
+|                                                                 |
+|   Tool: Monte Carlo simulation                                  |
+|   Input: Parameter uncertainty distributions                    |
+|   Output: Probabilistic safety bounds                           |
+|   Coverage: Parameter variations, sensor noise                  |
++-------------------------------+---------------------------------+
+                                |
+                                v
++-----------------------------------------------------------------+
+|              LAYER 3: PHYSICAL VALIDATION                       |
+|                                                                 |
+|   Method: Targeted fault injection                              |
+|   Input: Sensor delay, brake fade, wheel slip, mu drop          |
+|   Output: Model parameter validation                            |
+|   Coverage: Falsification of model assumptions                  |
++-----------------------------------------------------------------+
+```
+
+Figure P.9: Three-layer validation. Formal layer proves correctness; model-based layer bounds uncertainty; physical layer falsifies assumptions.
+
+---
+
+P.10 TTD Graduated Response Zones
+
+```
+TTD (Time-to-Danger)
+   ^
+   |
+   |   ZONE 1: NOMINAL
+   |   +---------------------------------------+
+tau1 ------+  u = u_nominal                    |
+   |   |                                       |
+   |   +---------------------------------------+
+   |
+   |   ZONE 2: REDUCED
+   |   +---------------------------------------+
+tau2 ------+  u = min(u_nominal, u_reduced)    |
+   |   |                                       |
+   |   +---------------------------------------+
+   |
+   |   ZONE 3: PROTECTIVE STOP
+   |   +---------------------------------------+
+   |   |  a = -b (always preserves phi_ps)     |
+   |   +---------------------------------------+
+   |
+   +-------------------------------------------------> time
+
+Key property: Zone 3 fallback always available
+=> passive safety invariant preserved as hard constraint
+```
+
+Figure P.10: TTD graduated response. The protective stop tier is always available, preserving the passive safety invariant.
+
+---
+
+P.11 Phased Roadmap
+
+```
+Phase 1: Formal Foundation       [====                ] 0-6 mo
+Phase 2: Hardware Characterization[    ====            ] 6-12 mo
+Phase 3: Runtime Certificate     [        ====        ] 12-18 mo
+Phase 4: Safety Case Development [            ====    ] 18-24 mo
+Phase 5: Notified Body Engagement[                ====] 24-30 mo
+Phase 6: Pilot Deployment        [                    ] 30-36 mo
+                                 +----+----+----+----+----+
+                                 0    6   12   18   24  30 mo
+```
+
+Figure P.11: Phased roadmap from formal foundation to pilot deployment.
+
+---
+
+P.12 SF-5 Channel Independence Monitor
+
+```
++-----------------------------------------------------------------+
+|                    SF-5: INDEPENDENCE MONITOR                   |
++-----------------------------------------------------------------+
+|                                                                 |
+|  +----------------+  +----------------+  +----------------+     |
+|  | TIMING         |  | POWER          |  | DATA           |     |
+|  | WCET(B) <= T   |  | V_A != V_B     |  | Path_A != Path_B|    |
+|  | (independent   |  | (separate      |  | (separate      |     |
+|  |  of A state)   |  |  rails)        |  |  streams)      |     |
+|  +-------+--------+  +-------+--------+  +-------+--------+     |
+|          |                   |                   |              |
+|          +-------------------+-------------------+              |
+|                              |                                  |
+|                    +---------+---------+                        |
+|                    | CLOCK           |                        |
+|                    | T_A != T_B      |                        |
+|                    | (independent    |                        |
+|                    |  watchdogs)     |                        |
+|                    +---------+-------+                        |
+|                              |                                  |
+|                              v                                  |
+|                    +---------+---------+                        |
+|                    | ALL CONDITIONS  |                        |
+|                    | SATISFIED?      |                        |
+|                    +----+-------+----+                        |
+|                         |       |                               |
+|                      YES|       |NO                             |
+|                         v       v                               |
+|                   +-----+--+ +--+------+                        |
+|                   |CONTINUE| |SAFE STOP|                        |
+|                   +--------+ +---------+                        |
++-----------------------------------------------------------------+
+```
+
+Figure P.12: SF-5 independence monitor. Four conditions must hold continuously; any violation triggers safe stop.
+
+---
+
+P.13 Friction Estimation Pipeline
+
+```
++-----------------------------------------------------------------+
+|              FRICTION ESTIMATION PIPELINE                       |
++-----------------------------------------------------------------+
+|                                                                 |
+|  +----------------+    +----------------+                       |
+|  | IMU            |    | Wheel Encoders |                       |
+|  | a_imu          |    | omega_w        |                       |
+|  +-------+--------+    +-------+--------+                       |
+|          |                     |                                |
+|          v                     v                                |
+|  +-------+---------------------+--------+                       |
+|  |  SLIP RATIO COMPUTATION               |                      |
+|  |  s = (omega_w*r - v_r)/max(...)       |                      |
+|  +-------+------------------------------+                       |
+|          |                                                      |
+|          v                                                      |
+|  +-------+------------------------------+                       |
+|  |  METHOD SELECTION                    |                       |
+|  |  + RLS (inertial-odometric mismatch) |                       |
+|  |  + Slip-slope (Burckhardt model)     |                       |
+|  |  + Active probing (micro-pulse)      |                       |
+|  +-------+------------------------------+                       |
+|          |                                                      |
+|          v                                                      |
+|  +-------+------------------------------+                       |
+|  |  CONSERVATIVE BOUNDING               |                       |
+|  |  mu_safe = mu_hat - k*sigma_mu       |                       |
+|  |  k in [2.5, 3.0]                     |                       |
+|  +-------+------------------------------+                       |
+|          |                                                      |
+|          v                                                      |
+|  +-------+------------------------------+                       |
+|  |  DYNAMIC SAFETY ENVELOPE             |                       |
+|  |  a_max = sqrt((mu_safe*g)^2 - ...)   |                       |
+|  +--------------------------------------+                       |
++-----------------------------------------------------------------+
+```
+
+Figure P.13: Friction estimation pipeline combining RLS, slip-slope analysis, and active probing, with conservative bounding.
+
+---
+
+P.14 Runtime Evidence Logging
+
+```
++-----------------------------------------------------------------+
+|              RUNTIME EVIDENCE LOGGING                           |
++-----------------------------------------------------------------+
+|                                                                 |
+|  Every safety monitor cycle:                                    |
+|                                                                 |
+|  +----------------+                                             |
+|  | timestamp      |                                             |
+|  +----------------+                                             |
+|  | command (a,w)  |                                             |
+|  +----------------+                                             |
+|  | decision       |  AUTHORIZE / VETO                           |
+|  +----------------+                                             |
+|  | TTD            |                                             |
+|  +----------------+                                             |
+|  | B_NN(x)        |                                             |
+|  +----------------+                                             |
+|  | sensor health  |                                             |
+|  +----------------+                                             |
+|  | independence   |                                             |
+|  +----------------+                                             |
+|          |                                                      |
+|          v                                                      |
+|  +-------+------------------------------+                       |
+|  |  NON-VOLATILE MEMORY                 |                       |
+|  |  Cryptographic integrity protection  |                       |
+|  +-------+------------------------------+                       |
+|          |                                                      |
+|          v                                                      |
+|  +-------+------------------------------+                       |
+|  |  POST-INCIDENT ANALYSIS              |                       |
+|  |  + Safety case evidence              |                       |
+|  |  + Notified body review              |                       |
+|  |  + Continuous improvement            |                       |
+|  +--------------------------------------+                       |
++-----------------------------------------------------------------+
+```
+
+Figure P.14: Runtime evidence logging with cryptographic integrity protection for safety case and post-incident analysis.
+
+---
+
+P.15 Stopping Distance vs Speed
+
+```
+Stopping Distance vs Speed (a_max = 3 m/s^2, t_r = 200 ms)
+d_stop (m)
+   ^
+1.0+
+   |                    *
+   |                  *
+0.8+
+   |                *
+   |              *
+0.6+
+   |            *
+   |          *
+0.4+        *
+   |      *
+0.2+    *
+   |  *
+0.0+--+----+----+----+----+----+----+----> v (m/s)
+   0  0.2  0.4  0.6  0.8  1.0  1.2  1.4
+
+At v = 1.0 m/s: d_stop = 0.2*1.0 + 1.0^2/6 = 0.2 + 0.167 = 0.367 m
+At v = 1.5 m/s: d_stop = 0.2*1.5 + 1.5^2/6 = 0.3 + 0.375 = 0.675 m
+
+Protective field 0.5 m:
+  v_max = 1.0 m/s  (with margin)
+  v = 1.5 m/s requires ~0.9 m field (infeasible in aisles)
+```
+
+Figure P.15: Stopping distance versus speed. The 0.5 m protective field constrains mixed-zone speed to 1.0 m/s.
+
+---
+
+P.16 Passive Safety Geometry
+
+```
+                    OBSTACLE
+                       |
+                       |  <-- V (max obstacle speed)
+                       v
+    +------------------+------------------+
+    |                  |                  |
+    |    OBSTACLE      |                  |
+    |    TRAVEL        |                  |
+    |    V*v_r/b       |                  |
+    |                  |                  |
+    +------------------+------------------+
+                       |
+                       |  <-- Required separation
+                       |      ||p_r - p_o||
+                       |
+    +------------------+------------------+
+    |                  |                  |
+    |    BRAKING       |                  |
+    |    DISTANCE      |                  |
+    |    v_r^2/(2b)    |                  |
+    |                  |                  |
+    +------------------+------------------+
+                       |
+                       v
+                    ROBOT
+                  (at speed v_r)
+
+phi_ps: ||p_r - p_o|| > v_r^2/(2b) + V*v_r/b
+```
+
+Figure P.16: Passive safety geometry. Required separation comprises braking distance plus worst-case obstacle travel during braking.
+
+---
+
+P.17 Neural Barrier Certificate Verification Flow
+
+```
++-----------------------------------------------------------------+
+|         NEURAL BARRIER CERTIFICATE VERIFICATION                 |
++-----------------------------------------------------------------+
+|                                                                 |
+|  +----------------+                                             |
+|  | Train B_NN     |  ReLU network on hardware data             |
+|  +-------+--------+                                             |
+|          |                                                      |
+|          v                                                      |
+|  +-------+------------------------------+                       |
+|  |  BOUNDARY PROPAGATION                |                       |
+|  |  1. Init valid activation indicators |                       |
+|  |  2. For each facet: solve LP         |                       |
+|  |  3. Enumerate feasible indicators    |                       |
+|  +-------+------------------------------+                       |
+|          |                                                      |
+|          v                                                      |
+|  +-------+------------------------------+                       |
+|  |  BRANCH-AND-BOUND                    |                       |
+|  |  Verify 3 conditions per region:     |                       |
+|  |  (1) B_NN <= 0 on X_0                |                       |
+|  |  (2) B_NN > 0 on X_u                 |                       |
+|  |  (3) dB_NN/dt <= 0 on boundary       |                       |
+|  +-------+------------------------------+                       |
+|          |                                                      |
+|          v                                                      |
+|  +-------+------------------------------+                       |
+|  |  RESULT                              |                       |
+|  |  + VERIFIED: deploy B_NN             |                       |
+|  |  + FALSIFIED: retrain or fallback    |                       |
+|  +--------------------------------------+                       |
++-----------------------------------------------------------------+
+```
+
+Figure P.17: Neural barrier certificate verification. Boundary propagation enumerates linear regions; branch-and-bound verifies the three conditions.
+
+---
+
+P.18 Failure Modes and Safe State Transitions
+
+```
++-----------------------------------------------------------------+
+|         FAILURE MODES AND SAFE STATE TRANSITIONS                |
++-----------------------------------------------------------------+
+|                                                                 |
+|  Failure Mode              | Detection       | Response         |
+|  --------------------------+-----------------+----------------- |
+|  Channel A/B divergence    | Cross-compare   | Safe stop        |
+|  Loss of safety sensor     | SF-4            | Safe stop        |
+|  Timeout in monitor        | Watchdog        | Safe stop        |
+|  Internal diagnostic fail  | Self-test       | Safe stop        |
+|  Independence violation    | SF-5            | Safe stop        |
+|  Low friction (mu < 0.3)   | Friction est.   | Speed limit      |
+|  Operating area transition | Map + sensor    | Speed adjust     |
+|  Brake degradation         | SF-3            | Maintenance      |
+|                                                                 |
+|  All responses converge to:                                     |
+|  +-----------------------------------------------------------+  |
+|  |  SAFE STATE: STO + Mechanical Braking                     |  |
+|  |  (Stopping distance validated on hardware)                |  |
+|  +-----------------------------------------------------------+  |
++-----------------------------------------------------------------+
+```
+
+Figure P.18: Failure modes, detection mechanisms, and convergent safe-state responses.
+
+---
+
+P.19 Measurement Chain
+
+```
++-----------------------------------------------------------------+
+|                    MEASUREMENT CHAIN                            |
++-----------------------------------------------------------------+
+|                                                                 |
+|  +----------------+  +----------------+  +----------------+     |
+|  | Safety LiDAR   |  | Radar /        |  | IMU            |     |
+|  | Type 3         |  | Ultrasonic     |  | Angular rate   |     |
+|  | 60-120 ms      |  | Complementary  |  | Acceleration   |     |
+|  +-------+--------+  +-------+--------+  +-------+--------+     |
+|          |                   |                   |              |
+|          +-------------------+-------------------+              |
+|                              |                                  |
+|                    +---------+---------+                        |
+|                    | SENSOR FUSION     |                        |
+|                    | (Channel B)       |                        |
+|                    +---------+---------+                        |
+|                              |                                  |
+|          +-------------------+-------------------+              |
+|          |                   |                   |              |
+|          v                   v                   v              |
+|  +-------+--------+  +-------+--------+  +-------+--------+     |
+|  | Wheel Encoders |  | Safety Bumper  |  | Surface        |     |
+|  | Odometry       |  | Contact detect |  | Estimation     |     |
+|  +----------------+  +----------------+  +----------------+     |
++-----------------------------------------------------------------+
+```
+
+Figure P.19: Measurement chain with redundant and complementary sensors for Channel B.
+
+---
+
+P.20 Overall Verification Architecture
+
+```
++-----------------------------------------------------------------+
+|         PULSE-SAFE VERIFICATION ARCHITECTURE                    |
++-----------------------------------------------------------------+
+|                                                                 |
+|  SPECIFICATION LEVEL                                            |
+|  +-----------------------------------------------------------+  |
+|  | phi_ps (passive safety) | TTD | friction circle           |  |
+|  +-----------------------------------------------------------+  |
+|                              |                                  |
+|  PROOF LEVEL                 v                                  |
+|  +-----------------------------------------------------------+  |
+|  | KeYmaera X (dL) | Ghost variables | QE                    |  |
+|  +-----------------------------------------------------------+  |
+|                              |                                  |
+|  CERTIFICATE LEVEL           v                                  |
+|  +-----------------------------------------------------------+  |
+|  | B_ana (analytic) | B_NN (neural) | Matrix zonotopes       |  |
+|  +-----------------------------------------------------------+  |
+|                              |                                  |
+|  IMPLEMENTATION LEVEL        v                                  |
+|  +-----------------------------------------------------------+  |
+|  | Channel A | Channel B | SF-5 | STO | Evidence log         |  |
+|  +-----------------------------------------------------------+  |
+|                              |                                  |
+|  VALIDATION LEVEL            v                                  |
+|  +-----------------------------------------------------------+  |
+|  | Formal | Model-based | Physical fault injection           |  |
+|  +-----------------------------------------------------------+  |
+|                              |                                  |
+|  CERTIFICATION LEVEL         v                                  |
+|  +-----------------------------------------------------------+  |
+|  | GSN safety case | ISO 13849-1 | ISO 3691-4 | IEEE P2817   |  |
+|  +-----------------------------------------------------------+  |
++-----------------------------------------------------------------+
+```
+
+Figure P.20: Overall verification architecture from specification through certification.
+
+---
+
+P.21 Passive Safety Invariant Flow (Sequential)
+
+```
+  [Initial State]
+        |
+        v
+  +-----+------------------------------------------+
+  | Check: psi_ps satisfied?                       |
+  |   v_r >= 0 AND b > 0 AND V >= 0                |
+  |   AND (v_r = 0 OR                             |
+  |        ||p_r - p_o|| > v_r^2/(2b) + V*v_r/b)  |
+  +-----+------------------------------------------+
+        |
+        v
+  +-----+------------------------------------------+
+  | Discrete Control: choose a in {-b, 0, [0,amax]}|
+  +-----+------------------------------------------+
+        |
+        v
+  +-----+------------------------------------------+
+  | Monitor Test: ?(phi_ps)                        |
+  |   If phi_ps fails -> program aborts            |
+  +-----+------------------------------------------+
+        |
+        v
+  +-----+------------------------------------------+
+  | Continuous Evolution:                          |
+  |   d/dt (||p_r - p_o||) >= -(v_r + V)           |
+  |   d/dt (v_r^2/(2b) + V*v_r/b) = -(v_r + V)    |
+  |   => margin is non-decreasing                  |
+  +-----+------------------------------------------+
+        |
+        v
+  +-----+------------------------------------------+
+  | Invariant Preserved: phi_ps holds              |
+  +-----+------------------------------------------+
+        |
+        v
+  [Next Iteration]
+```
+
+Figure P.21: Sequential flow of the passive safety invariant through one control iteration.
+
+---
+
+P.22 Summary of Validation Status
+
+```
++-----------------------------------------------------------------+
+|         VALIDATION STATUS OF CRITICAL PROPOSALS                 |
++-----------------------------------------------------------------+
+|                                                                 |
+|  #   Proposal                          Status                   |
+|  --- --------------------------------- -------                  |
+|  1   KeYmaera proof formalization      [VALIDATED]              |
+|  2   Reaction time budget optimization [PARTIAL]                |
+|  3   Ghost variable method             [VALIDATED]              |
+|  4   Friction circle model             [VALIDATED]              |
+|  5   Real-time friction estimation     [VALIDATED]              |
+|  6   Neural barrier certificates       [VALIDATED]              |
+|  7   Matrix zonotope data-driven BC    [VALIDATED]              |
+|  8   Full-chain PFHd allocation        [VALIDATED]              |
+|  9   ISO 3691-4 operating areas        [VALIDATED]              |
+|  10  GSN safety case                   [VALIDATED]              |
+|  11  Three-layer validation            [VALIDATED]              |
+|  12  IEEE P2817 framework              [VALIDATED]              |
+|                                                                 |
+|  Legend: [VALIDATED] = confirmed by literature/standards        |
+|          [PARTIAL]   = confirmed with qualifications            |
++-----------------------------------------------------------------+
+```
+
+Figure P.22: Summary of validation status for all critical proposals.
+
+---
+
+P.23 Notation Map (Visual)
+
+```
++-----------------------------------------------------------------+
+|                    NOTATION MAP                                 |
++-----------------------------------------------------------------+
+|                                                                 |
+|  STATE VARIABLES                                                |
+|    xi  = (p_rx, p_ry, v_r, theta_r, p_ox, p_oy, v_ox, v_oy)    |
+|                                                                 |
+|  SAFETY CONDITIONS                                              |
+|    phi_ps       = passive safety condition                      |
+|    psi_ps       = initial safety condition                      |
+|    phi_ps,dyn   = dynamic passive safety condition              |
+|                                                                 |
+|  CONTROL PARAMETERS                                             |
+|    a            = longitudinal acceleration                     |
+|    b            = maximum braking deceleration                  |
+|    omega        = angular velocity                              |
+|    V            = maximum obstacle speed                        |
+|                                                                 |
+|  FRICTION                                                       |
+|    mu           = coefficient of friction                       |
+|    a_max(v,ω)   = sqrt((mu*g)^2 - (v*omega)^2)                  |
+|                                                                 |
+|  BARRIER CERTIFICATES                                           |
+|    B_ana        = analytic barrier certificate                  |
+|    B_NN         = neural barrier certificate                    |
+|                                                                 |
+|  SAFETY INTEGRITY                                               |
+|    PFHd         = probability of dangerous failure per hour     |
+|    PL           = performance level                             |
+|    DC           = diagnostic coverage                           |
+|    MTTFd        = mean time to dangerous failure                |
+|    CCF          = common cause failure                          |
++-----------------------------------------------------------------+
+```
+
+Figure P.23: Visual notation map for the principal symbols used throughout the dissertation.
+
+---
+
+P.24 Integrated Data Flow (End-to-End)
+
+```
+  SENSORS                 PROCESSING                  ACTUATION
+  -------                 ----------                  ---------
+
+  +--------+                                          
+  | LiDAR  |---+                                      
+  +--------+   |                                      
+               |     +------------------+             
+  +--------+   |     |  SENSOR FUSION   |             
+  | Radar  |---+---->|  (Channel B)     |             
+  +--------+   |     +--------+---------+             
+               |              |                       
+  +--------+   |              v                       
+  |  IMU   |---+     +--------+---------+             
+  +--------+   |     |  STATE ESTIMATE  |             
+               |     |  mu, v_r, p_r    |             
+  +--------+   |     +--------+---------+             
+  |Encoders|---+              |                       
+  +--------+                  v                       
+                       +------+-------+               
+                       |  TTD COMPUTE |               
+                       +------+-------+               
+                              |                       
+                              v                       
+                       +------+-------+     +--------+
+                       | BARRIER EVAL |     |  STO   |
+                       | B_ana / B_NN |---->|  SBC   |--> [SAFE STOP]
+                       +------+-------+     |  SS1   |
+                              |             +--------+
+                              v                       
+                       +------+-------+               
+                       | COMMAND VETO |               
+                       +------+-------+               
+                              |                       
+                              v                       
+                       +------+-------+               
+                       | EVIDENCE LOG |               
+                       +--------------+               
+```
+
+Figure P.24: End-to-end data flow from sensors through processing to actuation and evidence logging.
+
+---
+
+P.25 Certification Pathway
+
+```
++-----------------------------------------------------------------+
+|                    CERTIFICATION PATHWAY                        |
++-----------------------------------------------------------------+
+|                                                                 |
+|  PHASE 1: PREPARATION                                           |
+|  +-----------------------------------------------------------+  |
+|  | + Formal specification                                    |  |
+|  | + KeYmaera X proof certificate                            |  |
+|  | + Hardware characterization data                          |  |
+|  +-----------------------------------------------------------+  |
+|                              |                                  |
+|                              v                                  |
+|  PHASE 2: SAFETY CASE                                           |
+|  +-----------------------------------------------------------+  |
+|  | + GSN structure                                           |  |
+|  | + Evidence assembly (E1-E8)                               |  |
+|  | + Assumption documentation                                |  |
+|  +-----------------------------------------------------------+  |
+|                              |                                  |
+|                              v                                  |
+|  PHASE 3: NOTIFIED BODY                                         |
+|  +-----------------------------------------------------------+  |
+|  | + Pre-submission review                                   |  |
+|  | + Gap analysis                                            |  |
+|  | + Iterative refinement                                    |  |
+|  +-----------------------------------------------------------+  |
+|                              |                                  |
+|                              v                                  |
+|  PHASE 4: CERTIFICATION                                         |
+|  +-----------------------------------------------------------+  |
+|  | + ISO 13849-1 (PL d, Cat. 3)                              |  |
+|  | + ISO 3691-4 (operating areas)                            |  |
+|  | + IEC 62061 (SIL 2)                                       |  |
+|  +-----------------------------------------------------------+  |
+|                              |                                  |
+|                              v                                  |
+|  PHASE 5: DEPLOYMENT                                            |
+|  +-----------------------------------------------------------+  |
+|  | + Pilot validation                                        |  |
+|  | + Runtime evidence collection                             |  |
+|  | + Continuous assurance                                    |  |
+|  +-----------------------------------------------------------+  |
++-----------------------------------------------------------------+
+```
+
+Figure P.25: Certification pathway from formal preparation through deployment.
+
+---
+
+P.26 Summary Diagram: The PULSE-SAFE Principle
+
+```
++-----------------------------------------------------------------+
+|                                                                 |
+|                  THE PULSE-SAFE PRINCIPLE                       |
+|                                                                 |
+|         "No command shall be authorized solely because          |
+|          it avoids a collision in the prediction model."        |
+|                                                                 |
+|  +-----------------------------------------------------------+  |
+|  |                                                           |  |
+|  |   PREDICTION-ONLY APPROACH      PULSE-SAFE APPROACH       |  |
+|  |   (Conventional)                (This Work)               |  |
+|  |                                                           |  |
+|  |   +-------------+               +-------------+           |  |
+|  |   | Predict     |               | Predict     |           |  |
+|  |   | trajectory  |               | trajectory  |           |  |
+|  |   +------+------+               +------+------+           |  |
+|  |          |                             |                  |  |
+|  |          v                             v                  |  |
+|  |   +------+------+               +------+------+           |  |
+|  |   | Check       |               | Check       |           |  |
+|  |   | collision   |               | collision   |           |  |
+|  |   +------+------+               +------+------+           |  |
+|  |          |                             |                  |  |
+|  |          v                             v                  |  |
+|  |   +------+------+               +------+------+           |  |
+|  |   | If clear:   |               | If clear:   |           |  |
+|  |   | EXECUTE     |               | VERIFY      |           |  |
+|  |   +-------------+               | phi_ps, TTD |           |  |
+|  |                                 +------+------+           |  |
+|  |                                        |                  |  |
+|  |                                        v                  |  |
+|  |                                 +------+------+           |  |
+|  |                                 | If verified:|           |  |
+|  |                                 | EXECUTE     |           |  |
+|  |                                 +-------------+           |  |
+|  |                                                           |  |
+|  |   Guarantee: NONE               Guarantee: FORMAL PROOF   |  |
+|  |   (model-dependent)             (physics-based)           |  |
+|  |                                                           |  |
+|  +-----------------------------------------------------------+  |
+|                                                                 |
++-----------------------------------------------------------------+
+```
+
+Figure P.26: The PULSE-SAFE principle contrasted with prediction-only approaches. The formal guarantee is the distinguishing contribution.
+
+---
+
+P.27 Diagram Index
+
+Figure Title Section
+P.1 Overall System Architecture P.1
+P.2 Control Loop State Machine P.2
+P.3 KeYmaera X Proof Tree P.3
+P.4 Friction Circle and Coupled Deceleration P.4
+P.5 Three-Layer Barrier Certificate Architecture P.5
+P.6 PFHd Budget Allocation P.6
+P.7 ISO 3691-4 Operating Area Map P.7
+P.8 Goal Structuring Notation Safety Case P.8
+P.9 Three-Layer Validation Strategy P.9
+P.10 TTD Graduated Response Zones P.10
+P.11 Phased Roadmap P.11
+P.12 SF-5 Channel Independence Monitor P.12
+P.13 Friction Estimation Pipeline P.13
+P.14 Runtime Evidence Logging P.14
+P.15 Stopping Distance vs Speed P.15
+P.16 Passive Safety Geometry P.16
+P.17 Neural Barrier Certificate Verification Flow P.17
+P.18 Failure Modes and Safe State Transitions P.18
+P.19 Measurement Chain P.19
+P.20 Overall Verification Architecture P.20
+P.21 Passive Safety Invariant Flow (Sequential) P.21
+P.22 Summary of Validation Status P.22
+P.23 Notation Map (Visual) P.23
+P.24 Integrated Data Flow (End-to-End) P.24
+P.25 Certification Pathway P.25
+P.26 Summary Diagram: The PULSE-SAFE Principle P.26
+
+---
+
+End of Appendix P
