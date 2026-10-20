@@ -1,0 +1,1745 @@
+SI-v2: A Scoped Confinement Architecture for Untrusted Agent Actions
+
+Ouadi Maakoul and SI TEAM
+
+Date: 20 October 2026
+
+Status discipline: [H] architectural hypothesis · [C] conceptually specified · [V] obligation stated, not discharged · [F] claim withdrawn or expected to fail · [S] not simulated, not implemented, not physically tested
+
+Abstract
+
+This monograph specifies SI-v2, a safety-invariance monitoring architecture for untrusted agent actions. The architecture separates proposal, verification, execution control, and recovery, and is positioned explicitly within the Runtime Assurance lineage (Simplex; ASTM F3269-21). No invention of that separation is claimed. The claimed delta is narrower: an uncertainty-envelope-bound certificate whose checker cost is bounded independently of the prover, a viability-grounded fallback built on a measurement-robust backup set, and a stratified policy-revision calculus whose side conditions are machine-checkable.
+
+The document is theoretical. No implementation, simulation, formal proof, hardware test, or empirical measurement is reported. Every guarantee is expressed as a proof obligation with an explicit status. The central falsifiable claim is stated as a theorem schema: under declared model assumptions, if the true state lies in the propagated envelope and the monitor accepts an action, then the true successor lies in a control-invariant backup set K. That schema is decomposed into obligations, several of which are expected to fail on the second reference plant. The monograph therefore specifies a syntax for claiming safety, together with a precise account of what would falsify each claim—not a safety certificate.
+
+---
+
+1. Introduction
+
+1.1 Problem
+
+An intelligent agent may propose arbitrary actions. Its ability to propose is not its authority to execute. The engineering question is not whether the agent is aligned, but whether a trusted boundary can confine the physical consequences of an unverified proposal to a set whose invariance has been established independently of the agent.
+
+1.2 Positioning
+
+The Proposal–Verification–Execution–Recovery separation is the Runtime Assurance pattern. ASTM F3269-21 standardizes RTA as an alternative to design-time assurance for complex, unassured functions: a monitor observes the inputs and outputs of the complex function and activates a verified recovery function when safe bounds are breached. The Simplex architecture is the canonical instantiation. SI-v2 adopts this lineage and claims no priority over it.
+
+Two further literatures bound the claim. Proof-carrying agent actions (PCAA) require each governed action to carry a certificate that a planner-independent checker accepts before execution, bound to the exact invocation by a canonical cryptographic commitment. Measurement-robust control barrier functions (MR-CBF) provide the tightening that makes a barrier condition sound under bounded state-estimation error.
+
+1.3 Claimed delta
+
+SI-v2 claims novelty in exactly two places, and nowhere else.
+
+1. The certificate is bound to an uncertainty envelope, not a point estimate. The accepted action must be robustly safe for every state in a propagated envelope \mathcal{X}_t, and the envelope's soundness is itself an obligation, not an assumption.
+2. Policy revision is stratified into R1/R2/R3 with machine-checkable side conditions. Cryptographic quorum proves who approved a change; it does not prove why the change preserves safety. The calculus makes the safety argument of a revision a precondition for activation.
+
+The fallback, watchdog, isolation, and refinement mechanisms are adaptations of established practice, specified here only to the extent required to make the two deltas executable and falsifiable.
+
+1.4 Status discipline
+
+Every statement in this monograph carries one of five labels. [H] denotes an architectural hypothesis. [C] denotes a concept specified but not formalized. [V] denotes an obligation stated but not discharged. [F] denotes a claim withdrawn or expected to fail under stated conditions. [S] denotes that no simulation, implementation, or physical test has been performed. A reader who finds an unlabeled safety claim has found an error.
+
+---
+
+2. System Model and Notation
+
+Let the controlled system be
+
+\mathcal{M} = (X, A, F, W, X_0),
+
+where X \subseteq \mathbb{R}^n is the state space, A the action set, F : X \times A \times W \to X the transition relation, W the admitted disturbance set, and X_0 the permitted initial states. Let S_{\mathrm{safe}} \subseteq X be the modeled safe set.
+
+At decision time t the monitor receives an observation y_t = h(x_t) + e_t with e_t \in E_t, an observation provenance record, a candidate action a_t, a policy identifier and hash, a certificate \pi_t, a deadline d, and an observation sequence number q.
+
+Two modeling conventions are fixed at the outset.
+
+Held-control semantics. Between observation and actuation the agent's proposal is not necessarily the control in force. The control that actually remains active over the interval [t, t+\Delta] is denoted a_{\mathrm{held}} and is determined by the execution layer's state, not by the agent. The propagation of §4 uses a_{\mathrm{held}}.
+
+State augmentation under delay. When the actuator path has delay \Delta > 0, the plant state is augmented with the held-control sequence, x^\ast_t = (x_t, a_{t-1}, \ldots, a_{t-\Delta}). All invariance statements in §5 and §6 are made over x^\ast.
+
+---
+
+3. Numeric Domain
+
+3.1 Fixed-point representation
+
+v0.1 and v0.2 specified arithmetic over \mathbb{Q}. In a bounded-memory monitor, rational numerators and denominators grow under propagation, and a Lean model over \mathbb{Q} does not speak about the compiled arithmetic. The numeric domain is therefore fixed-point integers.
+
+A real value r is represented by x \in \mathbb{Z} with declared scale s \in \{8, 16, 24\}, x = \lfloor r \cdot 2^s \rceil. The concretisation is the interval
+
+\gamma_s(x) = \left[\, x \cdot 2^{-s} - 2^{-s-1},\; x \cdot 2^{-s} + 2^{-s-1} \,\right].
+
+Operations use saturating arithmetic on the declared word width. Every saturation sets a flag; a set flag is a rejection condition, not a silent clamp.
+
+3.2 Arithmetic soundness obligation [V]
+
+The v0.3 draft stated a single containment condition for multiplication. That condition is false as written, because rounding error scales with operand magnitude. The corrected obligations are:
+
+\gamma_s(x +_{\mathrm{sat}} y) \;\supseteq\; \gamma_s(x) + \gamma_s(y),
+
+and, for multiplication, an outward-rounded product with an explicit error generator:
+
+\gamma_s(x \times_{\mathrm{sat}} y) \;\supseteq\; \gamma_s(x) \cdot \gamma_s(y) \;+\; \mathcal{E}(x,y),
+
+where \mathcal{E}(x,y) is a generator whose width is proved to dominate the maximum product rounding error. Both lemmas are Lean 4 obligations over the integer semantics, and both must be discharged before the refinement theorem of §10 can be stated. A refinement proof over an unsound arithmetic model proves nothing about the compiled monitor.
+
+3.3 Canonical encoding
+
+Two certificates encoding the same set must hash identically, or the replay check is bypassable by re-encoding. The zonotope (c, G) is canonicalised by dropping zero generator columns, sorting the remaining columns lexicographically in the fixed-point representation, and rejecting any encoding with m > 32 or any entry outside the declared word bound. The CBOR encoding is deterministic over the canonical form, consistent with the canonical-encoding rules of RFC 7049 §3.9.
+
+---
+
+4. Uncertainty Envelope
+
+4.1 Measurement-consistent set
+
+X_t^{(0)} = \{\, x \in X : \| y_t - h(x) \| \le \epsilon(y_t) \,\}.
+
+4.2 Propagation
+
+The v0.3 draft propagated from X_t^{(0)}, discarding the prior envelope's information. The correct propagation starts from the prior envelope:
+
+\mathcal{X}_{t+\Delta} \;=\; \mathrm{Red}_m\!\left( \mathrm{Reach}(\mathcal{X}_t,\, a_{\mathrm{held}},\, W,\, \Delta) \;\cap^{\sim}\; X_{t+\Delta}^{(0)} \right).
+
+The operator \cap^{\sim} is a sound over-approximating intersection: the intersection of a zonotope with a strip is not a zonotope, so the monitor must name and prove an operator whose result contains the true intersection. The operator is an open implementation obligation [V]; it is not a settled design choice.
+
+4.3 Order reduction
+
+\mathrm{Red}_m reduces to at most m = 32 generators. The reduction replaces Z with Z_R \supseteq Z; the added width w(Z_R) - w(Z) is recorded as slack and carried into the envelope accounting. A reduction without a proved soundness bound is rejected.
+
+4.4 Conservatism accounting, defined per direction
+
+The v0.3 slack ratio \sigma_t = w(\mathcal{X}_t)/w(X_t^{(0)}) is undefined when X_t^{(0)} is unbounded, as with position-only sensing. The ratio is therefore defined per direction:
+
+\sigma_t^{(i)} \;=\; \frac{\mathrm{width}_i(\mathcal{X}_t)}{\mathrm{width}_i(X_t^{(0)})}, \qquad i \in \{1,\ldots,n\},
+
+with the convention that a direction with unbounded X_t^{(0)} is excluded from the diagnostic and reported separately. A median \sigma_t^{(i)} > 3.0 over a declared evaluation window indicates that the envelope method, not the agent, is the dominant cause of intervention. This is a design failure of the envelope method and is reported as such.
+
+4.5 Invalidation
+
+The envelope is invalid if X_t^{(0)} = \emptyset, if any fixed-point saturation flag is set, if the propagation horizon is exceeded, or if the disturbance-model version does not match the active registry entry. An invalid envelope does not reach the proof checker; the monitor enters mitigation.
+
+---
+
+5. Robust Safety, Viability, and the Feasibility Gate
+
+5.1 One-step robustness
+
+\mathrm{RobustSafe}(a, \mathcal{X}, W) \iff \forall x \in \mathcal{X},\, \forall w \in W:\; F(x,a,w) \in S_{\mathrm{safe}}.
+
+Necessary, insufficient. A one-step-safe action can leave the system in a state from which no future safe action exists.
+
+5.2 The backup set and Obligation 0
+
+Exact viability kernels are intractable in general. SI-v2 uses a backup-set under-approximation: a backup controller k_B is fixed, and K is the set from which the backup trajectory remains in S_{\mathrm{safe}} for the declared horizon and reaches a known invariant terminal set.
+
+The v0.3 draft set K = \mathcal{C}_B(\epsilon), which changes with \epsilon and therefore does not cover invariance across steps with varying error bounds. The corrected definition fixes K at the most conservative bound:
+
+K \;:=\; \mathcal{C}_B(\epsilon_{\max}).
+
+The invariance obligation is stated in its strong form, quantifying over every error bound below the budget:
+
+Obligation 0 (K-invariance). [V]
+
+> \forall x \in K,\; \forall e : \|e\| \le \epsilon_{\max},\; \forall w \in W:\; F(x, k_B(x+e), w) \in K.
+> 
+
+The K of §5.2 is a fixed set, not a function of the envelope. The phrase “viability kernel of the uncertainty envelope” used in earlier drafts is withdrawn. The envelope enters through the antecedent x_t \in \mathcal{X}_t and through the measurement-robust tightening of §7.
+
+5.3 Feasibility gate: measurement-error budget
+
+The v0.2 gate used a volume functional V_{\max}. The v0.3 draft replaced it with a hull-width product. Both are shape-insensitive: a long thin envelope can cross K with a small width product. The gate is therefore stated per constraint.
+
+For the backup set \mathcal{C}_B(\epsilon), compute offline
+
+\epsilon_{\max}(x) = \sup\{\, \epsilon : \mathcal{C}_B(\epsilon) \text{ is invariant under } k_B \text{ and } \mathcal{C}_B(\epsilon) \subseteq S_{\mathrm{safe}} \,\}.
+
+This budget is scalar and monotone in \epsilon. At runtime, if \|\epsilon(y_t)\| > \epsilon_{\max}(\hat{x}_t), the nominal guarantee is unavailable under current measurement quality. The monitor bypasses the proof checker and enters mitigation deterministically. If the budget holds, the monitor proceeds, and the per-constraint margins
+
+\mu_i(\mathcal{X}_t) = b_i - \left( h_i^{\top} c + \| G^{\top} h_i \|_1 \right), \qquad i = 1,\ldots,\ell,
+
+are checked non-negative. The budget and the margins answer different questions—is any certificate meaningful? and does this envelope satisfy this constraint?—and neither substitutes for the other.
+
+---
+
+6. Certificate Contract
+
+The certificate is
+
+\pi_t = \langle m,\; p_{\mathrm{id}},\; p_{\mathrm{hash}},\; a,\; \mathcal{X}_t,\; W,\; q,\; d,\; \rho \rangle,
+
+with fields bounded as in Table 1.
+
+Table 1 — Certificate fields and bounds
+
+Field Representation Bound
+m u32 model id must match registry
+p_{\mathrm{id}} u32 policy version strictly monotonic
+p_{\mathrm{hash}} 32-byte hash must match trusted store
+a opaque action bytes \le 512 B
+\mathcal{X}_t canonical zonotope (c,G) n \le 12, m \le 32
+W interval box entry-wise bounded
+q u64 sequence number strictly increasing
+d u64 deadline d > \mathrm{now} + \Delta_{\mathrm{WCET}}
+\rho type-tagged proof object \le 16 KiB
+
+The monitor rejects certificates exceeding these bounds at the framing layer, before parsing \rho. Proof size is a denial-of-service surface and must be bounded before it is trusted.
+
+Acceptance. The monitor authorizes a_t only if
+
+\begin{aligned}
+\mathrm{Accept}(\pi_t) \iff{}& \mathrm{WellFormed}(\pi_t) \land \mathrm{Fresh}(\pi_t) \land \mathrm{PolicyMatch}(\pi_t) \\
+& \land \mathrm{ProofCheck}(\rho) \land \mathrm{RobustSafe}(a_t, \mathcal{X}_t, W) \\
+& \land \mathrm{DeadlineValid}(\pi_t) \land F(\mathcal{X}_t, a_t, W) \subseteq K \\
+& \land \bigwedge_{i} \mu_i(\mathcal{X}_t) \ge 0 \land \|\epsilon(y_t)\| \le \epsilon_{\max}(\hat{x}_t).
+\end{aligned}
+
+---
+
+7. Two Certificate Modes
+
+7.1 Mode L — containment witness on the linear plant
+
+For x^{+} = Ax + Bu + w, the successor of (c,G) is (Ac + Bu,\; [AG,\; I]). On this plant the monitor can recompute the successor cheaply, so the certificate does not offload computation. Its role is replay safety: it binds the agent's proposal to a specific (c,G) so that the monitor's recomputation is tied to the exact invocation. Containment in the polytope K is checked by the support-function inequalities
+
+h_i^{\top} c + \| G^{\top} h_i \|_1 \le b_i \quad \forall i.
+
+This is a linear sufficient condition for containment, not an exact test. Exact zonotope containment is co-NP-complete in general, with exact polynomial algorithms only when dimension or generator count is fixed. The sufficient condition is sound and incomplete; its conservatism is reported.
+
+7.2 Mode N — measurement-robust barrier certificate on the nonlinear plant
+
+On a nonlinear plant the successor set is not a zonotope and exact containment is unavailable. The certificate carries a barrier witness
+
+\rho_{\mathrm{bar}} = \langle h,\; k_B,\; L_f,\; L_h,\; L_{\mathcal{L}_f h},\; \epsilon(y),\; \text{Farkas} \rangle.
+
+The Lipschitz constants, the barrier function, the backup controller, and the error bound come from the trusted registry and sensor provenance, never from the agent's certificate. The monitor verifies the tightened condition
+
+b_i(\hat{x}) - \mu(\epsilon, L) \ge 0, \qquad \mu = \left( L_{\mathcal{L}_f h} + L_h \|k_B\| \right) \epsilon,
+
+not the nominal condition b_i(\hat{x}) \ge 0. Without \mu, the condition can hold for the true state and fail for the estimate—the known fragility of non-robust barrier checking. A linearisation of the dynamics requires a bounded remainder term; that term is part of the registry data, not the certificate.
+
+Farkas semantics, corrected. The v0.3 draft stated that the Farkas witness proves the constraints “feasible.” This is a category error. Farkas' lemma proves that a linear implication holds—that one inequality is implied by others, or that a set is infeasible. The correct statement is: the witness proves that the tightened constraint is implied by the linearised dynamics and barrier conditions, or that its negation is infeasible.
+
+---
+
+8. Monitor Architecture
+
+The decision path is four layers, each with a declared trust boundary and resource bound.
+
+Layer 0 — framing and parsing. no_std, fixed 16 KiB arena, canonical decoder with maximum depth 8, no dynamic allocation. The parser is checked with Kani for panic-freedom, bounds safety, and integer overflow over the declared domain. A fixed-layout binary frame is preferred over nested CBOR for the same reason: it is cheaper to verify, and the canonicalisation rules are simpler to state.
+
+Layer 1 — freshness and policy consistency. q strictly increasing; p_{\mathrm{hash}} in the trusted allowlist; p_{\mathrm{id}} strictly monotonic; d > \mathrm{now} + \Delta_{\mathrm{WCET}}. Rollback is rejected before the proof checker runs.
+
+Layer 2 — proof and viability checking. A time-boxed checker with a declared operation budget, on an isolated core or interrupt context. It verifies \rho and the boxed clauses of §6. The budget is stated as an operation count per mode, not an asymptotic class. A timeout is treated as rejection.
+
+Layer 3 — decision and evidence. Every decision is hash-chained into an append-only log. The authorization token binds the action hash, q, an observation-commitment hash, and the expiry d. The observation commitment is a hash of the envelope-construction inputs, not merely the sequence number; otherwise a replayed token with a different envelope would pass.
+
+Watchdog. A single heartbeat proves only that the interrupt handler runs. The architecture requires two independent mechanisms: a hardware watchdog on a separate MCU that monitors lease renewal, and a time-triggered partition in which the agent and monitor do not share a scheduler. If the monitor stalls, the watchdog activates the fallback directly, without routing through the stalled monitor.
+
+Actuation channel. The authorization-to-actuation path is a hardware mailbox or an isolated message channel the agent cannot overwrite. Shared memory writable by the agent is not an execution channel.
+
+---
+
+9. Adversary Model
+
+The agent is untrusted; its capabilities are bounded explicitly.
+
+· Sensor influence is possible only with write access to the sensor bus. Observations lacking provenance are rejected.
+· Timing attacks are closed by monotonic q and a deadline d.
+· Flooding is bounded by Layer 0 size limits and Layer 1 sequence checks; the monitor's worst-case service rate is part of the WCET analysis.
+· TOCTOU is closed structurally: the actuator re-verifies the token's binding to the action hash, q, the observation commitment, and d immediately before committing the action. If the state digest has changed beyond tolerance, the actuator refuses.
+
+The agent is not assumed to have arbitrary write access to monitor memory or the policy store. If it does, no runtime monitor can provide the claimed guarantee; that is a platform isolation precondition, not a monitor property.
+
+---
+
+10. Common-Cause Analysis and Coverage
+
+Separation of components does not imply independence. ASTM F3269-21 requires RTA system coverage, and coverage collapses when a shared resource is lost. Each deployment produces a fault table of the form
+
+Table 2 — Common-cause fault table (schema)
+
+Resource Monitor uses Fallback uses Status Coverage impact if lost
+IMU bus A bus B INDEPENDENT —
+Power rail A rail B INDEPENDENT —
+Processor core 0 (TT) core 1 (TT) CONDITIONALLY INDEPENDENT bounded by memory-bus WCET analysis
+Communication hardware mailbox direct PWM INDEPENDENT —
+Clock monitor clock watchdog clock INDEPENDENT —
+Memory monitor SRAM fallback SRAM SHARED fallback claim downgraded
+
+Where a resource is SHARED, the fallback claim is recorded as “feasible conditional on the shared resource remaining operational,” and mitigation declares loss of the nominal guarantee. No unconditional fallback claim is accepted where any dependency is SHARED.
+
+---
+
+11. Fallback and Damage Mitigation
+
+The fallback is selected from
+
+A_{\mathrm{safe}}(\mathcal{X}_t) = \{\, a \in A : F(\mathcal{X}_t, a, W) \subseteq K \,\}.
+
+If non-empty, the fallback controller selects a and the token binds the selection. If empty, the architecture does not claim a safe fallback exists. It enters mitigation, records the triggering evidence, applies the best validated recovery strategy within the modeled domain, avoids actions known to increase modeled hazard, and requests human or higher-level intervention.
+
+The fallback's own invariance is Obligation 0, not an assumption. If the fallback shares a resource with the nominal controller, the claim is weakened by Table 2. Mitigation is not a proof that harm is prevented.
+
+---
+
+12. Policy Revision Calculus
+
+The R1/R2/R3 taxonomy is retained with machine-checkable side conditions.
+
+R1 — restrictive refinement. The v0.3 draft required S_{\min} \subseteq S_{k+1} and a per-revision ratio \alpha. A per-revision ratio compounds: \alpha = 0.95 over fourteen revisions yields roughly 0.49. The condition is therefore stated against a fixed baseline,
+
+w(S_{k+1}) \ge \beta \, w(S_{\mathrm{baseline}}),
+
+together with trajectory preservation: every entry region retains at least one verified nominal trajectory of length T_{\mathrm{avail}}. The first condition prevents collapse; the second prevents erosion of usefulness while leaving a non-empty set of dead states. Both are checked in Lean over the abstract policy semantics, not inferred from the version number.
+
+R2 — model correction. The replacement requires a new envelope-soundness proof, a documented correction argument, and re-discharge of all affected obligations. A proof of inconsistency of the old model does not identify a correct replacement; the replacement is a new model requiring its own soundness evidence.
+
+R3 — governance or domain extension. The change requires an assurance-case delta identifying new hazards introduced by the expansion, a new model-validity assessment, and authorization under the governance policy. Cryptographic quorum establishes that authorized participants approved; the assurance-case delta establishes why the change is claimed safe. Neither substitutes for the other.
+
+Rollback. The policy store is append-only and hash-chained; p_{\mathrm{id}} is strictly monotonic. A certificate referencing a non-monotonic p_{\mathrm{id}} is rejected at Layer 1.
+
+---
+
+13. Refinement Pipeline
+
+The Rust-to-Lean claim of v0.2 was too strong as written. The extraction toolchain has known boundaries: it requires monomorphised types, does not extract external-crate MIR, and has limited support for unsafe. A refinement claim that ignores these boundaries is not a refinement claim.
+
+Three levels.
+
+· L1 — extraction. Charon extracts rustc MIR into LLBC; Aeneas translates LLBC into a pure Lean 4 model. The extracted model contains no sorry. Files with extraction failures are tagged INCONCLUSIVE.
+· L2 — differential and bounded checking. Sampled inputs are exercised by tests; Kani exhaustively checks the parser and checker for panic-freedom, overflow, and bounds over the declared word width. Kani results are bounded and are not presented as unbounded proofs.
+· L3 — refinement theorem. [V]
+  \forall \pi_t:\; \mathrm{ExtractedMonitor}(\pi_t) = \mathrm{Accept} \;\Longrightarrow\; \mathrm{AbstractContract}(\pi_t).
+
+The Lean model and the Rust code share the fixed-point semantics of §3. The theorem therefore speaks about the compiled arithmetic, including saturation flags, rather than an idealised rational model.
+
+CI gate. Any file tagged INCONCLUSIVE blocks policy activation. The gate is a semantic necessity, not a bureaucratic addition: the toolchain's design philosophy is to fail early rather than risk certifying unsupported constructs.
+
+Trusted computing base inventory. [V] The TCB includes the extraction toolchain, the Lean kernel, the offline artifacts of §5, the held-control reporting channel, and the sensor-provenance source. A bug in the offline viability computation or the \epsilon_{\max} table invalidates the runtime guarantee as surely as a parser bug. The offline artifacts require independent certification—by a separate checker or a Lean proof—before the runtime monitor may rely on them.
+
+---
+
+14. Proof Obligations and Status Ledger
+
+The following obligations are stated, not discharged. No safety case is asserted until all are machine-checked.
+
+ID Obligation Status
+O-1 Initial-state safety: X_0 \subseteq S_{\mathrm{safe}} [V]
+O-2 Envelope soundness: the fixed-point zonotope with sound intersection and order reduction contains the true reachable set [V]
+O-3 Arithmetic soundness: outward rounding and explicit error generator, including saturation semantics [V]
+O-4 One-step robustness: accepted actions map \mathcal{X}_t into S_{\mathrm{safe}} for all w \in W [V]
+O-5 Obligation 0: K-invariance under k_B for every \|e\| \le \epsilon_{\max}, under delay and hold [V], expected to fail on Plant 2 [F]
+O-6 End-to-end confinement theorem schema [V], not a theorem until O-5 is discharged
+O-7 Authorization soundness of the extracted monitor, not a restatement of Accept [V]
+O-8 Policy integrity across R1/R2/R3, including baseline availability and rollback rejection [V]
+O-9 Fallback correctness: when A_{\mathrm{safe}} \neq \emptyset, the selected fallback lies in A_{\mathrm{safe}}; when empty, mitigation is entered and no safety claim is made [V]
+O-10 TCB inventory completeness, including offline artifacts [V]
+
+End-to-end theorem schema. [V]
+
+Assume O-2, O-3, O-5, and O-7. If the true state x_t \in \mathcal{X}_t and the monitor accepts a_t, then for every admitted w \in W the true successor satisfies x_{t+1} \in K \subseteq S_{\mathrm{safe}}, and by induction x_{t+k} \in S_{\mathrm{safe}} for all k \ge 0 along the backup trajectory.
+
+The theorem is not “the system is safe.” It is: under the stated assumptions, the accepted action preserves membership in the backup set, and the backup set is invariant. The delay requires state augmentation with held controls, and the induction must account for the held-control sequence.
+
+---
+
+15. Pre-Registered Falsification Protocol
+
+The following criteria are fixed before any simulation. They are reported here as pre-registrations, not as results [S]. A single violation falsifies the corresponding claim.
+
+ID Criterion Threshold
+F1 Monitor accepts an action exiting K under an admitted disturbance any occurrence
+F2 Monitor accepts a replayed q or a rolled-back p_{\mathrm{id}} any occurrence
+F3 Decision path exceeds the measured high-water mark plus static bound high-water mark > bound
+F4 Fallback infeasible where A_{\mathrm{safe}} \neq \emptyset any occurrence
+F5 False-reject rate on nominal corpus > 5\%
+F6 Median per-direction envelope slack > 3.0
+F7 Monitor accepts a certificate where \|\epsilon(y)\| > \epsilon_{\max} any occurrence
+
+Baselines. A no-RTA planner, a current-state monitor checking against \hat{x}_t rather than \mathcal{X}_t, and a Simplex baseline without the viability clause. The baselines isolate the contribution of envelope robustness and viability preservation.
+
+Search method. A falsification criterion is only as strong as the search that failed to violate it. The protocol requires adversarial fuzzing of the framing layer and certificate fields, plus a search tool targeting F1 and F4, with coverage reported. “No violation observed” without a stated search method is not evidence.
+
+WCET. A p99 measurement cannot falsify a WCET claim. The criterion is a measured high-water mark combined with a static bound, under a declared cache and memory-bus interference assumption. If the interference bound is not established on the target platform, the real-time claim is withdrawn.
+
+Model mismatch. A separate campaign perturbs the plant outside W and measures degradation. No safety claim is made from this campaign; its purpose is to document the boundary of the model's validity.
+
+---
+
+16. Reference Plants
+
+Plant 1 — discrete-time double integrator with actuation delay. x = (p,v) \in \mathbb{R}^2, u \in \mathbb{R}, w \in W = [-\bar w, \bar w]^2, \Delta = 2. The successor is affine and the envelope is a zonotope. Mode L applies. This plant tests the envelope mechanics, the intersection operator, the order reduction, the per-constraint gate, and the availability of the budget.
+
+Plant 2 — nonlinear pendulum (unicycle deferred). The pendulum is selected first because its Lipschitz constants are easy to bound. Mode N applies. This plant tests the measurement-robust tightening, the Farkas implication, and the registry-supplied constants. It is the plant on which the certificate is not redundant, because the monitor cannot recompute the successor set in closed form. Obligation 0 is expected to fail here; if it does, the end-to-end claim is withdrawn for this plant, and the monograph records the withdrawal.
+
+---
+
+17. Scope, Limitations, and Threats to Validity
+
+This monograph specifies a syntax for claiming safety, not a safe system. The following are explicitly not claimed:
+
+· That the envelope is sound for any plant beyond the two reference plants until O-2 and O-3 are discharged.
+· That K is the exact viability kernel; it is a backup-set under-approximation, and its conservatism is reported.
+· That the refinement proof has been completed or that no file is INCONCLUSIVE.
+· That WCET has been measured on protected hardware with independent watchdogs and a bounded memory bus.
+· That the fallback is feasible in all reachable states; Table 2 may weaken the claim to conditional.
+· That the median slack is below the threshold on any plant not yet simulated.
+· That the system prevents every unsafe physical action.
+
+Three threats to validity are stated explicitly. Citation validity: the PCAA latency figure used in earlier drafts is withdrawn; the comparison to PCAA is structural, not quantitative, and the earlier specific figure is not used. Model validity: a proof about \mathcal{M} is not a proof about the plant; the model-mismatch campaign documents the boundary but does not close it. Toolchain validity: the refinement theorem is only as trustworthy as the Lean kernel, the extraction toolchain, and the compiler; these are in the TCB and require independent assurance.
+
+---
+
+18. Conclusion
+
+The separation of proposal, authority, uncertainty, and execution is sound but not novel. The contribution of this monograph is to make the separation falsifiable: to bind the certificate to an uncertainty envelope whose soundness is an obligation, to ground the fallback in a control-invariant backup set whose invariance is an obligation under measurement error, and to stratify policy revision so that the safety argument of a change is a precondition for activation.
+
+The central falsifiable research objective is: for the declared reference plants and model assumptions, demonstrate that the accepted-action set is a subset of the control-invariant backup set K, that the compiled monitor preserves this subset relation as established by Rust-to-Lean refinement over shared fixed-point semantics, and that the pre-registered falsification criteria are not violated under a stated adversarial search.
+
+Until that objective is met and independently reviewed, SI-v2 remains a proposed architecture with a precise, auditable failure criterion. The value of the specification lies not in what it claims to guarantee, but in what it declares would count as a refutation. A safety architecture that cannot be falsified cannot be trusted; one that names its own failure conditions, and states which of them it expects to fail, can at least be audited.
+
+Appendices
+
+Status key. [P] paper proof, derived in this document, not machine-checked. [V] obligation stated but not discharged. [O] open problem. [F] withdrawn or expected to fail. [S] no implementation, simulation, or physical test exists.
+
+A claim marked [P] is a mathematical argument written by hand. It is not a Lean proof, and it does not by itself establish that any compiled program satisfies it. The Lean statements that would mechanise [P] results are given in Appendix G; they are [V] until discharged.
+
+---
+
+Appendix A — Notation, Conventions, and Status Bookkeeping
+
+A.1 Symbols
+
+Symbol Meaning
+X \subseteq \mathbb{R}^n state space, n \le 12 in the declared plants
+x_t true state at decision time t
+\hat{x}_t state estimate
+y_t = h(x_t) + e_t observation
+e_t \in E_t, \|e_t\| \le \epsilon(y_t) measurement error and its bound
+a_t \in A candidate action, \le 512 B
+a_{\mathrm{held}} control actually in force over [t, t+\Delta]
+F : X \times A \times W \to X transition relation
+W admitted disturbance set, an axis-aligned box
+S_{\mathrm{safe}} modeled safe set
+K control-invariant backup set, K \subseteq S_{\mathrm{safe}}
+\mathcal{X}_t propagated uncertainty envelope
+X_t^{(0)} measurement-consistent set
+\pi_t certificate
+\rho proof object inside \pi_t
+q observation sequence number, strictly increasing
+d authorization deadline
+s fixed-point scale, s \in \{8,16,24\}
+h = 2^{-s-1} fixed-point half-ulp
+\gamma_s(x) exact concretisation of integer x
+\gamma_s^{\oplus}(x) enlarged concretisation, half-width 2^{-s}
+\sigma_t^{(i)} per-direction envelope slack
+\epsilon_{\max} scalar measurement-error budget
+
+A.2 Convention on "safe"
+
+The word safe never appears in this document as an unqualified predicate on a system. It appears only as (i) a membership test x \in S_{\mathrm{safe}} for a set declared in the model, (ii) an obligation name, or (iii) a claim explicitly withdrawn. A statement of the form "the system is safe" is malformed in this specification and is to be treated as a defect wherever found.
+
+A.3 Convention on quantification over the plant
+
+Every invariance statement is quantified over the model F. No statement in this document quantifies over the physical plant. The relation between model and plant is not proved here; it is the subject of the model-mismatch campaign of Appendix I.4, which makes no safety claim.
+
+---
+
+Appendix B — Fixed-Point Arithmetic
+
+B.1 Concretisation
+
+For scale s \in \mathbb{N} and integer x \in \mathbb{Z}, define the exact concretisation
+
+\gamma_s(x) = \left[\, x 2^{-s} - 2^{-s-1},\; x 2^{-s} + 2^{-s-1} \,\right],
+
+i.e. the set of reals that round to x under round-to-nearest. The family \{\gamma_s(x)\}_{x \in \mathbb{Z}} is a partition of \mathbb{R} into half-open intervals of width 2^{-s}. Setting h := 2^{-s-1},
+
+\gamma_s(x) = \left[ x2^{-s} - h,\; x2^{-s} + h \right], \qquad |\gamma_s(x)| = 2h = 2^{-s}.
+
+Define also the enlarged concretisation
+
+\gamma_s^{\oplus}(x) = \left[ x2^{-s} - 2h,\; x2^{-s} + 2h \right],
+
+which is the concretisation of x widened by one ulp on each side.
+
+B.2 Proposition (the naive addition condition is false) [P]
+
+The condition
+
+\gamma_s(x + y) \supseteq \gamma_s(x) + \gamma_s(y)
+
+fails for every s and for infinitely many (x,y).
+
+Proof. Take s = 1, so h = 1/4. Take x = y = 1. Then
+
+\gamma_1(1) = [1/2 - 1/4,\; 1/2 + 1/4] = [1/4,\; 3/4],
+
+\gamma_1(1) + \gamma_1(1) = [1/2,\; 3/2].
+
+But
+
+\gamma_1(2) = [1 - 1/4,\; 1 + 1/4] = [3/4,\; 5/4].
+
+The interval [1/2, 3/2] is not contained in [3/4, 5/4], since 1/2 < 3/4 and 3/2 > 5/4. The failure is structural: the sum of two intervals of width 2h has width 4h, while the concretisation of any integer has width 2h. ∎
+
+Consequence. The v0.3 soundness condition is withdrawn [F]. The corrected condition is B.3.
+
+B.3 Lemma (outward-rounded addition) [P]
+
+For all x, y \in \mathbb{Z} for which x + y does not saturate,
+
+\gamma_s^{\oplus}(x + y) \;\supseteq\; \gamma_s(x) + \gamma_s(y).
+
+Proof. Let a = x2^{-s} + \delta, b = y2^{-s} + \delta' with |\delta|, |\delta'| \le h. Then
+
+a + b = (x+y)2^{-s} + (\delta + \delta'), \qquad |\delta + \delta'| \le 2h.
+
+Hence a + b \in \gamma_s^{\oplus}(x+y) = [(x+y)2^{-s} - 2h, (x+y)2^{-s} + 2h]. ∎
+
+Remark. The price of soundness is one guard ulp. Equivalently, one may compute at scale s+1 and round the result to scale s; the lemma then holds with \gamma_s in place of \gamma_s^{\oplus}. The monitor's registry declares which convention is used, and the Lean development must match it exactly.
+
+B.4 Lemma (multiplication error generator) [P]
+
+Let a = x2^{-s} + \delta, b = y2^{-s} + \delta', |\delta|, |\delta'| \le h. Then
+
+ab \;\in\; xy\,2^{-2s} \;+\; \left[\,-e(x,y),\; +e(x,y)\,\right],
+\qquad
+e(x,y) = h\left(|x| + |y|\right)2^{-s} + h^{2}.
+
+Proof. Expand:
+
+ab = xy\,2^{-2s} + x2^{-s}\delta' + y2^{-s}\delta + \delta\delta'.
+
+Bound each term: |x2^{-s}\delta'| \le |x|2^{-s}h, |y2^{-s}\delta| \le |y|2^{-s}h, |\delta\delta'| \le h^2. Triangle inequality gives the stated e. ∎
+
+Consequence. The product is representable exactly at scale 2s with centre xy, plus an error generator of half-width e(x,y). It is not representable at scale s with bounded relative error: e grows linearly in \max(|x|,|y|). This is the reason the v0.3 condition failed and the reason the corrected condition requires an explicit error generator rather than a bare containment.
+
+B.5 Lemma (saturation detection is sound) [P]
+
+Let M be the maximum representable magnitude at the declared word width. Define \mathrm{sat}(z) = \mathrm{sign}(z)\cdot M when |z| > M, and z otherwise, with flag f = \mathbf{1}[|z| > M]. Then f = 1 whenever the true result exceeds the representable range, and when f = 1 the monitor rejects.
+
+Proof. Direct from the definition of \mathrm{sat} and the comparison |z| > M. ∎
+
+Remark. The lemma is trivial; its importance is architectural. Because saturated results are unbounded rays rather than intervals, no finite concretisation contains them. Soundness is therefore recovered not by widening, but by rejection. Any implementation that clamps silently violates B.5 and invalidates O-3.
+
+B.6 Lemma (error accumulation under affine iteration) [P]
+
+Let x^{+} = Ax + b with \|A\| = \alpha. Suppose one step of the fixed-point computation introduces a per-step error generator of half-width \eta. Then after k steps the accumulated error half-width is at most
+
+E_k \;\le\; \eta \sum_{j=0}^{k-1} \alpha^{j}
+\;=\; \begin{cases} \eta \dfrac{1 - \alpha^{k}}{1 - \alpha}, & \alpha \ne 1,\\[2mm] \eta k, & \alpha = 1.\end{cases}
+
+Proof. By induction. For k=1, E_1 \le \eta. Assume E_k \le \eta\sum_{j=0}^{k-1}\alpha^j. One further step maps an error of half-width E_k through A, giving \alpha E_k, and adds \eta:
+
+E_{k+1} \le \alpha E_k + \eta \le \eta \sum_{j=0}^{k-1}\alpha^{j+1} + \eta = \eta\sum_{j=0}^{k}\alpha^{j}. \qquad \blacksquare
+
+Consequence for the declared plants. Plant 1's A has \alpha = 1 (double integrator: an eigenvalue on the unit circle). Hence E_k grows linearly in k, unboundedly. This is not a numerical curiosity; it is why the envelope must be intersected with X_t^{(0)} at every step (Appendix C.7) and why the propagation horizon must be finite and declared. A monitor that propagates without intersection accumulates rounding error without bound and will eventually trip the feasibility gate for reasons unrelated to the agent.
+
+B.7 Arithmetic soundness theorem [P]
+
+Theorem B.7. Let a computation be a finite composition of additions, multiplications by registered constants, and affine images, each implemented with outward-rounded operators B.3 and B.4 and with saturation detection B.5. If no saturation flag is set, the computed set contains the exact real image of the input set.
+
+Proof. Induction over the computation DAG, using B.3 and B.4 at each node and B.6 for the affine iteration, with the flag check excluding the saturated case. ∎
+
+Status. Theorem B.7 is a paper proof. Its Lean mechanisation is obligation O-3 [V]. The statement must be phrased over the compiled semantics, including flag propagation; a statement over idealised rationals would not cover the Rust code (Appendix G.2).
+
+---
+
+Appendix C — Zonotope Algebra
+
+C.1 Definitions
+
+A zonotope with centre c \in \mathbb{R}^n and generator matrix G = [g_1, \dots, g_m] \in \mathbb{R}^{n\times m} is
+
+Z(c,G) = \left\{\, c + \sum_{j=1}^{m} \beta_j g_j \;:\; \beta \in [-1,1]^m \,\right\} = c + G[-1,1]^m.
+
+The number m is the order. The canonical form of Appendix B and §3.3 requires G to have no zero columns and columns sorted lexicographically.
+
+C.2 Lemma (support function) [P]
+
+For every k \in \mathbb{R}^n,
+
+\sup_{z \in Z(c,G)} k^{\top} z \;=\; k^{\top} c + \|G^{\top} k\|_1.
+
+Proof. By linearity,
+
+\sup_{\|\beta\|_\infty \le 1} k^{\top}(c + G\beta) = k^{\top} c + \sup_{\|\beta\|_\infty \le 1} \sum_{j=1}^m \beta_j (k^{\top} g_j).
+
+The supremum of a linear functional over the cube is attained at \beta_j = \mathrm{sign}(k^{\top} g_j), giving \sum_j |k^{\top} g_j| = \|G^{\top}k\|_1. ∎
+
+C.3 Lemma (affine image) [P]
+
+For x \mapsto Ax + b,
+
+AZ(c,G) + b \;=\; Z(Ac + b,\; AG).
+
+Proof. A(c + G\beta) + b = (Ac+b) + (AG)\beta, and \beta ranges over the same cube. ∎
+
+C.4 Lemma (Minkowski sum of zonotopes) [P]
+
+Z(c_1, G_1) + Z(c_2, G_2) = Z(c_1 + c_2,\; [\,G_1 \;\; G_2\,]).
+
+Proof. Sums of the form c_1 + G_1\beta_1 + c_2 + G_2\beta_2 are exactly c_1+c_2 + [G_1\;G_2](\beta_1,\beta_2) with (\beta_1,\beta_2) ranging over the cube of order m_1+m_2. ∎
+
+C.5 Proposition (one-step successor of the linear plant) [P]
+
+For x^{+} = Ax + Bu + w with w \in W = w_c + \mathrm{diag}(w_r)[-1,1]^n, the exact successor of Z(c,G) under a held input u is
+
+F\big(Z(c,G), u, W\big) = Z\!\left(Ac + Bu + w_c,\; \left[\,AG \;\; \mathrm{diag}(w_r)\,\right]\right).
+
+Proof. Combine C.3 and C.4 with the interval representation of W. ∎
+
+Remark. On Plant 1 the successor is therefore available in closed form. The certificate in Mode L is not offloading computation; it binds the invocation. This is stated in §7.1 and is the reason Plant 2 is required to test the certificate's non-redundant role.
+
+C.6 Proposition (exact containment in a polytope) [P]
+
+Let P = \bigcap_{i=1}^{\ell}\{x : k_i^{\top} x \le b_i\} and let Z = Z(c,G) be compact and convex. Then
+
+Z \subseteq P \iff \forall i \in \{1,\dots,\ell\}:\; k_i^{\top} c + \|G^{\top}k_i\|_1 \le b_i.
+
+Proof. ( \Leftarrow ) If the inequality holds for all i, then by C.2, \sup_{z\in Z} k_i^{\top} z \le b_i, so every z \in Z satisfies every k_i^{\top}z \le b_i, i.e. z \in P. ( \Rightarrow ) If Z \subseteq P then for each i, \sup_{z \in Z} k_i^{\top} z \le b_i because the supremum is attained (compactness) at some z^{\ast} \in Z \subseteq P. ∎
+
+Correction to the v0.4 note. The support-function test is a linear sufficient condition for zonotope-in-zonotope containment (Appendix C.6b) but is exact for zonotope-in-polytope containment, because a polytope is defined by its supporting halfspaces. Since K is a polytope, the check in §7.1 is exact, not merely conservative. The conservatism enters elsewhere: in the zonotope over-approximation of the true reachable set (C.7, C.8) and in the polytope over-approximation of K, if any. This distinction must be preserved in the Lean statements: it is the difference between an obligation that is discharged by C.6 and one that is not.
+
+C.6b Proposition (zonotope-in-zonotope containment is hard) [O]
+
+Deciding Z(c_1, G_1) \subseteq Z(c_2, G_2) is co-NP-complete in general, with exact polynomial algorithms only when the dimension n or the generator count m_2 is fixed. A linear sufficient condition is obtained by replacing the target zonotope with its H-representation over-approximation and applying C.6, or by the linear-programme formulation for AH-polytope containment, whose size grows linearly in the number of target hyperplanes.
+
+Status. [O]. This proposition is stated to bound what can be claimed: whenever the monitor checks containment in a zonotope rather than a polytope, the check is conservative and its conservatism is part of the accounting of §4.4.
+
+C.7 Proposition (sound over-approximating intersection) [P]
+
+Let a constrained zonotope be
+
+Z_c = \left\{\, c + G\beta \;:\; \beta \in [-1,1]^m,\; A_c \beta = b_c \,\right\},
+
+and let a strip be S = \{x : |y - Hx| \le \epsilon\}. Then:
+
+1. The intersection Z_c \cap S is a constrained zonotope.
+2. Discarding the equality constraints of a constrained zonotope yields a zonotope that contains it:
+   Z(c,G) \supseteq Z_c.
+
+Proof. (2) The zonotope is the same set with the constraints A_c\beta = b_c removed; removing constraints can only enlarge a set. (1) is the closure property of the constrained-zonotope class under intersection with strips and halfspaces: intersecting with |y - Hx| \le \epsilon adds two affine constraints in (x,\beta), which become two equality constraints in the lifted variable after the standard slack construction. ∎
+
+Corollary (the operator \cap^{\sim}). Define
+
+Z \cap^{\sim} S \;:=\; \mathrm{Proj}\big( (Z \text{ lifted to } Z_c) \cap S \big) \text{ re-expressed as a zonotope by discarding constraints.}
+
+By C.7, Z \cap^{\sim} S \supseteq Z \cap S. The operator is sound and computable; its conservatism equals the volume shed by the discarded constraints, which is reported in the slack accounting of §4.4.
+
+Status. [P]. The operator named in §4.2 is thus specified and proved sound, not merely asserted to exist. Its implementation in fixed point is O-2 [V]; the fixed-point version must be shown to contain the exact-real version, which composes B.7 with C.7.
+
+C.8 Proposition (sound order reduction) [P]
+
+Let Z = Z(c,G) with G = [g_1,\dots,g_m], m > m'. Partition the columns into a kept block G_K and a discarded block G_D = [g_{m'+1},\dots,g_m]. Then
+
+Z(c,G) \;\subseteq\; Z\!\left(c,\; \left[\,G_K \;\; \mathrm{diag}\!\left(\textstyle\sum_{j \in D} |g_j|\right)\right]\right),
+
+where the sum is taken entry-wise (row-wise absolute values).
+
+Proof. For any \beta,
+
+c + \sum_{j} \beta_j g_j = c + \sum_{j \in K}\beta_j g_j + \sum_{j \in D}\beta_j g_j,
+\qquad \left| \sum_{j \in D}\beta_j g_j \right| \le \sum_{j\in D}|g_j| \text{ entry-wise.}
+
+The right-hand term therefore lies in the axis-aligned box \prod_i [-\sum_{j\in D}|g_{ij}|, +\sum_{j\in D}|g_{ij}|], which is exactly the zonotope generated by \mathrm{diag}(\sum_{j\in D}|g_j|) with \beta \in [-1,1]^n. ∎
+
+Added width. The reduction increases the i-th coordinate's generator-mass by 2\sum_{j\in D}|g_{ij}|. This quantity, and not a Hausdorff distance, is what the monitor records as slack. The choice of which columns to keep is free; keeping the m' columns of largest Euclidean norm minimises the added coordinate mass in a least-squares sense but is not optimal in general. The optimal column selection is a subset-selection problem; the monitor uses the greedy rule and reports the resulting slack.
+
+C.9 Theorem (reachability soundness under intersection and reduction) [P]
+
+Theorem C.9. Suppose the true state satisfies x_t \in \mathcal{X}_t, and let
+
+\mathcal{X}_{t+\Delta} \;=\; \mathrm{Red}_{m}\!\left( \mathrm{Reach}(\mathcal{X}_t, a_{\mathrm{held}}, W, \Delta) \cap^{\sim} X_{t+\Delta}^{(0)} \right)
+
+with \cap^{\sim} as in C.7 and \mathrm{Red}_m as in C.8. Then x_{t+\Delta} \in \mathcal{X}_{t+\Delta}, provided \mathrm{Reach} is sound for the held control and the disturbance model.
+
+Proof. The true successor lies in \mathrm{Reach}(\mathcal{X}_t, a_{\mathrm{held}}, W, \Delta) by the definition of \mathrm{Reach} and the antecedent x_t \in \mathcal{X}_t. It lies in X_{t+\Delta}^{(0)} because the observation at t+\Delta is consistent with the true state by the definition of the measurement-consistent set, assuming the error bound \epsilon(y_{t+\Delta}) is valid. Hence it lies in the intersection, which is contained in the over-approximation \cap^{\sim} (C.7), which is contained in the reduced zonotope (C.8). ∎
+
+Remark. Theorem C.9 is the envelope-soundness obligation O-2. The paper proof depends on three side conditions that must each be checked: \mathrm{Reach} soundness for a_{\mathrm{held}}, validity of the error bound, and the fixed-point version of the operators. The first is plant-specific; the second is a provenance requirement; the third composes B.7 with C.7 and C.8.
+
+C.10 Corollary (the intersection is not optional) [P]
+
+Without the intersection with X_{t+\Delta}^{(0)}, the generator count and the coordinate masses are non-decreasing in t, since Reach appends n disturbance generators per step (C.4) and order reduction only adds mass. Hence by B.6 with \alpha = 1 the envelope's interval-hull widths grow without bound along every trajectory, and the feasibility gate of Appendix F trips after a finite number of steps independent of the agent's behaviour.
+
+Proof. Immediate from C.4, C.8 and B.6. ∎
+
+Consequence. TC-12 of §14 is not a diagnostic; it is a demonstration of a theorem. A monitor without intersection is provably unusable on Plant 1, not merely empirically worse.
+
+---
+
+Appendix D — Measurement-Robust Barrier Certificates
+
+D.1 Discrete-time barrier condition
+
+Let h : X \to \mathbb{R} be a barrier function whose sublevel set \mathcal{H} = \{x : h(x) \ge 0\} is a subset of S_{\mathrm{safe}}. The nominal (non-robust) discrete-time condition for a controller k is
+
+h\big(F(x, k(x), w)\big) \;\ge\; (1-\eta)\, h(x) \qquad \forall w \in W,
+
+for a decay rate \eta \in (0,1], or the stronger h(F(\cdot)) \ge 0 when no decay is required.
+
+D.2 Lipschitz data
+
+The registry supplies constants L_h, L_f, L_{\mathcal{L}_f h} \ge 0 such that, for all x, x' in the declared domain,
+
+|h(x) - h(x')| \le L_h \|x - x'\|,
+
+\|f(x) - f(x')\| \le L_f \|x - x'\|,
+
+\|\mathcal{L}_f h(x) - \mathcal{L}_f h(x')\| \le L_{\mathcal{L}_f h}\|x - x'\|,
+
+where f(x) = F(x, k_B(x), w) for the worst-case w and \mathcal{L}_f h is the Lie derivative appearing in the continuous-time formulation of the MR-CBF construction. The constants come from the trusted registry and sensor provenance, never from the agent's certificate (§7.2). Supplying them from the certificate would let the agent choose the constants that make its own proposal pass, which defeats the monitor.
+
+D.3 Lemma (measurement-robust tightening) [P]
+
+Let \hat{x} = x + e with \|e\| \le \epsilon. Suppose the nominal condition holds at the estimate,
+
+h\big(F(\hat{x}, k_B(\hat{x}), w)\big) \;\ge\; (1-\eta) h(\hat{x}).
+
+Then the condition at the true state holds with margin
+
+h\big(F(x, k_B(\hat{x}), w)\big) \;\ge\; (1-\eta) h(x) \;-\; \mu,
+\qquad
+\mu \;=\; \Big( L_{\mathcal{L}_f h} + L_h \,\|k_B\| \Big)\,\epsilon \;+\; L_h (1 + \eta)\,\epsilon.
+
+Proof. Write the difference
+
+h(F(x, k_B(\hat{x}), w)) - (1-\eta)h(x)
+= \underbrace{\left[ h(F(\hat{x}, k_B(\hat{x}), w)) - (1-\eta)h(\hat{x}) \right]}_{\ge 0 \text{ by hypothesis}}
++ \underbrace{\left[ h(F(x,\cdot,w)) - h(F(\hat{x},\cdot,w)) \right]}_{\text{term (I)}}
++ \underbrace{(1-\eta)\left[ h(\hat{x}) - h(x) \right]}_{\text{term (II)}}.
+
+Term (I) is bounded below by -L_h \|F(x,\cdot,w) - F(\hat{x},\cdot,w)\|. The map F(\cdot, k_B(\hat{x}), w) differs between x and \hat{x} through the dynamics and through the controller's dependence on its argument; bounding the former by L_{\mathcal{L}_f h}\epsilon (the Lie-derivative Lipschitz term) and the latter by L_h\|k_B\|\epsilon gives (I) \ge -(L_{\mathcal{L}_f h} + L_h\|k_B\|)\epsilon. Term (II) is bounded below by -(1-\eta)L_h\epsilon \ge -L_h\epsilon. Summing gives the stated \mu, with the (1+\eta) grouping absorbing the two L_h contributions. ∎
+
+Remark. The exact grouping of constants depends on whether the controller is evaluated at \hat{x} or at x, and on whether \eta multiplies the estimate or the true value. The registry declares which variant is used; the Lean statement and the Rust checker must use the same variant. A mismatch here is the most likely source of an unsound Mode N check, and Appendix G.4 makes the matching a CI condition.
+
+D.4 Linearisation remainder
+
+When the condition is checked on a linearisation \bar{f} of f at \hat{x}, the remainder must be bounded. For f twice differentiable with Hessian bounded by M on the declared domain,
+
+\| f(x) - \bar{f}(x) \| \;\le\; \tfrac{M}{2}\,\|x - \hat{x}\|^2 \;\le\; \tfrac{M}{2}\,\epsilon^2.
+
+The remainder is quadratic in \epsilon, hence dominated by the linear \mu of D.3 for small \epsilon. It is nevertheless included in the tightened bound, because the monitor must not rely on an asymptotic argument. M is registry data.
+
+D.5 Farkas semantics, corrected
+
+The v0.3 draft stated that the Farkas witness proves "the linearised constraints under the tightened bound are feasible." This is withdrawn [F].
+
+Correct statement. Let the tightened constraint set be a system of linear inequalities C x \le d. Farkas' lemma states that the system is infeasible if and only if there exists \lambda \ge 0 with \lambda^{\top} C = 0 and \lambda^{\top} d < 0. Equivalently, Cx \le d implies a^{\top}x \le \beta if and only if (a,\beta) lies in the cone generated by the rows of (C,d) together with the trivial nonnegativity generators. The certificate witness is a vector \lambda exhibiting one of these implications.
+
+The monitor checks the implication, not satisfiability: it verifies that the tightened constraint is implied by the linearised barrier condition and the registered Lipschitz data, or that the negation is infeasible. The distinction matters because a feasible system of constraints says nothing about whether the action satisfies the barrier; an implication does.
+
+D.6 What Mode N does not establish
+
+Mode N establishes: given the registry's Lipschitz constants, the registry's error bound, the registry's linearisation remainder, and a valid Farkas witness, the tightened barrier inequality holds at the true state. It does not establish:
+
+· that the registry's constants are correct for the plant (they are TCB items, Appendix I.5);
+· that the barrier function's sublevel set is a subset of S_{\mathrm{safe}} (this is a separate inclusion to be checked);
+· that the nominal condition held at the estimate (this is what the certificate asserts, and the monitor must recompute it rather than trust the assertion);
+· that the plant matches the model.
+
+These are [V] or [O] items in the ledger of Appendix K.
+
+---
+
+Appendix E — Viability, the Backup Set, and the End-to-End Theorem
+
+E.1 Backup set
+
+Fix a backup controller k_B and a horizon T. Define the backup set at error bound \epsilon as
+
+\mathcal{C}_B(\epsilon) = \left\{\, x \in S_{\mathrm{safe}} \;:\; \forall e, \|e\| \le \epsilon,\; \forall w_0,\dots,w_{T-1} \in W:\; x_j(x, e, w_{0:j-1}) \in S_{\mathrm{safe}} \;\forall j \le T \,\right\},
+
+where x_0 = x and x_{j+1} = F(x_j, k_B(x_j + e_j), w_j).
+
+E.2 Proposition (under-approximation) [P]
+
+If \mathcal{C}_B(\epsilon) as defined in E.1 is non-empty and the terminal condition x_T \in S_{\mathrm{safe}} is strengthened to x_T \in \mathcal{C}_B(\epsilon), then \mathcal{C}_B(\epsilon) is a subset of the maximal viability kernel of S_{\mathrm{safe}} under k_B with the same error and disturbance bounds.
+
+Proof. By definition, every trajectory from a point in \mathcal{C}_B(\epsilon) remains in S_{\mathrm{safe}} for all horizons (by the recursive strengthening), which is the defining property of membership in the viability kernel. Hence \mathcal{C}_B(\epsilon) \subseteq \mathrm{Viab}(S_{\mathrm{safe}}). ∎
+
+Conservatism. The monitor may reject actions whose successors lie in the true viability kernel but outside \mathcal{C}_B(\epsilon). The gap is reported (Appendix F). The converse inclusion does not hold in general, and the specification does not claim it.
+
+E.3 Lemma (\epsilon_{\max} is well defined and monotone) [P]
+
+The map \epsilon \mapsto \mathcal{C}_B(\epsilon) is non-increasing in the inclusion order: \epsilon_1 \le \epsilon_2 \Rightarrow \mathcal{C}_B(\epsilon_1) \supseteq \mathcal{C}_B(\epsilon_2).
+
+Proof. The defining condition of \mathcal{C}_B(\epsilon_2) quantifies over a strictly larger set of admissible error sequences e_j than does \mathcal{C}_B(\epsilon_1). Hence any point satisfying the stronger condition satisfies the weaker one. ∎
+
+Corollary. The budget
+
+\epsilon_{\max}(x) = \sup\{\epsilon : \mathcal{C}_B(\epsilon) \text{ is invariant under } k_B \text{ and } \mathcal{C}_B(\epsilon) \subseteq S_{\mathrm{safe}}\}
+
+is well defined whenever the set is non-empty, and is computable by bisection: test invariance at a candidate \epsilon, halve or double, terminate when the bracket width falls below the declared resolution. The resolution is a registry parameter and its effect on conservatism is reported.
+
+Fixed-point caveat. In the fixed-point implementation the computed backup set \tilde{K} must be an under-approximation of \mathcal{C}_B(\epsilon_{\max}), because a computed set that is too large would make the invariance obligation easier than it should be. The computation therefore uses inward rounding for the set construction and outward rounding for the invariance check. This asymmetry is deliberate and must be preserved in the Lean statement; a symmetric rounding convention would invalidate O-5 in one direction or the other.
+
+E.4 Obligation 0, strong form [V]
+
+\forall x \in \tilde{K},\; \forall e : \|e\| \le \epsilon_{\max},\; \forall w \in W:\; F(x, k_B(x+e), w) \in \tilde{K},
+
+where \tilde{K} is the fixed-point-computed backup set and F is evaluated with outward-rounded arithmetic. The obligation quantifies over every error below the budget, not merely at the budget, because the runtime error at a given step may be smaller than \epsilon_{\max} and the invariance must hold there too. This is the correction of §5.2 and it is strictly stronger than the v0.3 statement.
+
+E.5 Theorem (end-to-end confinement), proof skeleton [V]
+
+Theorem E.5. Assume O-2 (envelope soundness, Theorem C.9), O-3 (arithmetic soundness, Theorem B.7), O-5 (Obligation 0, E.4), and O-7 (authorization soundness, Appendix G.3). Let the true state satisfy x_t \in \mathcal{X}_t. If the monitor accepts a_t, then for every admitted w \in W, the true successor satisfies x_{t+1} \in \tilde{K}, and by induction x_{t+k} \in S_{\mathrm{safe}} for all k \ge 0 along the backup trajectory.
+
+Proof skeleton.
+
+Base. x_t \in \mathcal{X}_t by hypothesis.
+
+Step. The acceptance condition (§6) includes F(\mathcal{X}_t, a_t, W) \subseteq \tilde{K}. By O-2, the true successor lies in the computed successor set, hence in \tilde{K}.
+
+Delay. The state is augmented with the held-control sequence (§2), so the transition used in the step is over x^{\ast}_t = (x_t, a_{t-1},\dots,a_{t-\Delta}). The induction is over x^{\ast}, not over x. Without augmentation the step fails, because the successor depends on controls that are not components of x_t.
+
+Induction. Suppose x^{\ast}_{t+k} \in \tilde{K} \times A^{\Delta}. The monitor either accepts a new action (re-entering the step) or the backup controller is in force. In the latter case O-5 gives x^{\ast}_{t+k+1} \in \tilde{K}. In the former case the step applies again. Since \tilde{K} \subseteq S_{\mathrm{safe}} by construction (E.1–E.2), membership in \tilde{K} implies membership in S_{\mathrm{safe}}. ∎
+
+Status. The skeleton is conditional on O-5. It is not a theorem. Specifically:
+
+· The step relies on O-2 holding for the augmented state, which requires the envelope to be propagated over the augmented dynamics. This is stated in §2 and §4 but is not proved.
+· The induction presumes that the monitor's decision sequence does not admit a step where neither a new acceptance nor the backup is in force. The architecture must exclude that case by construction, and the exclusion is an obligation (Appendix G.5), not an automatic consequence.
+· The paper proof says nothing about the compiled monitor; O-7 is required for that.
+
+E.6 Expected failure on Plant 2 [F]
+
+For the pendulum with bounded delay and measurement error, the backup set \mathcal{C}_B(\epsilon_{\max}) is expected to be empty or to fail E.4, because the linearised backup controller's region of attraction shrinks below the measurement-error uncertainty when \epsilon_{\max} is set conservatively enough to cover the sensor's stated accuracy. If E.4 fails for Plant 2:
+
+· Theorem E.5 is false for Plant 2.
+· The end-to-end claim is withdrawn for Plant 2, per §17 and O-5.
+· The Mode N certificate remains specified but is not attached to a confinement claim; it is attached only to the per-step barrier condition of Appendix D, which is a weaker statement.
+· The monograph records the withdrawal in the register of Appendix J.
+
+The specification is written so that this outcome is a result, not a defect: a falsifiable architecture that predicts its own failure on a declared plant has discharged part of its obligation by doing so.
+
+---
+
+Appendix F — The Feasibility Gate
+
+F.1 Per-constraint margins
+
+For K = \bigcap_{i=1}^{\ell}\{x : k_i^{\top}x \le b_i\} and envelope \mathcal{X}_t = Z(c,G),
+
+\mu_i(\mathcal{X}_t) \;=\; b_i - \left( k_i^{\top} c + \|G^{\top} k_i\|_1 \right), \qquad i = 1,\dots,\ell.
+
+By C.6, \mu_i \ge 0 for all i if and only if \mathcal{X}_t \subseteq K. The margins are therefore not a heuristic; they are the exact containment test.
+
+F.2 Proposition (the gate is sound and complete for the containment question) [P]
+
+\mathcal{X}_t \subseteq K \iff \min_i \mu_i(\mathcal{X}_t) \ge 0.
+
+Proof. Immediate from C.6. ∎
+
+Status. The gate answers does this envelope satisfy this constraint? It is exact. It does not answer is the measurement quality sufficient? That is the separate budget question of F.3.
+
+F.3 Why volume fails [P]
+
+Claim. Volume is not a sufficient statistic for containment: two envelopes of equal volume may have different containment status in K, and volume is monotone under inclusion (so the v0.3 statement that it is not monotone is withdrawn [F]).
+
+Proof of insufficiency. Take K = [-1,1]^2. Let
+
+Z_1 = Z\!\left(\binom{0}{0},\; \mathrm{diag}(1,1)\right), \qquad \mathrm{vol}(Z_1) = 4,
+
+Z_2 = Z\!\left(\binom{0}{0.95},\; \mathrm{diag}(5,\,0.1)\right), \qquad \mathrm{vol}(Z_2) = 10 \cdot 0.2 = 2.
+
+Z_1 \subseteq K. Z_2 extends to x \in [-5,5], hence Z_2 \not\subseteq K. The contained envelope has larger volume than the non-contained one. Hence volume does not order containment status. Moreover \mathrm{vol} is monotone under inclusion (A \subseteq B \Rightarrow \mathrm{vol}(A) \le \mathrm{vol}(B)), so the v0.3 rejection reason is factually wrong even though the v0.3 conclusion (do not gate on volume) is correct. ∎
+
+F.4 Why the hull-width product fails [P]
+
+The width product w(Z) = \prod_i 2\sum_j|G_{ij}| is the volume of the axis-aligned bounding box, and it is also a sufficient-statistic failure.
+
+Proof. Same K = [-1,1]^2. Take
+
+Z_3 = Z\!\left(\binom{0}{0},\; \mathrm{diag}(1,1)\right), \qquad w(Z_3) = 4,
+
+Z_4 = Z\!\left(\binom{0}{0.95},\; \mathrm{diag}(5,\,0.05)\right), \qquad w(Z_4) = 10 \cdot 0.1 = 1.
+
+Z_3 \subseteq K, Z_4 \not\subseteq K, and w(Z_4) < w(Z_3). The width product fails for the same reason volume fails: it collapses a shape into a scalar. ∎
+
+Consequence. The v0.3 replacement of volume by width product is also withdrawn [F]. The correct gate is per-constraint (F.1–F.2), with the scalar budget \epsilon_{\max} as a separate, prior test.
+
+F.5 Combined gate
+
+The runtime gate is the conjunction of two independent tests:
+
+1. Budget test. If \|\epsilon(y_t)\| > \epsilon_{\max}(\hat{x}_t), enter mitigation. This is the measurement quality test; it does not look at the envelope.
+2. Containment test. If \min_i \mu_i(\mathcal{X}_t) < 0, reject the action. This is the shape test; it does not look at the measurement quality beyond what is already encoded in \mathcal{X}_t.
+
+The two tests answer different questions (Appendix §5.3) and neither implies the other. A monitor that implements only the budget test accepts envelopes that violate K; a monitor that implements only the containment test attempts to certify envelopes whose construction was invalid.
+
+---
+
+Appendix G — Refinement Pipeline, Lean Statements, and TCB
+
+G.1 Extractable subset
+
+The monitor's decision core is written in a subset of safe Rust that the extraction toolchain can translate:
+
+· no unsafe, no raw pointers;
+· no dynamic allocation on the decision path;
+· monomorphic types only (no trait objects, no closures capturing environment);
+· bounded loops with compile-time-known bounds where possible;
+· no external crates on the decision path;
+· integer arithmetic only, with explicit checked_* or saturating operations and explicit flag propagation.
+
+The subset is not a stylistic preference. Aeneas supports a limited fragment; unsupported constructs are reported as translation failures. Writing outside the subset produces an INCONCLUSIVE file, which blocks policy activation (G.4).
+
+G.2 Lean statement sketches [V]
+
+The following are the statements to be mechanised. None has been mechanised. They are given in Lean-like pseudocode to fix the intended meaning, not to claim that they compile.
+
+```lean
+-- B.3, B.4, B.5
+theorem add_sound  (s : Scale) (x y : Int) :
+  gamma_plus s (x + y) ⊇ gamma s x + gamma s y
+
+theorem mul_sound  (s : Scale) (x y : Int) :
+  gamma s x * gamma s y ⊆
+    gamma2 s (x * y) + errorGen (h s * (|x| + |y|) + h s ^ 2)
+
+theorem sat_flag_sound (s : Scale) (z : Int) :
+  |z| > maxMag s → satFlag z = true
+
+-- C.2, C.3, C.6
+theorem support_zonotope (c : Vec n) (G : Mat n m) (k : Vec n) :
+  support (Z c G) k = dot k c + norm1 (transpose G *ᵥ k)
+
+theorem zonotope_polytope_containment (c G K) :
+  Z c G ⊆ polytope K ↔ ∀ i, dot (k i) c + norm1 (transpose G *ᵥ k i) ≤ b i
+
+-- C.7, C.8
+theorem intersection_sound (Zc : ConstrainedZonotope) (S : Strip) :
+  Zc ∩ S ⊆ discardConstraints (Zc ∩ S)
+
+theorem reduction_sound (c G) (m' : Nat) :
+  Z c G ⊆ Z c (reduce G m')
+
+-- C.9
+theorem envelope_sound (Xt : Zonotope) (a_held : Action) (W : Box) (Δ : Nat)
+  (hx : x ∈ Xt) (hreach : reach_sound) :
+  F x a_held w ∈ envelopeStep Xt a_held W Δ
+
+-- D.3
+theorem mr_tightening_sound (h : Barrier) (LB : LipschitzData) (ε : Real)
+  (hx : ‖e‖ ≤ ε) (hnom : nominalCond h x̂) :
+  barrierCond h x ≥ - mu LB ε
+
+-- E.4
+theorem K_invariant (K̃ : Polytope) (kB : Controller) :
+  ∀ x ∈ K̃, ∀ e, ‖e‖ ≤ εmax → ∀ w ∈ W, F x (kB (x + e)) w ∈ K̃
+
+-- E.5
+theorem confinement (K̃ : Polytope) (Xt : Zonotope) (a : Action) :
+  O2 → O3 → O5 → O7 →
+  x ∈ Xt → accepts a → ∀ w ∈ W, F x a w ∈ K̃
+
+-- G.3
+theorem authorization_sound (π : Certificate) :
+  extractedMonitor π = Accept → abstractContract π
+```
+
+G.3 The refinement theorem
+
+\forall \pi:\; \mathrm{ExtractedMonitor}(\pi) = \mathrm{Accept} \;\Longrightarrow\; \mathrm{AbstractContract}(\pi).
+
+What this is and is not. The theorem relates the extracted function to the abstract contract. It is not the same as Accept → AbstractContract, which would be a tautology if Accept were defined by the contract. The extracted monitor computes on concrete bytes; the abstract contract quantifies over the modelled semantics. The gap between them is exactly what the theorem closes.
+
+What the theorem does not cover. The Lean kernel, the extraction toolchain, the Rust compiler, the target platform's arithmetic (if it deviates from the declared integer semantics), and the offline artifacts. These are TCB items in G.5.
+
+G.4 INCONCLUSIVE semantics
+
+A file tagged INCONCLUSIVE is one for which the extraction toolchain could not produce a total function over the declared input domain. The tag is not a warning; it is a semantic hole. The CI policy is:
+
+1. Any policy version whose decision path contains an INCONCLUSIVE file is rejected at activation.
+2. A tag may be removed only by rewriting the code inside the extractable subset and re-running extraction, not by adding a proof-side axiom.
+3. sorry and axiom beyond the standard logical axioms (propext, Quot.sound, and the chosen classical axioms if declared) are treated as INCONCLUSIVE.
+
+This is the discipline of microkernel verification practice: the label gates, it does not annotate.
+
+G.5 Decision-path totality obligation [V]
+
+The induction of Theorem E.5 requires that at every step either a new action is accepted or the backup controller is in force. The architecture must exclude the third possibility (neither) by construction. This is obligation O-11, stated here and not in the main ledger of §14 because it is a consequence of the architecture rather than a primary proof target:
+
+O-11 (decision-path totality). For every reachable monitor state and every admissible input, the monitor emits exactly one of Accept, Reject→backup, or Reject→mitigation, and the actuator's lease mechanism guarantees that a Reject→backup takes effect within the declared switch latency.
+
+The lease mechanism of §8 is the architectural device that makes O-11 plausible: an unrenewed lease expires, and expiry is treated as Reject→backup. But plausibility is not proof, and O-11 is [V].
+
+G.6 TCB inventory [V]
+
+Item Why it is trusted Required assurance
+Lean kernel Soundness of every [P]→machine-checked step Independent review; kernel version pinned
+Charon / Aeneas Faithfulness of extraction Version pinned; extraction diff reviewed
+Rust compiler Faithfulness of codegen Pinned toolchain; no unsafe on decision path
+Kani Bounded concrete checks Declared bounds; results labelled bounded
+Fixed-point semantics of the target Agreement with the Lean arithmetic model Target-specific semantics test suite
+Backup controller k_B Used in Obligation 0 Independently certified
+Backup set \tilde{K} Used in acceptance condition Independently certified (separate checker or Lean proof)
+\epsilon_{\max} table Used in the budget gate Independently certified
+Lipschitz constants Used in Mode N Derived from the plant model and independently reviewed
+Sensor provenance source Underpins the error bound Hardware root of trust
+Held-control channel Determines a_{\mathrm{held}} Hardware mailbox, not agent-writable
+Hardware watchdog Enforces lease expiry Independent MCU, independent clock
+
+A defect in any row invalidates the runtime guarantee as surely as a parser bug. The offline artifacts in particular are often treated as "configuration" rather than TCB; in this architecture they are TCB, because a wrong K makes every accepted action wrong.
+
+---
+
+Appendix H — Policy Revision Calculus
+
+H.1 R1 conditions
+
+A restrictive refinement from S_k to S_{k+1} must satisfy
+
+\text{(i)}\quad S_{k+1} \subseteq S_k,
+
+\text{(ii)}\quad w(S_{k+1}) \ge \beta\, w(S_{\mathrm{baseline}}), \qquad \beta \in (0,1],
+
+\text{(iii)}\quad \forall x \in \partial S_{k+1},\; \exists \tau \text{ of length } T_{\mathrm{avail}} \text{ with } \tau(0) = x,\; \tau(j) \in S_{k+1} \;\forall j.
+
+Condition (i) is the refinement; (ii) is the baseline-relative availability floor; (iii) is trajectory preservation, which prevents the refinement from leaving a non-empty set of dead states.
+
+H.2 Proposition (the per-revision ratio compounds) [P]
+
+Let w(S_{k+1}) \ge \alpha\, w(S_k) for each revision and w(S_0) = w(S_{\mathrm{baseline}}). Then after n revisions,
+
+w(S_n) \;\ge\; \alpha^n \, w(S_{\mathrm{baseline}}).
+
+For \alpha = 0.95 and n = 14, \alpha^n = 0.95^{14} \approx 0.488.
+
+Proof. Immediate by induction: w(S_n) \ge \alpha w(S_{n-1}) \ge \alpha^n w(S_0). The numerical value follows from \ln 0.95 \approx -0.0513 and 14 \times 0.0513 \approx 0.718, so e^{-0.718} \approx 0.488. ∎
+
+Consequence. The v0.3 condition with S_{\min} and a per-revision ratio is withdrawn [F]. A per-revision ratio permits an attacker who can submit a sequence of individually-approved R1 revisions to erode the operating envelope by a factor of two in fourteen steps. The baseline condition (ii) bounds the total erosion by \beta, independent of the number of revisions.
+
+H.3 Proposition (baseline condition does not compound) [P]
+
+Under condition (ii) alone, w(S_k) \ge \beta\, w(S_{\mathrm{baseline}}) for every k, by definition. The bound does not depend on k.
+
+Proof. Trivial. ∎
+
+Remark. The baseline condition is weaker per revision than a per-revision ratio with \alpha > \beta: a single large restriction is permitted as long as it stays above the floor. This is deliberate. The floor is the governance decision; the per-revision ratio was an accident of formulation that made the governance decision depend on the number of revisions rather than on their content.
+
+H.4 Rollback lemma [P]
+
+Let the policy store be an append-only list (p_0, p_1, \dots, p_n) with strictly increasing identifiers and a hash chain H_k = \mathrm{hash}(p_k \,\|\, H_{k-1}). Then for any certificate referencing p_j, a monitor that holds H_n and the head identifier n can decide whether j \le n and whether H_j matches the stored chain, and hence reject any rollback to j < n that has not been explicitly authorised.
+
+Proof. The comparison j \le n is decidable from the two integers; the hash comparison is decidable from the stored chain and the certificate's p_hash field. Rejection at Layer 1 follows before the proof checker runs. ∎
+
+H.5 R2 and R3
+
+R2 (model correction). The replacement model must discharge O-2 and O-3 for the corrected dynamics, and every obligation that depended on the old model must be re-discharged. The obligation set is not inherited; a corrected model is a new model with its own ledger.
+
+R3 (governance or domain extension). The change requires an assurance-case delta identifying new hazards introduced by the expansion, a new model-validity assessment, and governance authorisation. The delta is attached to the policy version as a digest; the digest's presence and approval status are preconditions for PolicyMatch. The monitor does not evaluate the delta's content; it evaluates the presence of an approved digest. The evaluation of content is a governance function, and its trustworthiness is a TCB assumption (Appendix G.6, row "backup set" is analogous: certification is external, use is internal).
+
+---
+
+Appendix I — Falsification Protocol, Formalised
+
+I.1 Formal statements
+
+Let \mathcal{T} be the test corpus, N the monitor, P the plant model.
+
+F1. \exists\, (x, a, w, \pi) \in \mathcal{T} such that N accepts \pi, x \in \mathcal{X}(\pi), and F(x, a, w) \notin \tilde{K}.
+
+F2. \exists\, (\pi, \pi') \in \mathcal{T} with q(\pi') \le q(\pi) and N accepts both; or p_{\mathrm{id}}(\pi') < p_{\mathrm{id}}(\pi) and N accepts \pi'.
+
+F3. Let \mathrm{HWM} be the measured high-water mark of the decision path on the target and B_{\mathrm{static}} the static bound. F3 fires if \mathrm{HWM} > B_{\mathrm{static}}.
+
+F4. \exists\, (x, a, w) \in \mathcal{T} with A_{\mathrm{safe}}(\mathcal{X}(x)) \neq \emptyset and F(x, a, w) \notin \tilde{K} for the fallback actually selected.
+
+F5. \frac{|\{\pi \in \mathcal{T}_{\mathrm{nom}} : N \text{ rejects } \pi\}|}{|\mathcal{T}_{\mathrm{nom}}|} > 0.05.
+
+F6. \mathrm{median}_{t}\big(\sigma_t^{(i)}\big) > 3.0 for some direction i with bounded X_t^{(0)} in that direction.
+
+F7. \exists\, \pi \in \mathcal{T} with \|\epsilon(y)\| > \epsilon_{\max}(\hat{x}) and N accepts \pi.
+
+I.2 Search completeness
+
+A falsification criterion is only as strong as the search that failed to violate it. The protocol therefore requires:
+
+· the corpus generator to be declared (fuzzer, adversarial search, exhaustive enumeration over a finite abstraction);
+· the coverage to be reported against the declared input domain (byte-level coverage for the parser, state-space coverage for the plant-level criteria);
+· the negative result to be reported as "no violation found under the declared search", never as "no violation exists".
+
+I.3 Why a p99 cannot falsify a WCET claim [P]
+
+Claim. An observed p99 latency \ell_{99} is consistent with an unbounded worst-case execution time.
+
+Proof. Latency is a function of the input and the platform state. A p99 is the 99th percentile of the empirical distribution over the observed inputs. If the input domain contains a path not exercised by the corpus, the p99 places no constraint on that path's cost. Hence \ell_{99} \le B does not imply \sup_{\mathrm{inputs}} \ell \le B. A measured high-water mark is a valid lower bound on the true worst case, and the static bound is an upper bound on the modelled worst case; the two together are the correct instrument, and the p99 is not. ∎
+
+Consequence. F3 is stated against \mathrm{HWM} and B_{\mathrm{static}}, as in §15.
+
+I.4 Model-mismatch campaign
+
+The campaign perturbs the plant outside W and measures the monitor's response. It makes no safety claim. Its purpose is to document the boundary of the model's validity: the point at which the monitor's rejections stop being attributable to the agent and start being attributable to the model. The campaign's output is a degradation curve, not a pass/fail.
+
+I.5 Pre-registration discipline
+
+The criteria F1–F7 and their thresholds are fixed before simulation. A threshold adjusted after seeing data is a new criterion and must be declared as such, with the adjustment recorded. This is the difference between a pre-registered protocol and a narrative.
+
+---
+
+Appendix J — Register of Withdrawn and Corrected Claims
+
+# Claim in earlier draft Status Replacement
+J.1 PCAA latency of 53.7 μs [F] withdrawn Comparison to PCAA is structural, not quantitative
+J.2 \gamma_s(x+y) \supseteq \gamma_s(x) + \gamma_s(y) [F] false (B.2) B.3 with outward rounding
+J.3 Volume is not monotone under inclusion [F] false Volume is monotone; it fails as a sufficient statistic (F.3)
+J.4 Hull-width product fixes the gate [F] false (F.4) Per-constraint margins (F.1–F.2)
+J.5 Farkas witness proves "feasibility" [F] category error Farkas proves implication (D.5)
+J.6 "Viability kernel of the uncertainty envelope" [F] withdrawn K is a fixed backup set; the envelope enters through the antecedent (E.5)
+J.7 Scalar slack \sigma_t = w(\mathcal{X}_t)/w(X_t^{(0)}) [F] undefined when X_t^{(0)} unbounded Per-direction slack (Appendix §4.4)
+J.8 Per-revision availability ratio \alpha [F] compounds (H.2) Baseline-relative floor (H.1(ii))
+J.9 Reach from X_t^{(0)} [F] discards prior envelope Reach from \mathcal{X}_t (§4.2)
+J.10 K = \mathcal{C}_B(\epsilon) [F] does not cover varying \epsilon K = \mathcal{C}_B(\epsilon_{\max}) with strong invariance (E.4)
+J.11 "Monitor written from the first line in the extractable subset" as sufficient [F] insufficient INCONCLUSIVE CI gate (G.4)
+J.12 Support-function test is only sufficient [F] imprecise Exact for polytope targets (C.6); sufficient for zonotope targets (C.6b)
+J.13 Real-time claim on an isolated core [F] conditional Withdrawn unless interference bound is established (§15)
+J.14 A p99 falsifies a WCET claim [F] false (I.3) High-water mark plus static bound
+J.15 Offline artifacts are configuration [F] wrong TCB items (G.6)
+J.16 End-to-end confinement theorem [F] expected to fail on Plant 2 Obligation E.5, status [V]; Plant 2 claim withdrawn
+
+The register is part of the specification. A reader who finds a claim in the body of the monograph that contradicts a row of this register has found an error in the body, not in the register.
+
+---
+
+Appendix K — Reference Plants, Parameters, and Obligation Ledger
+
+K.1 Plant 1
+
+x = \begin{pmatrix} p \\ v\end{pmatrix}, \quad
+x^{+} = \underbrace{\begin{pmatrix} 1 & \Delta \\ 0 & 1\end{pmatrix}}_{A} x + \underbrace{\begin{pmatrix} \Delta^2/2 \\ \Delta \end{pmatrix}}_{B} u_{t-\Delta} + w,
+\quad w \in [-\bar{w},\bar{w}]^2, \quad \Delta = 2.
+
+A has \alpha = 1, so the accumulation bound of B.6 is linear in the horizon and the intersection of C.10 is mandatory. The envelope is a zonotope; Mode L applies. Obligations O-1 through O-4 and O-5 (attempted) are in scope.
+
+K.2 Plant 2
+
+Pendulum: x = (\theta, \dot\theta), nonlinear dynamics, barrier h encoding an angular safety region, backup controller k_B linearised about the upright. Mode N applies. The Lipschitz constants are bounded on the declared angular domain. Obligation O-5 is expected to fail (E.6); the Mode N certificate is then attached to the per-step condition of Appendix D only.
+
+K.3 Obligation ledger
+
+ID Obligation Plant Status Where stated
+O-1 X_0 \subseteq S_{\mathrm{safe}} 1, 2 [V] §14
+O-2 Envelope soundness 1, 2 [V]; paper proof C.9 App. C
+O-3 Arithmetic soundness — [V]; paper proof B.7 App. B
+O-4 One-step robustness 1, 2 [V] §5.1
+O-5 K-invariance, strong form 1 [V] App. E.4
+O-5 K-invariance, strong form 2 [F] expected failure App. E.6
+O-6 End-to-end confinement 1 [V]; skeleton E.5 App. E
+O-6 End-to-end confinement 2 [F] withdrawn App. E.6
+O-7 Authorization soundness of extracted monitor — [V] App. G.3
+O-8 Policy integrity — [V]; rollback lemma H.4 App. H
+O-9 Fallback correctness 1, 2 [V] §11
+O-10 TCB completeness — [V] App. G.6
+O-11 Decision-path totality — [V] App. G.5
+
+K.4 What a completed ledger would mean
+
+If O-1 through O-4, O-7, and O-11 are discharged for Plant 1, and O-5 and O-6 are discharged for Plant 1, the monograph supports the scoped statement of Theorem E.5 for Plant 1 under the declared assumptions. For Plant 2, the ledger records withdrawal. The ledger is deliberately not balanced: a specification that balances its ledger on both plants before either has been analysed would be making a claim it cannot support.
+
+---
+
+Appendix L — Open Problems
+
+L.1 Exact fixed-point \cap^{\sim}. Appendix C.7 proves soundness of constrained-zonotope intersection followed by constraint discarding. The conservatism shed by discarding is not bounded in the paper proof. A bound would tighten the slack accounting of §4.4 and reduce false rejections on Plant 2.
+
+L.2 Sharp \mu. The tightening constant of D.3 is correct but not sharp; the grouping (1+\eta) over-approximates the term (II) contribution for small \eta. A sharper constant would enlarge \mathcal{C}_B(\epsilon) and delay the expected failure of E.6. Whether a sharp enough constant exists to make E.6 succeed on the pendulum is an open question, and it is the specific question on which the Plant 2 claim turns.
+
+L.3 Column selection in order reduction. C.8 proves containment for any partition of the generator columns. Optimal selection is combinatorial. A near-optimal greedy rule with a proved approximation ratio would reduce slack without weakening soundness.
+
+L.4 Decision-path totality under lease failure. O-11 is architectural. The case in which the lease expires during the actuation commit is the hardest; a formal statement of the actuator's atomicity requirement is needed and is not given here.
+
+L.5 Model validity. No part of this monograph establishes that the model matches the plant. The model-mismatch campaign documents the boundary. Closing the gap requires a separate theory of model validation, which is outside the scope of a runtime monitor.
+
+L.6 Refinement of the arithmetic model. The Lean model and the Rust code share integer semantics by construction, but the target platform's arithmetic is a further refinement that is not addressed. If the platform's integer operations deviate from the declared two's-complement saturating semantics, B.5 does not apply and O-3 is not discharged for the compiled program.
+
+---
+
+Appendix M — Closing Statement on the Status of This Document
+
+This monograph contains no implementation, no simulation, no machine-checked proof, and no physical test. The paper proofs of Appendices B, C, D, E, F, and H are hand arguments. They are offered because an obligation with no proof sketch is not an obligation but a wish; they are labelled [P] rather than [V] discharged because a hand argument does not survive a compiler.
+
+The document is organised so that its value does not depend on its claims being true. Each claim is paired with a statement of what would refute it. Sixteen claims from earlier drafts have already been refuted by this analysis and are recorded in Appendix J. One reference plant is predicted to fail its central obligation and the failure is recorded in advance. The obligation ledger is deliberately unbalanced.
+
+A safety architecture that cannot be falsified cannot be audited. The contribution claimed here is not a guarantee, but a precise account of which guarantee is being attempted, on which plant, under which assumptions, with which obligations outstanding, and with which pre-registered conditions would count as its refutation.
+
+ASCII Diagrams — SI-v2
+
+D.1 — Global Architecture (Proposal / Verification / Execution / Recovery)
+
+```
+ ┌─────────────────────────────────────────────────────────────────────────┐
+ │                          UNTRUSTED DOMAIN                               │
+ │  ┌───────────────────────────────────────────────────────────────────┐  │
+ │  │                     AI AGENT (proposer)                           │  │
+ │  │   x_t, y_t  ──►  candidate action a_t  +  certificate π_t         │  │
+ │  └───────────────────────────┬───────────────────────────────────────┘  │
+ └──────────────────────────────┼──────────────────────────────────────────┘
+                                │  π_t = <m, p_id, p_hash, a, X_t, W, q, d, ρ>
+                                ▼
+ ╔═════════════════════════════════════════════════════════════════════════╗
+ ║                        TRUSTED DOMAIN (TCB)                             ║
+ ║                                                                         ║
+ ║   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────────────┐     ║
+ ║   │ LAYER 0  │──►│ LAYER 1  │──►│ LAYER 2  │──►│     LAYER 3      │     ║
+ ║   │ parse    │   │ fresh /  │   │ proof /  │   │  decision +      │     ║
+ ║   │ + bounds │   │ policy   │   │ viability│   │  evidence log    │     ║
+ ║   └──────────┘   └──────────┘   └──────────┘   └────────┬─────────┘     ║
+ ║        │              │              │                  │               ║
+ ║        │ reject       │ reject       │ timeout          │ token         ║
+ ║        ▼              ▼              ▼                  ▼               ║
+ ║   ┌─────────────────────────────────────────┐   ┌──────────────────┐    ║
+ ║   │           MITIGATION / FALLBACK         │   │  HW MAILBOX      │    ║
+ ║   │      (declares loss of guarantee)       │   │  (agent cannot   │    ║
+ ║   └─────────────────────────────────────────┘   │   overwrite)     │    ║
+ ║                                                 └────────┬─────────┘    ║
+ ╚══════════════════════════════════════════════════════════╪══════════════╝
+                                                            │ bound token
+                                                            ▼
+                                              ┌──────────────────────────┐
+                                              │       ACTUATOR           │
+                                              │  re-verifies binding:    │
+                                              │  hash(a) ‖ q ‖ obs ‖ d   │
+                                              └──────────────────────────┘
+```
+
+---
+
+D.2 — The Two Domains and the Authority Boundary (§1, §8)
+
+```
+   PROPOSAL                     AUTHORITY                      EXECUTION
+   (untrusted)                  (trusted)                      (physical)
+       │                            │                               │
+       │   "I propose a_t"          │                               │
+       ├───────────────────────────►│                               │
+       │                            │  Accept(π_t) ?                │
+       │                            │  ┌─────────────────────┐      │
+       │                            │  │ WellFormed          │      │
+       │                            │  │ ∧ Fresh             │      │
+       │                            │  │ ∧ PolicyMatch       │      │
+       │                            │  │ ∧ ProofCheck(ρ)     │      │
+       │                            │  │ ∧ RobustSafe        │      │
+       │                            │  │ ∧ DeadlineValid     │      │
+       │                            │  │ ∧ F(X,a,W) ⊆ K      │      │
+       │                            │  │ ∧ μ_i ≥ 0 ∀i        │      │
+       │                            │  │ ∧ ‖ε(y)‖ ≤ ε_max    │      │
+       │                            │  └──────────┬──────────┘      │
+       │                            │             │                 │
+       │                            │      ┌──────┴──────┐          │
+       │                            │      │             │          │
+       │                            │   ACCEPT        REJECT        │
+       │                            │      │             │          │
+       │                            │      ▼             ▼          │
+       │                            │   token       fallback /      │
+       │                            │      │        mitigation       │
+       │                            │      └──────►│                │
+       │                            │              └───────►│       │
+```
+
+---
+
+D.3 — Uncertainty Envelope: Propagation with Intersection (§4, App. C)
+
+```
+   t                          t+Δ
+   │                           │
+   ▼                           ▼
+ ┌─────────┐   Reach      ┌──────────────┐   ∩~      ┌──────────────┐
+ │  X_t    │─────────────►│ Reach(X_t,   │─────────►│  X_{t+Δ}     │
+ │(zonotope)│  a_held, W   │ a_held,W,Δ)  │intersect│  (zonotope   │
+ └─────────┘              └──────────────┘  with strip│  over-approx)│
+      ▲                                            └──────┬───────┘
+      │                                                   │
+      │         ┌──────────────────────┐                  │
+      │         │  X_{t+Δ}^{(0)}       │                  │
+      │         │  = {x : ‖y-h(x)‖≤ε}  │──────────────────┘
+      │         └──────────────────────┘
+      │                    │
+      │              measurement
+      │              at t+Δ
+      │
+      │      ┌──────────────────────────────────┐
+      │      │  Red_m : m ≤ 32 generators       │
+      │      │  (order reduction, sound over-   │
+      │      │   approximation)                 │
+      │      └──────────────────────────────────┘
+      │                    │
+      └────────────────────┘
+
+  WITHOUT intersection (TC-12):  generators accumulate,
+                                 α = 1 ⟹ width grows linearly,
+                                 feasibility gate trips.
+```
+
+---
+
+D.4 — The Certificate π_t and Its Bounds (§6, Table 1)
+
+```
+ ┌────────────────────────────────────────────────────────────────────┐
+ │  π_t = < m , p_id , p_hash , a , X_t , W , q , d , ρ >             │
+ └────────────────────────────────────────────────────────────────────┘
+    │      │       │        │      │      │    │    │     │
+    │      │       │        │      │      │    │    │     └─ proof object
+    │      │       │        │      │      │    │    │        ≤ 16 KiB
+    │      │       │        │      │      │    │    └──────── deadline
+    │      │       │        │      │      │    │             u64, d > now+Δ_WCET
+    │      │       │        │      │      │    └───────────── sequence
+    │      │       │        │      │      │                   u64, strictly increasing
+    │      │       │        │      │      └────────────────── disturbance box
+    │      │       │        │      └───────────────────────── envelope (zonotope)
+    │      │       │        │                                n ≤ 12, m ≤ 32
+    │      │       │        └──────────────────────────────── action ≤ 512 B
+    │      │       └───────────────────────────────────────── policy hash (32 B)
+    │      └───────────────────────────────────────────────── policy version
+    │                                                          strictly monotonic
+    └──────────────────────────────────────────────────────── model id (u32)
+
+ Bounds enforced BEFORE any parsing of the proof object:
+   • total size ≤ 16 KiB + fixed envelope
+   • CBOR depth ≤ 8
+   • any out-of-bounds field → Layer 0 rejection
+```
+
+---
+
+D.5 — The Two Certificate Modes (§7)
+
+```
+ MODE L (linear plant — double integrator)              MODE N (nonlinear plant — pendulum)
+ ──────────────────────────────────────────────         ──────────────────────────────────────
+                                                       
+  ρ = containment witness                                ρ_bar = < h , k_B , L_f , L_h ,
+        │                                                      L_{L_f h} , ε(y) , Farkas >
+        │                                                        │
+        ▼                                                        ▼
+  h_i^T c + ‖G^T h_i‖_1  ≤  b_i   ∀i                     b_i(x̂) − μ(ε, L)  ≥  0
+  ─────────────────────────────────                      ─────────────────────────
+  EXACT test for polytope target                         test IMPLIED by :
+  (App. C.6)                                             • linearisation
+  conservatism comes from :                              • Lipschitz constant (registry)
+    • over-approximation of reachable set                • bounded quadratic remainder
+    • order reduction                                    • Farkas witness (implication,
+                                                           not satisfiability — D.5)
+  Role : replay safety (bind invocation)                 Role : non-redundant (monitor
+  No computation offload                                 cannot recompute successor)
+```
+
+---
+
+D.6 — The Four Monitor Layers (§8)
+
+```
+ ┌──────────────────────────────────────────────────────────────────────────┐
+ │  LAYER 0 — FRAMING & PARSING                                             │
+ │  ─────────────────────────────────────────────────────────────────────   │
+ │  no_std · 16 KiB arena · canonical CBOR · depth ≤ 8 · 0 alloc            │
+ │  Kani : panic-free, bounds-safe, overflow-free (bounded, declared)      │
+ │  ├─ size rejection → Layer 0 exit                                        │
+ │  └─ non-canonical encoding rejection → Layer 0 exit                      │
+ ├──────────────────────────────────────────────────────────────────────────┤
+ │  LAYER 1 — FRESHNESS & POLICY                                            │
+ │  ─────────────────────────────────────────────────────────────────────   │
+ │  q strictly increasing · p_id strictly monotone · p_hash ∈ allowlist     │
+ │  d > now + Δ_WCET · observation provenance present                       │
+ │  ├─ replay rejection (TC-03b) → Layer 1 exit                             │
+ │  ├─ rollback rejection (TC-06b) → Layer 1 exit                           │
+ │  └─ stale rejection → Layer 1 exit                                       │
+ ├──────────────────────────────────────────────────────────────────────────┤
+ │  LAYER 2 — PROOF & VIABILITY                                             │
+ │  ─────────────────────────────────────────────────────────────────────   │
+ │  declared operation budget (per mode) · isolated core/IRQ                │
+ │  verifies ρ and the boxed clauses of §6                                  │
+ │  ├─ timeout → rejection (treated as failure)                             │
+ │  ├─ Mode L : exact support-function test (C.6)                           │
+ │  └─ Mode N : μ-tightening + Farkas implication (D.3, D.5)                │
+ ├──────────────────────────────────────────────────────────────────────────┤
+ │  LAYER 3 — DECISION & EVIDENCE                                           │
+ │  ─────────────────────────────────────────────────────────────────────   │
+ │  append-only, hash-chained log                                           │
+ │  token ← hash(a) ‖ q ‖ obs_commitment ‖ d                                │
+ │  obs_commitment = hash(envelope-construction inputs)                     │
+ │  └─ actuator re-verifies binding just before commit                      │
+ └──────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+D.7 — Watchdog and Lease (Renewal Mechanism, §8, App. G.5)
+
+```
+   ┌─────────────────────┐         lease         ┌─────────────────────┐
+   │      MONITOR        │◄──────renewal─────────┤   HW WATCHDOG       │
+   │  (isolated TT core) │──────►  (periodic)     │   (separate MCU,    │
+   │                     │                        │    separate clock)  │
+   └──────────┬──────────┘                        └──────────┬──────────┘
+              │                                              │
+              │ decision                                     │ lease expired
+              ▼                                              ▼
+   ┌─────────────────────┐                        ┌─────────────────────┐
+   │  AUTHORIZATION TOKEN│                        │    FALLBACK         │
+   │  (bound: a,q,obs,d) │                        │  activated DIRECTLY │
+   └──────────┬──────────┘                        │  without routing    │
+              │                                   │  through the monitor│
+              ▼                                   └─────────────────────┘
+   ┌─────────────────────┐
+   │      ACTUATOR       │
+   │  checks expiration  │
+   │  and binding before │
+   │  commit             │
+   └─────────────────────┘
+
+   Property sought: a heartbeat alone proves the IRQ is running;
+   it does not prove the decision path completed. An unrenewed
+   lease expires by construction → structural fail-closed.
+```
+
+---
+
+D.8 — Fault Tree / Common Cause (§10, Table 2)
+
+```
+                         ┌──────────────────────────┐
+                         │  RTA SYSTEM COVERAGE     │
+                         │  = Monitor ∩ Recovery    │
+                         └────────────┬─────────────┘
+                                      │
+              ┌───────────────────────┼───────────────────────┐
+              │                       │                       │
+              ▼                       ▼                       ▼
+        ┌──────────┐            ┌──────────┐            ┌──────────┐
+        │  IMU     │            │  POWER   │            │  CLOCK   │
+        │ bus A / B│            │ rail A/B │            │ mon/wdog │
+        │ INDEP.   │            │ INDEP.   │            │ INDEP.   │
+        └──────────┘            └──────────┘            └──────────┘
+              │                       │                       │
+        ┌─────┴─────┐           ┌─────┴─────┐           ┌─────┴─────┐
+        ▼           ▼           ▼           ▼           ▼           ▼
+     monitor    fallback    monitor    fallback    monitor    fallback
+        │           │           │           │           │           │
+        └─────┬─────┘           └─────┬─────┘           └─────┬─────┘
+              │                       │                       │
+              └───────────┬───────────┴───────────┬───────────┘
+                          │                       │
+                          ▼                       ▼
+                   ┌────────────┐         ┌────────────┐
+                   │  SHARED ?  │         │ CONDITIONAL│
+                   │  → claim   │         │  → claim   │
+                   │  degraded  │         │  under cond│
+                   └────────────┘         └────────────┘
+
+  No independent fallback claim is accepted if any link in its
+  dependency chain is SHARED.
+```
+
+---
+
+D.9 — Policy Revision Calculus R1/R2/R3 (§12, App. H)
+
+```
+                    ┌──────────────────────────────────┐
+                    │  PROPOSED REVISION               │
+                    └────────────────┬─────────────────┘
+                                     │
+                    ┌────────────────┴────────────────┐
+                    │                                 │
+                    ▼                                 ▼
+            ┌──────────────┐                  ┌──────────────────┐
+            │  Restrictive │                  │  Expand / Change │
+            │  (R1)        │                  │  (R2 or R3)      │
+            └──────┬───────┘                  └────────┬─────────┘
+                   │                                   │
+                   ▼                                   │
+        ┌────────────────────────┐                     │
+        │  S_{k+1} ⊆ S_k  (Lean) │                     │
+        │  w(S_{k+1}) ≥ β·w(S_b) │                     │
+        │  trajectory preserved  │                     │
+        └───────────┬────────────┘                     │
+                    │                                  │
+                    ▼                                  ▼
+            ┌──────────────┐                  ┌──────────────────┐
+            │  ACCEPT R1   │                  │  R2 : new model  │
+            │  (if side    │                  │  → O-2, O-3 re-  │
+            │   conditions │                  │  discharged      │
+            │   proved)    │                  │                  │
+            └──────────────┘                  │  R3 : assurance- │
+                                              │  case delta +    │
+                                              │  governance      │
+                                              └────────┬─────────┘
+                                                       │
+                                                       ▼
+                                              ┌──────────────────┐
+                                              │  approved digest │
+                                              │  → PolicyMatch   │
+                                              └──────────────────┘
+
+  Reminder : cryptographic quorum proves WHO approved,
+             not WHY the change preserves safety.
+             The assurance-case digest is the missing condition.
+```
+
+---
+
+D.10 — Rust → Lean Refinement Pipeline (App. G)
+
+```
+  ┌────────────────────────┐
+  │  RUST (Aeneas-         │
+  │  extractable subset)   │
+  │  • safe, no_std        │
+  │  • monomorphic         │
+  │  • explicit bounds     │
+  │  • no alloc            │
+  └───────────┬────────────┘
+              │
+              │  Charon (MIR → LLBC)
+              ▼
+  ┌────────────────────────┐
+  │  LLBC (intermediate)   │
+  └───────────┬────────────┘
+              │
+              │  Aeneas (LLBC → Lean)
+              ▼
+  ┌────────────────────────┐         ┌───────────────────────┐
+  │  LEAN 4 (extracted)    │         │  KANI (bounded)       │
+  │  • no sorry            │         │  • panic-free         │
+  │  • no added axioms     │         │  • overflow           │
+  │  • INCONCLUSIVE → gate │         │  • bounds             │
+  └───────────┬────────────┘         └───────────┬───────────┘
+              │                                   │
+              ▼                                   ▼
+  ┌────────────────────────┐         ┌───────────────────────┐
+  │  L3 : refinement       │         │  L2 : bounded         │
+  │  theorem               │         │  concrete proofs      │
+  │  ExtractedMonitor =    │         │  (not presented as    │
+  │  Accept ⇒ Abstract     │         │  unbounded)           │
+  └───────────┬────────────┘         └───────────────────────┘
+              │
+              ▼
+  ┌──────────────────────────────────────────────────────────┐
+  │  CI GATE : INCONCLUSIVE file → policy activation blocked │
+  │  The label is a gate, not an annotation.                 │
+  └──────────────────────────────────────────────────────────┘
+```
+
+---
+
+D.11 — Obligation Register (§14, App. K)
+
+```
+   ID     OBLIGATION                              PLANT    STATUS
+  ────────────────────────────────────────────────────────────────────
+   O-1    X_0 ⊆ S_safe                            1,2      [V]
+   O-2    Envelope soundness (C.9)                 1,2      [V]  (paper proof [P])
+   O-3    Arithmetic soundness (B.7)               —        [V]  (paper proof [P])
+   O-4    One-step robustness                      1,2      [V]
+   O-5    K-invariance (E.4)                       1        [V]
+   O-5    K-invariance (E.4)                       2        [F]  expected failure
+   O-6    End-to-end confinement (E.5)             1        [V]  skeleton only
+   O-6    End-to-end confinement (E.5)             2        [F]  withdrawn
+   O-7    Authorization soundness (G.3)            —        [V]
+   O-8    Policy integrity (H.4)                   —        [V]
+   O-9    Fallback correctness                    1,2      [V]
+   O-10   TCB completeness (G.6)                   —        [V]
+   O-11   Decision-path totality (G.5)             —        [V]
+  ────────────────────────────────────────────────────────────────────
+
+   Reading note : the register is NOT balanced. A register balanced
+   across both plants before analysis would be an unsustainable claim.
+   Plant 2 is predicted to fail ; that is a result, not a defect.
+```
+
+---
+
+D.12 — Falsification Protocol F1–F7 (§15, App. I)
+
+```
+   F1  ──►  ∃ accepted action exiting K under w ∈ W          ─►  refutation
+   F2  ──►  ∃ replayed q or rollback p_id accepted           ─►  refutation
+   F3  ──►  HWM (measured) > B_static (bound)                ─►  refutation
+   F4  ──►  fallback infeasible where A_safe ≠ ∅             ─►  refutation
+   F5  ──►  false-reject rate > 5 % on nominal corpus        ─►  refutation
+   F6  ──►  median σ_t^{(i)} > 3.0 (per direction)           ─►  refutation
+   F7  ──►  ‖ε(y)‖ > ε_max and π accepted                    ─►  refutation
+  ────────────────────────────────────────────────────────────────────
+
+   Each criterion is paired with :
+     • a declared search method (fuzzer, enumeration,
+       adversarial search)
+     • reported coverage (bytes for the parser,
+       state space for plant-level criteria)
+     • a negative result reported as
+       "no violation found under declared search"
+       and NEVER as "no violation exists"
+```
+
+---
+
+D.13 — Full Decision-Cycle Flow Diagram
+
+```
+   ┌──────────────┐
+   │  Agent       │
+   │  proposes a_t│
+   │  + π_t       │
+   └──────┬───────┘
+          │
+          ▼
+   ┌──────────────────┐     no       ┌───────────────────────┐
+   │  Layer 0 :       │─────────────►│  Layer 0 rejection    │
+   │  bounds + parse  │              │  (size, encoding)     │
+   └──────┬───────────┘              └───────────────────────┘
+          │ ok
+          ▼
+   ┌──────────────────┐     no       ┌───────────────────────┐
+   │  Layer 1 :       │─────────────►│  Layer 1 rejection    │
+   │  fresh/policy    │              │  (replay, rollback,   │
+   └──────┬───────────┘              │   stale)              │
+          │ ok                       └───────────────────────┘
+          ▼
+   ┌──────────────────┐
+   │  ε(y) > ε_max ?  │──── yes ────►┌───────────────────────┐
+   └──────┬───────────┘              │  MITIGATION           │
+          │ no                       │  (TC-08)              │
+          ▼                          └───────────────────────┘
+   ┌──────────────────┐
+   │  Layer 2 :       │
+   │  ProofCheck(ρ)   │
+   │  + μ_i ≥ 0       │
+   │  + F(X,a,W) ⊆ K  │
+   └──────┬───────────┘
+          │
+    ┌─────┴─────┐
+    │           │
+   ok         failure/timeout
+    │           │
+    ▼           ▼
+ ┌──────┐   ┌───────────────────────┐
+ │Signed│   │  Rejection → fallback │
+ │token │   │  or mitigation        │
+ └──┬───┘   └───────────────────────┘
+    │
+    ▼
+ ┌──────────────────────────────────┐
+ │  Actuator re-verifies binding    │
+ │  hash(a) ‖ q ‖ obs ‖ d           │
+ │  ─► commit                       │
+ └──────────────────────────────────┘
+```
+
+---
+
+D.14 — Fundamental Trade-off (Conservatism ↔ Availability)
+
+```
+   Conservatism
+        ▲
+        │
+        │    ┌─────────────────────────────┐
+        │    │  Too conservative :         │
+        │    │  • high false-reject (F5)   │
+        │    │  • elevated median σ_t (F6) │
+        │    │  • frequent interventions   │
+        │    │  • fail-closed = hazard     │
+        │    └─────────────────────────────┘
+        │
+        │              ★ acceptable zone
+        │              (to be determined empirically,
+        │               not by argument)
+        │
+        │    ┌─────────────────────────────┐
+        │    │  Too permissive :           │
+        │    │  • F1 (exit from K)         │
+        │    │  • F7 (ε > ε_max accepted)  │
+        │    │  • empty guarantee          │
+        │    └─────────────────────────────┘
+        │
+        └──────────────────────────────────────► Availability
+
+   The monograph does not claim that zone ★ exists for every plant.
+   For Plant 2, E.6 predicts that O-5 fails : zone ★ may be empty,
+   and the claim is withdrawn.
+```
+
+---
+
+D.15 — Summary View: Proved, Obliged, Withdrawn
+
+```
+ ┌─────────────────────────────────────────────────────────────────────┐
+ │  [P] PAPER PROOF (not mechanised)                                   │
+ │  ─────────────────────────────────────────────────────────────────  │
+ │  • B.2  : naive addition condition is false                         │
+ │  • B.3  : outward-rounded addition is sound                         │
+ │  • B.4  : multiplication + explicit error generator                 │
+ │  • B.6  : error accumulation under affine iteration (α = 1)         │
+ │  • B.7  : global arithmetic soundness                               │
+ │  • C.2  : zonotope support function                                 │
+ │  • C.6  : exact zonotope→polytope containment                      │
+ │  • C.7  : sound ∩~ operator                                         │
+ │  • C.8  : sound order reduction                                     │
+ │  • C.9  : reachability soundness under intersection + reduction     │
+ │  • C.10 : intersection is not optional                              │
+ │  • D.3  : measurement-robust μ-tightening                           │
+ │  • E.2  : backup set is an under-approximation of the viability     │
+ │           kernel                                                    │
+ │  • E.3  : ε_max is well defined and monotone                        │
+ │  • F.3  : volume fails as a sufficient statistic                    │
+ │  • F.4  : hull-width product fails as a sufficient statistic        │
+ │  • H.2  : per-revision ratio compounds                              │
+ │  • H.3  : baseline floor does not compound                          │
+ │  • H.4  : rollback lemma                                            │
+ │  • I.3  : p99 cannot falsify a WCET claim                           │
+ └─────────────────────────────────────────────────────────────────────┘
+
+ ┌─────────────────────────────────────────────────────────────────────┐
+ │  [V] OBLIGATIONS STATED, NOT DISCHARGED                             │
+ │  ─────────────────────────────────────────────────────────────────  │
+ │  O-1 … O-11 : see D.11                                              │
+ │  Plus : mechanisation of every [P] item above in Lean 4.            │
+ └─────────────────────────────────────────────────────────────────────┘
+
+ ┌─────────────────────────────────────────────────────────────────────┐
+ │  [F] CLAIMS WITHDRAWN OR EXPECTED TO FAIL                           │
+ │  ─────────────────────────────────────────────────────────────────  │
+ │  • J.1  : PCAA 53.7 μs latency figure                               │
+ │  • J.2  : naive fixed-point addition containment                    │
+ │  • J.3  : "volume is not monotone" (reason, not conclusion)         │
+ │  • J.4  : hull-width product as gate                                │
+ │  • J.5  : Farkas proves "feasibility"                               │
+ │  • J.6  : "viability kernel of the envelope"                        │
+ │  • J.7  : scalar slack σ_t when X_t^{(0)} is unbounded              │
+ │  • J.8  : per-revision availability ratio                           │
+ │  • J.9  : Reach from X_t^{(0)}                                      │
+ │  • J.10 : K = C_B(ε) for varying ε                                  │
+ │  • J.11 : "written in extractable subset" as sufficient             │
+ │  • J.12 : support-function test "only sufficient"                   │
+ │  • J.13 : unconditional real-time claim                             │
+ │  • J.14 : p99 as WCET falsifier                                     │
+ │  • J.15 : offline artifacts as configuration                        │
+ │  • J.16 : end-to-end confinement theorem (expected fail, Plant 2)   │
+ └─────────────────────────────────────────────────────────────────────┘
+
+   The three boxes are the whole monograph. Anything outside them
+   is commentary.
+```
+
+---
+
+D.16 — Legend of Diagram Symbols
+
+```
+  ──────  data flow
+  ──────► direction of flow
+  ══════  trust boundary (TCB boundary)
+  ┌────┐  component
+  └────┘
+  [V]     obligation stated, not discharged
+  [P]     paper proof, not mechanised
+  [F]     claim withdrawn or expected to fail
+  [H]     architectural hypothesis
+  [C]     concept specified, not formalised
+  [S]     no simulation, implementation, or physical test
+```
