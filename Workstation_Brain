@@ -1,0 +1,1510 @@
+The Workstation Brain: A Theory of Split-Latency Cognition for Humanoid Robots
+
+v4 — revised after deep-source verification
+
+Ouadi Maakoul and SI TEAM · 28 Oct 2026 · @ouadi
+
+---
+
+Changelog from v3
+
+v4 incorporates a verification pass of the v3 critical advice against primary sources. The material changes are:
+
+1. FreeBar is retained. v3 carried a review instruction to delete FreeBar as a phantom citation. The instruction is incorrect: FreeBar is arXiv:2610.14997, "Barrier-Constrained Guidance For Real-time Asynchronous VLA Execution," accepted at CoRL 2026, and reports >45% lower latency than RTC and 10–15% higher success under asynchronous execution. The citation stands, upgraded from [S] to primary.
+2. The fail-passive gap, the robot-side reaction chain, and the non-safety-rated on-board compute are upgraded to primary. Ding et al., arXiv:2608.02809, is cited at primary rather than through a secondary summary. The localization of the uncertifiable residual at the SDA-to-balancing-policy interface is now a primary finding.
+3. The stoppability estimator literature is upgraded to primary and changes T2a. Sun et al., "Learning Safe-Stoppability Monitors for Humanoid Robots," arXiv:2603.22703 (IROS 2026), formalizes emergency stopping as a policy-dependent stochastic reach-avoid condition under a fixed fallback policy. This forces T2a to depend on the fallback policy, not on gait phase alone: T_stop(φ, π_fallback). KT5a is split into a false-safe-rate test (KT5a1) and a fallback-execution test (KT5a2), and a distribution-shift test (KT5c) is added.
+4. The B0 contradiction is resolved deterministically. v3 stated in §7.2 that B0 executes a damping fallback when the capture-region margin falls below a threshold m_d, but the surrounding text still allowed the learned estimator to advise the corner. v4 states explicitly: the estimator is telemetry only; it is not on the certification path in any state, including the corner. This matches Ding et al.'s localization and Safe-Stop's architecture (Long et al., arXiv:2609.02358).
+5. The on-board fallback is re-baselined against 39.9 ms / 25.1 Hz (Jetson AI Lab, TensorRT mixed NVFP4, JetPack 7.2, MAXN, LIBERO, 4 denoising steps, 1 camera), with 23.7–29.9 ms (42/33 Hz) reported as the optimized ceiling (FlashRT, NVFP4 + FA4). The 93.8 ms model-card figure is retained as a different configuration, not as an error.
+6. The 5090 power claim is broken out into GPU TGP (575 W), CPU package power, and PSU conversion loss, with the 955–1,075 W wall figure presented as their sum. The Thor envelope is 40–130 W with a transient caveat (~154 W during model load [M]).
+7. KT1's threshold is corrected from p99.9 ≤ A/4 to p99.9 ≤ A/2, and a success-versus-latency curve is required alongside the tail test.
+8. KT6 is rewritten as three capture-region approximations (LIPM analytic, simulator N-step Monte Carlo, hardware fall indicator), with the approximation gap reported as a first-class quantity. Pratt 2006 gives exact capture-region solutions for the LIPM with a flywheel; the general humanoid case is hard, so the gap is the honest object.
+9. Q_max is swept in KT4 and set from the knee of the p99-versus-Q_max curve, rather than fixed at [8, 12] without source. A critic-starvation metric is added to KT3.
+10. KT9 (clock and heartbeat) and KT10 (semantically wrong but capture-feasible chunks) are added. KT9 produces the T_det distribution on which T2a's bound depends. KT10 tests whether B2 and the W2 critic can catch a chunk that passes every geometric check but is semantically wrong.
+11. The throughput framing from v3 is retained (32 tok/s single-stream 32B Q4 on 5090; ~900 tok/s batched [M]), and the net energy comparison is retained.
+
+No experiment, physical test, or prototype has been executed by SI TEAM for any version of this document. Every measurement tagged [M] is a third-party measurement on third-party hardware. Every test (KT1–KT10, Phase 0.5) is a proposed protocol, not a completed one. The document is a pre-registration, not a report.
+
+---
+
+Epistemic status and abstract
+
+Epistemic status. This is a theoretical dissertation proposal. No humanoid has been built, no workstation has been purchased, and SI TEAM has executed no benchmark for this work. Every number below carries one of five tags:
+
+· [V] vendor-documented figure.
+· [C] closed-form calculation whose inputs are stated.
+· [M] measurement made by a third party on their own system. It bounds what to expect; it is not evidence about our hardware.
+· [S] reported by a secondary source and not checked at the primary. Treat as a lead, not as a fact.
+· [T] target, hypothesis or acceptance threshold, to be settled by measurement.
+
+Where a conclusion is stated, it follows from arithmetic on tagged quantities, not from an experiment. The discipline is the one of the workstation blueprint (28 October 2026): measure before investing, bound every queue, and keep fact, inference and hypothesis apart.
+
+Abstract. Humanoid control in 2026 is built as stacked networks running at different speeds: a slow vision-language reasoner, a fast visuomotor policy emitting action chunks, and, in some systems, a still faster balance loop. These stacks are designed for a computer carried on the robot. The SI TEAM workstation (one RTX 5090, 32 GB, peak GPU TGP 575 W [V], wall draw about 955–1,075 W as the sum of GPU, CPU and PSU loss [C]) cannot be carried: against a 2.3 kWh pack [S] it would flatten the battery in 2.3 hours before the robot moved a limb. So "the workstation is the humanoid's brain" cannot mean on board.
+
+This dissertation proposes split-latency cognition: the workstation is the deliberative cortex and the body carries a brainstem that never depends on it. We state five propositions: a continuity bound on chunk execution under link delay (T1); a policy-dependent stop-performance requirement (T2a), following Sun et al.'s formalization of emergency stopping as a policy-dependent stochastic reach-avoid condition; a certification-gap proposition (T2b), following Ding et al.'s localization of the uncertifiable residual at the robot-side reaction chain; a placement rule based on capture-region feasibility under the measured latency CDF (T3); and a capacity region for one GPU serving several robots under a bounded-queue controller with EDF scheduling within the robot-serving class (T4). We then give ten kill tests with pre-registered thresholds, a safety and authority model in which the learned stoppability estimator is telemetry only, and a gated roadmap that begins with a two-week tethered-rig latency measurement. The thesis is falsifiable: if the continuity or outage tests fail on a real link, the partition degrades to an on-board policy with the workstation as an advisory planner, and we state in advance what the smaller thesis asserts and how it would be refuted. No part of this document reports an experiment performed by SI TEAM.
+
+---
+
+1. Problem and thesis
+
+1.1 The mismatch
+
+The blueprint specifies a node for orchestrating more than twenty agents and running large models locally. Tier R is one RTX 5090 (32 GB GDDR7, 1,792 GB/s, GPU TGP 575 W [V]), a 24-core Threadripper PRO and a 1,200 W supply. The wall draw is the sum of the GPU TGP, the CPU package power, and the conversion loss of the supply:
+
+P_wall = (P_GPU + P_CPU) / η_PSU,   η_PSU ∈ [0.90, 0.94] for an 80 PLUS Gold supply under typical load.
+
+With P_GPU ∈ [575, 620] W [V, partner-card measured], P_CPU ∈ [200, 280] W [T, to be measured in KT7], and η_PSU = 0.90, the wall figure is
+
+P_wall ∈ [(575+200)/0.90, (620+280)/0.90] = [861, 1,000] W,
+
+which brackets the blueprint's 955–1,075 W range once peripherals are added. The point of writing it as a sum is that the GPU TGP alone does not justify the wall figure, and a reviewer is entitled to see the breakdown. v4 presents it as a breakdown; KT7 measures the actual sum.
+
+The request behind this dissertation is to use that machine as the hardware of a humanoid's brain.
+
+A humanoid is a battery-powered, dynamically unstable machine. Three facts follow from that.
+
+Energy. Published pack sizes sit near 2.3 kWh (Tesla Optimus [S]), with about 500 W average draw reported for Optimus [S]. The numbers below use 2.3 kWh and 500 W as working values:
+
+T = E / (P_act + P_c).
+
+· Compute alone at 1 kW: 2.3 kWh / 1.0 kW = 2.3 h [C].
+· Compute plus 500 W of actuation: 2.3 / 1.5 = 1.53 h [C].
+
+The on-board reference, Jetson AGX Thor, draws 40–130 W [V], with a transient of ~154 W during model load [M]. At 130 W that is 26% of the 500 W actuation budget; the workstation's GPU TGP alone (575 W) is 4.4 times Thor's maximum [C]. The net comparison matters more than the actuation-only comparison: if the body already carries a Thor-class module (40–130 W), the incremental on-board cost of the workstation is about 445–580 W of GPU alone, or ~900 W net including CPU and PSU loss, and against the empirical 2–4 h envelope of §3.7 that is still disqualifying. Section 3.7 returns to this.
+
+Stability. A biped falls if its balance loop stops. A fixed robot arm can halt; a biped cannot simply cut torque.
+
+The nonmonotonicity of stopping. For a fail-passive machine — an arm with brakes, a conveyor, a mobile base — stop is unconditionally safe: de-energization removes the hazard. For a dynamically stable biped, stop is nonmonotonic: an aggressive halt can inject a disturbance that exceeds the recovery margin and causes the fall it was meant to prevent [S, Ding et al. 2608.02809 at primary]. The safe state must therefore be actively controlled, and the transition to it must be constrained: it must reach a balanced standstill or a controlled fall while staying inside the robot's capture region throughout. The body's safety kernel is not a reflex layer but a constrained-stop controller with phase-dependent and policy-dependent feasibility (Sun et al. 2603.22703, §3.3).
+
+Whatever keeps the robot upright must run on the body, with no dependence on any link.
+
+1.2 Thesis
+
+Split-latency cognition. A humanoid's cognition is partitioned by staleness tolerance. Functions whose output stays useful for longer than the link's tail round-trip may live on the workstation; functions that cannot tolerate that staleness live on the body. The workstation is the cortex. The body carries a brainstem and a safety kernel that keep the robot safe when the cortex is slow, wrong or absent.
+
+Four claims make the thesis precise and testable:
+
+Feasibility. For a given policy class, link and chunk length there is a closed-form condition under which off-board inference does not break motion continuity (T1).
+
+Stop performance. The body's safety kernel reaches a balanced standstill or a controlled fall within a bound T_stop,q(φ, π_fallback) that depends on gait phase and on the fallback policy, using only on-board resources (T2a).
+
+Safety independence — as a requirement, not a result. The robot's safety is independent of the link's tail latency iff the body's safe-stop chain — its recoverable set, its stop controller, its detection and its on-board compute — is itself certifiable. Section 7 argues, following Ding et al., that this chain is currently uncertified at the SDA-to-balancing-policy interface, that no governing standard exists for it, and that establishing it is a research problem in its own right. T2b states this gap explicitly; the dissertation does not claim to have closed it.
+
+Capacity. One Tier R workstation can serve a small, computable number of robots while also hosting the deliberative agents of the blueprint, subject to a bounded-queue admission controller with EDF scheduling within the robot-serving class, and the binding constraint is stated (T4).
+
+1.3 Contributions
+
+1. A formal brain–body partition model with a latency, memory and queue budget tied to the actual workstation tiers (section 3).
+2. Five propositions with proof sketches, of which two are performance claims (T1, T2a) and one is an explicit gap (T2b). Each reduces to arithmetic on tagged quantities or to a statement of what is missing.
+3. A kill-test programme with ten tests, pre-registered thresholds, and sample sizes, including tests that would falsify the gap claim if a certifiable stop chain were demonstrated (section 6).
+4. A safety and authority model in which the cortex proposes and the body disposes, with the certification boundary drawn explicitly, the learned estimator confined to telemetry, and the corner cases stated (section 7).
+5. A gated roadmap that begins with a two-week tethered-rig measurement, a decision record in the blueprint's format, and an explicit statement of when the thesis degrades to a smaller one and what that smaller thesis asserts (section 8).
+
+1.4 Non-goals
+
+This work does not claim a better VLA policy, a new locomotion controller, a certification path, or any result about real hardware. It does not claim that off-board cognition is superior to on-board cognition in general. It does not claim ISO 25785-1 compliance, nor any PFHD, DC or SIL figure for the body's safe-stop chain; section 7 explains why. Section 8 states when the partition should be abandoned, what smaller thesis remains, and how that smaller thesis would be refuted. No experiment has been performed to support any claim in this document.
+
+---
+
+2. State of the art (October 2026)
+
+2.1 Stacked control at several speeds
+
+System Slow reasoner (System 2) Fast policy (System 1) Evidence
+GR00T N1 Eagle-2 VLM, ~10 Hz on L40; 1.34B of 2.2B params Diffusion-transformer flow matching, ~120 Hz; 16-action chunk in 63.9 ms (bf16, 4 steps, L40) [M] GR00T N1
+GR00T N1.7 Cosmos-Reason2-2B backbone, 3B total same family; early-access April 2026 [V] model card
+Figure Helix 7B VLM, 7–9 Hz 80M visuomotor policy, 200 Hz, 35-DoF upper body [S] secondary summary
+Figure Helix 02 as above adds 10M-param "System 0" at 1 kHz for balance [S] secondary only; primary unreachable
+π0.5 VLM chunks of H = 50 steps at 20 ms [M] Real-Time Chunking
+TRI LBM monolithic monolithic [S] —
+
+Two lessons matter for this work. First, every successful stack separates a slow, semantic loop from a fast, motor loop, and the fast loop emits a chunk of future actions rather than one action. A chunk is a buffer of autonomy. Second, where the boundary between the layers should sit is an empirical question. Libra-VLA (arXiv:2604.24921, ACL 2026) reports an inverted-U in performance against action-decomposition granularity [S]; we treat the boundary as a parameter to be measured, not a fixed design.
+
+A third lesson: action chunking is not sufficient for contact-rich tasks. A 2026 review of action-chunking methods states that contact-rich manipulation and locomotion require reactive feedback within chunks [S]. RTC and its relatives address between-chunk consistency; they do not enforce contact feasibility inside a chunk. The 2026 learned-corrector literature (ACPPO-Corr, FA-RDP, TacForcing, PACE [S]) reduces the frequency of infeasible chunks but does not certify their absence. B2's contact-phase barrier is therefore positioned as the deterministic, closed-form safety filter under learned correctors — not as the only response to the within-chunk gap (§4.1, KT8).
+
+2.2 Running a policy through a delay: Real-Time Chunking and FreeBar
+
+Real-Time Chunking (RTC; Black, Galliker, Levine; Physical Intelligence) treats inference delay as a first-class constraint. With chunk length H, execution horizon s and inference delay d = ⌊δ/Δt⌋ steps, it requires
+
+d ≤ s ≤ H − d,
+
+and inpaints the next chunk so that it stays consistent with the actions already committed. Reported measurements [M]:
+
+· Remote inference on an RTX 4090 over a wired LAN: model time 97 ms with RTC (76 ms for vanilla π0.5); network 6.89 ms (non-mobile) and 21.2 ms (mobile); totals 108.76 ms and 138.98 ms.
+· Robust to +100 ms and +200 ms of injected delay, while synchronous execution degraded roughly linearly.
+
+FreeBar (arXiv:2610.14997, "Barrier-Constrained Guidance For Real-time Asynchronous VLA Execution," CoRL 2026) provides a training-free, CBF-inspired consistency constraint between consecutive chunks, solved in closed form. It reports >45% lower inference latency than RTC and 10–15% higher success under asynchronous execution [primary]. For this proposal FreeBar matters in two ways: it weakens the assumption that RTC is the only viable off-board chunker, and it gives B2 a natural place to attach a barrier constraint rather than only an error tube.
+
+Neither RTC nor FreeBar enforces foot placement, contact timing or capture-point feasibility. Both are between-chunk methods. The within-chunk contact problem has a learned-corrector literature (§2.1); what it does not yet have is a certifiable within-chunk check. That is what K7 in §4.2 and KT8 in §6.2 provide.
+
+2.3 Remote or speculative control under network delay
+
+Speculative Policy Orchestration (SPO, arXiv:2603.19418) has a cloud world model stream waypoints, an edge verifier enforce an error tube, and an AIMD rule adapt the speculation horizon K, with K_max·Δt ≥ τ_net. Torque servoing stays local. It was tested only in simulation, with a 150 ± 30 ms round trip [M, simulation]. Its "zero-velocity hold" fallback is unsafe for a biped and must be replaced by an actively controlled stop (§7). The paper notes that 5G and Wi-Fi handovers can add delays of hundreds of milliseconds to seconds, which is the failure mode KT1 and KT9 target.
+
+Earlier work on 5G remote whole-body control kept a local linear controller on the body and offloaded only the higher level (Zhu et al., 2020) [S]. The pattern recurs: the cortex is remote, the reflex is local.
+
+2.4 On-board compute and the corrected workstation comparison
+
+Platform Memory Power GR00T N1.7 end-to-end
+Jetson AGX Thor T5000 128 GB LPDDR5X, 273 GB/s 40–130 W [V], ~154 W transient [M], 2,070 FP4-sparse TFLOPS [V] 125.6 ms PyTorch eager; 81 ms bf16; 44 ms FP8; 39.9 ms / 25.1 Hz mixed NVFP4 (JetPack 7.2, MAXN, LIBERO, 4 steps, 1 camera) [M]; 23.7 ms / 42 Hz (NVFP4 + FA4, 1-view) and 29.9 ms / 33 Hz (2-view) [M]
+Jetson T4000 64 GB 40–70 W, 1,200 TFLOPS [V] not reported
+T3000 / T2000 32 GB / 16 GB 865 / 400 TFLOPS [V] scheduled Q1 2027 [S]
+RTX Pro 6000 Blackwell / H100 — — 27.9 ms / 35.9 Hz [M]
+DGX Spark 128 GB — 98.6 ms / 10.1 Hz [M]
+Orin — — 2.9–4.6 Hz [M]
+
+The Thor figures come from different benchmark configurations and are not merged. The relevant comparison for the on-board fallback is 39.9 ms / 25.1 Hz (TensorRT mixed NVFP4, named recipe), with 23.7–29.9 ms (42/33 Hz) as the optimized ceiling. The 93.8 ms model-card figure is a different, unoptimized path; it is not an error and it is not the baseline.
+
+The workstation comparison, corrected. v2 gave a roofline bound of 102 tok/s for a 32B 4-bit model on the 5090 (17.5 GB weights, 1,792 GB/s). That bound is bandwidth-only. Deployed single-stream decode on a 5090 is about 32 tok/s for a 32B Q4 model, and aggregate batched throughput is about 900 tok/s [M]. The single-stream ratio to Thor (~15.6 tok/s) is therefore roughly 2×, not 6.5×. The 6.5× bandwidth ratio (1,792 vs 273 GB/s [C]) is real but is realized in prefill and batched decode, not single-stream decode.
+
+Consequence. The argument for placing the critic on the workstation is not single-stream decode. It is (a) batched prefill and batched decode, which let one 5090 serve the critic for several robots at once; (b) prefill of long contexts, which is bandwidth-bound and does benefit from HBM; (c) co-location of the critic with the robot-serving VLA on the same card (§3.5). A reviewer who reads only the single-stream number will conclude the workstation is 2× Thor. The dissertation's answer is: the workload is batched and prefill-heavy, not single-stream.
+
+2.5 Safety standards, the fail-passive gap, and the active safe state
+
+ISO/CD 25785-1 covers dynamically stable industrial mobile robots ("actively controlled stability") and is at Committee Draft stage (30.60, close of comment; CD registered 8 May 2026, comment period closed 8 July 2026) [V]. Its abstract covers actively controlled stability and industrial environments; non-industrial use is out of scope even after publication. It is not yet a standard, and a 2026 industry review notes that humanoid robots may reach customers before it is finished [S].
+
+ISO 13482 covers personal-care robots; ISO/IEC TS 22440 addresses AI and functional safety [S].
+
+The fail-passive gap (primary). Ding et al., arXiv:2608.02809 (submitted 3 August 2026), is a feasibility study of safe stopping for dynamically stable humanoids. It confirms that the safe state of a legged robot is actively controlled, violating the fail-passive assumption of ISO 13849-1 and EN 60204-1, and it locates the uncertifiable residual at the robot-side reaction chain — specifically at the interface between the safety-rated detection-and-stopping layer and the balancing policy. It states that the Unitree G1's onboard compute is not safety-rated hardware, and that the external chain achieves PL e while the humanoid reaction chain establishes no PFHD, hence no PL. Three consequences follow:
+
+1. The safe state is a constrained stop: minimize stopping time and distance while staying inside the capturable region. This is a reach-avoid problem, not a bang-bang halt.
+2. Feasibility is phase-dependent: short in double support, bounded below in single support by the time needed to place the current step and reach a capture point.
+3. The trade-off is nonmonotonic: an overly aggressive halt can inject a disturbance that exceeds the recovery margin and cause the fall it was meant to prevent.
+
+Safe-Stop (primary). Long et al., arXiv:2609.02358, casts emergency stopping as a reach-avoid problem: a learned stop policy paired with two complementary estimators, committed only when they agree, with handoff to a damping fallback otherwise. The architecture is the closest existing template for what B0 must do. Its damping fallback is the deterministic corner-case policy that v4 adopts (§7.2).
+
+PRISM (primary). Sun et al., "Learning Safe-Stoppability Monitors for Humanoid Robots," arXiv:2603.22703 (IROS 2026), formalizes emergency stopping as a policy-dependent stochastic reach-avoid condition under a fixed fallback policy, and uses importance sampling to reduce false-safe predictions. This is the formal reason T2a must depend on the fallback policy and not on gait phase alone (§3.3), and it is the reason KT5a is split into a false-safe-rate test and a fallback-execution test (§6.2).
+
+Other safety layers. NVIDIA Halos for Robotics and IGX Thor, with a SIL 3-capable safety island, were announced on 22 June 2026 [S, vendor claim]. Control-barrier-function filters for learned humanoid policies (CBF-RL, SHIELD, ConstrainedMimic) show how a certified layer can sit under an unverified policy [S]. These are relevant to B2, not to B0's certification.
+
+2.6 Capture region and the balance-placement literature
+
+The placement criterion in §3.4 rests on two standard objects [S]:
+
+· The capture point: the point on the ground such that, if the robot places its foot there and transfers support, it comes to a stop.
+· The capture region ℛ_cap: the set of states from which the robot can reach a capture point before its motion exceeds the recoverable margin.
+
+Pratt et al. (2006) states that computing the capture region for a humanoid in general is very difficult, but gives exact solutions for the linear inverted pendulum model (LIPM) with a flywheel. The criterion below therefore uses three approximations, with the gap between them reported as a first-class quantity rather than hidden:
+
+· ℛ_cap^LIPM: analytic, conservative, closed-form for the LIPM with a flywheel.
+· ℛ_cap^N: simulator N-step Monte Carlo capturable set.
+· ℛ_cap^HW: hardware fall indicator, binary, from KT5a2.
+
+The approximation gap is δ_cap = |ℛ_cap^LIPM Δ ℛ_cap^N| / |ℛ_cap^LIPM ∪ ℛ_cap^N|, reported alongside KT6. A placement decision that is robust across all three is treated as confirmed; one that holds only under ℛ_cap^LIPM is treated as conservative but unresolved.
+
+2.7 Power systems for humanoids
+
+The 2.3 kWh / 500 W figures in §1.1 are working values. A 2026 review of humanoid power systems adds two constraints [S]:
+
+· Current platforms achieve only two to four hours of continuous operation, not the 4.6 h the average-draw model predicts at zero compute.
+· Humanoid discharge is pulsed: hip and knee peak currents exceed sustained averages by three to five times. A pack sized on average draw will brown out under peak actuation unless oversized.
+
+This matters for §3.7: the simple T = E/(P_act + P_c) model overstates usable endurance, and the sensitivity envelope must be stated. The link is not free either: P_link ∈ [15, 30] W [T] covers radio, additional sensing, and the on-board fallback B1.
+
+2.8 Gap
+
+No source we found places a mains-powered, multi-GPU workstation as the deliberative layer of a humanoid with an explicit brain–body contract covering delay, outage and capacity. The published designs assume the policy is on board (Thor, Orin) or demonstrate remote inference only for manipulation (RTC, FreeBar) or in simulation (SPO). The safe-stop literature names the fail-passive gap but does not connect it to a split-latency architecture. The within-chunk correction literature improves learned policies but does not supply a certifiable within-chunk check. This work fills the gap on paper, and section 6 says how to test it — and, in T2b, what it explicitly leaves open.
+
+---
+
+3. Formal model
+
+3.1 Loops and periods
+
+Loop Role Period Where
+ℓ₀ safety kernel, balance reflex, constrained stop ~1 ms body
+ℓ₁ motor policy emitting chunks 5–20 ms steps, chunk every 0.1–1 s body or cortex (decided by T1, T3)
+ℓ₂ semantic reasoner, critic, planner 0.1–10 s cortex
+ℓ₃ long-horizon agents, memory, task management seconds to hours cortex
+
+Each loop has a staleness tolerance τ: the age beyond which its input or output is no longer safe to use.
+
+3.2 Latency budget
+
+For an off-board loop, the end-to-end latency of one action chunk is a random variable:
+
+L = t_sense + t_↑ + t_queue + t_infer + t_↓ + t_apply,
+
+where t_↑ and t_↓ are the uplink and downlink delays, t_queue is waiting time at the GPU, and t_infer is service time. Let L_q denote the q-quantile of L. A chunk has H steps of duration Δt, so it provides an autonomy window
+
+A = H·Δt.
+
+The inference delay in steps is d = ⌈L_q/Δt⌉ (RTC uses a floor; we round up for a conservative design).
+
+Instances [M]: for π0.5 with H = 50 and Δt = 20 ms, A = 1,000 ms; the RTC totals of 108.76 and 138.98 ms give d = 5 and 6 steps under RTC's floor rule. For GR00T N1, H = 16 at 120 Hz gives A = 133 ms, so the same rule allows at most 67 ms of loop latency.
+
+3.3 Policy-dependent stop
+
+The LIPM growth time is retained as intuition only. For a linear inverted pendulum with CoM height z, the unstable pole is p = √(g/z). With z = 0.9 m, p = 3.30 s⁻¹ and 1/p ≈ 303 ms [C]. Open-loop, the unstable mode grows by a factor M in
+
+t = ln(M)/p.
+
+M t
+1.2 55 ms
+1.5 123 ms
+2.0 210 ms
+
+These are [C] for the LIPM and say nothing about a real robot's margins. They are used only as an order-of-magnitude sanity bound, not as a placement criterion.
+
+Following Sun et al. (2603.22703), the v4 model replaces the scalar T_safe with a policy-dependent constrained stop. Let φ be the gait phase (double support, single support left/right, flight if applicable), π_fb a fixed fallback policy, and ℛ_cap(φ) the capture region at that phase. A stop is feasible at (φ, π_fb) if π_fb reaches a balanced standstill or a controlled fall while keeping every intermediate state inside ℛ_cap. Define
+
+T_stop(φ, π_fb) = minimum feasible stop time at phase φ under fallback policy π_fb, subject to ℛ_cap(φ) at every instant.
+
+The key structural facts are:
+
+· T_stop is not minimized by maximizing deceleration. The minimum-time stop is the solution of a reach-avoid problem, not a bang-bang halt.
+· T_stop is phase-dependent: short in double support, bounded below in single support.
+· T_stop is policy-dependent: changing π_fb changes T_stop even at fixed φ. This is the PRISM formalization, and it is why KT5a is split.
+· T_stop is a random variable under actuation and sensing noise, so the design quantity is a quantile T_stop,q(φ, π_fb), not a mean.
+
+The separation-distance analogue must use the worst-case single-support T_stop at the chosen fallback, matching Ding et al.'s recommendation.
+
+3.4 Placement criterion: capture-region feasibility under the latency CDF
+
+Let F_L be the measured latency CDF from KT1. For a balance-related function f with tolerance τ_f, f may be cortex-resident only if, under F_L,
+
+Pr[∃ t ∈ [0, L_f] : state(t) ∉ ℛ_cap(φ(t))] ≤ ε_cap,
+
+and its q-quantile loop latency satisfies L_{1−ε_f}(f) ≤ τ_f. Otherwise it is body-resident.
+
+The criterion is evaluated under all three capture-region approximations of §2.6. A function is placed on the cortex only if the inequality holds under ℛ_cap^LIPM (conservative) and is not contradicted by ℛ_cap^N. The gap δ_cap is reported in KT6.
+
+The LIPM table in §3.3 remains as intuition: a loop needing correction within tens of milliseconds cannot sit behind a 100–140 ms link, which already places reflex balance on the body. It does not settle the boundary for slower balance functions; the capture-region criterion does.
+
+3.5 Memory model, with the corrected throughput framing
+
+M_VRAM = M_weights + M_KV + M_act + M_fw.
+
+The KV cost for a Qwen3-32B-class model is 256 KiB per token at FP16. With gpu_memory_utilization = 0.90 on a 32 GB card, the budget is 28.8 GB [C]. Two configurations:
+
+Item Critic alone Critic + 3B VLA co-resident
+32B critic, 4-bit weights 17.5 GB 17.5 GB
+3B VLA, BF16 0 6.0 GB
+Activations and framework 1.5 GB 3.0 GB
+KV pool 9.8 GB 2.3 GB
+Tokens at FP8 KV ~74.8K ~17.5K
+Tokens at BF16 KV ~37.4K ~8.8K
+
+All [C]. Co-residency cuts the KV pool by a factor of 4.3. It is feasible but forces a choice between a long critic context and a resident motor-side VLA.
+
+Throughput framing. Deployed single-stream decode for a 32B Q4 model on the 5090 is about 32 tok/s; aggregate under batching is about 900 tok/s [M]. The decision record sizes the critic as follows:
+
+· Single-robot, latency-sensitive review: a 7B–14B critic at 4-bit.
+· Multi-robot, batched review: the 32B critic, whose aggregate throughput under batching is the relevant quantity.
+
+This is the honest reading of the 5090's advantage: batched and prefill-heavy work, not single-stream decode.
+
+3.6 Queueing, admission, and EDF within the VLA class
+
+Why M/D/1 is optimistic. Independent Poisson arrivals are a reasonable floor, but three effects push the real tail above it: (a) multiple robots can synchronize chunk releases; (b) GPU batching makes service time depend on the batch; (c) shared HBM contention under co-residency couples the two workloads. The M/D/1 table is retained as a first bound; KT4 tests against synchronized and bursty traffic.
+
+The controller. W4 implements:
+
+· A hard queue bound Q_max per worker, swept in KT4 and set from the knee of the p99-versus-Q_max curve, not fixed at [8, 12] without source.
+· A per-robot deadline D_i = ⌊H/2⌋Δt − t_rest,i, where t_rest,i is the non-queue portion of robot i's loop latency measured in KT1.
+· Admission before scheduling. A request that would make |Q| > Q_max is refused (K5) at admission; it does not age in the queue.
+· EDF within the VLA class. Among admitted VLA requests, the smallest D_i runs first. EDF is optimal for single-server deadline feasibility under the classical assumptions; the queue bound handles the infeasible case.
+· Class priority between VLA and critic. The robot-serving VLA preempts the critic at the class boundary. KT3 measures critic starvation: the fraction of time the critic receives zero service under sustained VLA load. A minimum critic rate (e.g. 1 Hz) is either guaranteed by a reserved slot or explicitly abandoned as best-effort.
+· Adaptive tightening. If observed p99 approaches the deadline, Q_max is reduced until the tail returns to budget.
+· Logging. Every admission, refusal, preemption and service time is logged with both clocks (K6).
+
+The bound. For an M/D/1 queue with service time S and N robots each requesting a chunk every sΔt seconds:
+
+λ = N/(sΔt),  ρ = λS,  W_q = ρS/(2(1−ρ)).
+
+With S = 27.9 ms [M, RTX Pro 6000; the 5090's value is [T], measured in KT2] and Δt = 20 ms:
+
+s Chunk period N = 8: ρ N = 8: W_q Largest N with ρ < 1
+25 500 ms 0.45 11.2 ms 17
+16 320 ms 0.70 32.2 ms 11
+10 200 ms 1.12 saturated 7
+
+All [C]. At s = 16, N = 12 gives ρ = 1.05 and the queue grows without bound. At N = 17 the mean wait is ~257 ms, half the 500 ms continuity budget before network and tails; the usable N is far below the stability bound.
+
+3.7 Energy model, with the net comparison and the link
+
+Average-draw model: T = E/(P_act + P_c). With E = 2.3 kWh and P_act = 500 W [S]:
+
+P_c T
+130 W 3.65 h
+1,000 W 1.53 h
+0 4.6 h
+
+All [C]. Two corrections from the 2026 power-systems review [S]:
+
+1. The empirical runtime envelope is two to four hours, not 4.6 h.
+2. Discharge is pulsed: peak currents exceed sustained averages by three to five times.
+
+The net comparison. The relevant quantity is the incremental on-board power the split avoids: the workstation replaces a Thor-class module (40–130 W), so the net on-board cost is about 870–960 W including CPU and PSU loss. Against a 2–4 h envelope:
+
+· At the low end (2 h), the net ~900 W consumes the entire usable window or more.
+· At the high end (4 h), it costs roughly 2.5 of 4 hours net, leaving ~1.5 h — still disqualifying for most tasks.
+
+The link is not free. The split architecture pays P_link ∈ [15, 30] W [T] on the body (radio, additional sensing, on-board fallback B1). This is small against the ~900 W avoided, but it must appear in the accounting. The energy conclusion is: the split is the difference between a working robot and a dead one at the low end, and a substantial endurance gain at the high end.
+
+---
+
+4. Architecture
+
+4.1 Two machines, one contract
+
+Body (brainstem).
+
+· B0, safety kernel. A small, deterministic program on a real-time core. Reads proprioception and a heartbeat, enforces joint, torque and stability limits, owns the constrained-stop controller of §3.3, and owns the deterministic damping fallback of §7.2. No learned component is on the certification path in any state. The learned stoppability estimator is telemetry only — it is logged, it is used for post-hoc analysis, and it does not decide anything, including in the corner case.
+· B1, motor policy. A fast visuomotor policy that turns observations and a chunk into joint targets. In the baseline it consumes chunks from the cortex. In the fallback it runs a smaller local policy on the on-board computer — a Thor-class module running a quantised GR00T-class model at 39.9 ms / 25.1 Hz (TensorRT mixed NVFP4, JetPack 7.2, MAXN, LIBERO, 4 steps, 1 camera) [M], with 23.7–29.9 ms (42/33 Hz) as the optimized ceiling. The named recipe is: NVFP4 weights, FP4 KV where validated, CUDA graphs, K/V hoisting.
+· B2, chunk buffer and verifier. Holds the current chunk, blends with the committed prefix (RTC- or FreeBar-style), checks every chunk against an error tube, and checks every chunk against the capture region for the current and predicted gait phase. B2 is the deterministic, closed-form safety filter under learned correctors: it does not replace ACPPO-Corr, FA-RDP, TacForcing or PACE, and it does not assume them. It checks their output the way a runtime monitor checks any policy.
+
+Workstation (cortex).
+
+· W1, deliberative VLM or VLA. The slow reasoner and, when T1 permits, the chunk generator for several robots.
+· W2, critic. A 7B–14B critic for single-robot, latency-sensitive review, or the 32B dense model at 4-bit for multi-robot batched review. Both sized against deployed throughput (§3.5). The critic never emits torques.
+· W3, agents and memory. The blueprint's agent orchestrator, task queue, result registry and long-horizon memory.
+· W4, link manager and admission controller. Heartbeat, clock sync, bounded queues, per-robot deadlines, EDF within the VLA class, class priority, refusal semantics, critic-starvation metric, logging.
+
+4.2 The contract
+
+# Obligation Held by
+K1 Every chunk carries a sequence number, a timestamp, a horizon H and a validity deadline. An expired chunk is never executed. Cortex stamps, body checks
+K2 The body never waits for the cortex to stay upright. Loss of every chunk leaves the body in a state from which B0 can reach a constrained stop. Body
+K3 The cortex never has actuation authority. It proposes; B2 and B0 dispose. Body
+K4 The link is monitored by a heartbeat with a known detection time T_det. Both
+K5 The cortex bounds its own queue and returns an explicit refusal when it cannot meet a deadline. Cortex
+K6 Every chunk, refusal, timeout and safe-state entry is logged with both clocks. Both
+K7 Every admitted chunk is certified against the capture region for the current and predicted gait phase; a chunk that would leave ℛ_cap is refused, and B0 is notified with the predicted exit phase. B2
+
+4.3 Link failure modes
+
+Failure Symptom Response
+Jitter latency tail rises but chunks arrive RTC or FreeBar handles up to its measured margin; B2 rejects chunks that miss their deadline or exit ℛ_cap; horizon K shrinks (AIMD, as in SPO)
+Burst loss several chunks missing buffered remainder executed up to A_b, then local policy or constrained stop
+Handover or roam hundreds of ms to seconds [S] treated as outage; detection timer starts at T_det
+Full outage no heartbeat constrained stop, which does not use the link
+Stale cortex late or looping K1 expiry and K5 refusal
+Wrong cortex on time but unsafe B2 error tube, K7, B0 limits (KT10)
+Contact-infeasible chunk passes error tube, violates capture K7 refusal; B0 holds committed prefix or initiates stop
+B2 refuses and stop infeasible corner case B0 executes the damping fallback deterministically when the capture-region margin is below m_d; the estimator is not consulted (§7.2)
+GPU contention service time rises W4 admission, EDF, VLA-over-critic priority, critic-starvation metric
+
+4.4 What runs where, by default
+
+· B0, balance and contact reflexes, constrained stop, damping fallback: body.
+· B1, joint-level policy: body in fallback; body or cortex in baseline depending on KT tests.
+· Chunk generation: cortex if T1 holds with margin, otherwise body.
+· Semantic reasoning, critique, planning, memory: cortex.
+· Multi-robot scheduling and logging: cortex, under W4.
+
+The default is a hypothesis. The kill tests move items across the line once measurements arrive.
+
+---
+
+5. Propositions and proof sketches
+
+These are conditional statements. T2b is a gap claim. None is an experimental result.
+
+5.1 T1 — Continuity bound
+
+Assumptions. RTC (or FreeBar) constraint: chunk length H steps of Δt, execution horizon s, inference delay d steps, with d ≤ s ≤ H − d.
+
+Statement. A feasible s exists if and only if H ≥ 2d, equivalently
+
+L_q ≤ ⌊H/2⌋Δt = A/2.
+
+Proof sketch. The interval [d, H−d] is non-empty iff d ≤ H−d. For integer d, ⌈x⌉ ≤ n iff x ≤ n. □
+
+Instances [C on M inputs]. π0.5 (H = 50, Δt = 20 ms): L_q ≤ 500 ms; measured RTC totals 108.76 and 138.98 ms leave margins 4.6 and 3.6. GR00T N1 (H = 16 at 120 Hz): L_q ≤ 66.7 ms.
+
+Corollary 1.1 (generation rate). T1 requires A/L ≥ 2. Reported Cosmos 3 Edge [S]: 1.40 on T5000, 0.97 on T4000, 0.81 on emulated T3000, 0.41 on T2000. Under the RTC constraint, none qualifies; below 1.0 the policy cannot keep pace with its own output. Whether the 5090 clears A/L ≥ 2 for such a policy is unmeasured [T] and is the cheapest falsification in the programme (KT2).
+
+Corollary 1.2 (violation probability). The per-chunk probability of breaking continuity is 1 − F(A/2), estimated in KT1.
+
+Corollary 1.3 (contact feasibility is not covered by T1). T1 guarantees between-chunk consistency; it says nothing about contact feasibility within a chunk. This is why K7 exists and why KT8 tests it. The 2026 learned correctors reduce the frequency of such chunks; they do not certify their absence, which is why B2's check remains deterministic.
+
+5.2 T2a — Policy-dependent stop performance
+
+Assumptions.
+
+(a) The body holds a certified buffer of length A_b, with A_b ≥ T_det (detection occurs before the buffer runs out), where T_det is the heartbeat-detection time distributed per KT9.
+(b) B0's constrained-stop controller has a measured phase- and policy-dependent stop time T_stop,q(φ, π_fb) at quantile q.
+(c) The capture region ℛ_cap(φ) is defined and K7 is enforced on every admitted chunk.
+(d) When B2 refuses a chunk and the constrained stop is infeasible, B0 executes the damping fallback deterministically, without consulting the estimator.
+
+Statement. For any link behaviour, including total loss at an arbitrary instant, the body reaches a balanced standstill or a controlled fall within
+
+T_det + T_stop,q(φ_last, π_fb),
+
+where φ_last is the gait phase at the last valid heartbeat, and every intermediate state stays inside ℛ_cap(φ(t)) with probability at least 1 − ε_cap.
+
+Proof sketch. By (c) the robot is in ℛ_cap at detection. By (a) the buffer has not run out. By (b) B0 executes the constrained stop, whose bound is what (b) asserts. By (d) the corner case is handled deterministically. The probability clause comes from the quantile in (b) and the K7 enforcement in (c). □
+
+What it does and does not say. T2a is a performance proposition, not a safety certification. It does not say the body is safe; that is T2b's job, and T2b is a gap.
+
+Corollary 2a.1 (worst-case phase and policy govern). Any separation-distance requirement must use max_φ T_stop,q(φ, π_fb) at the chosen π_fb, which in practice is the worst-case single-support value.
+
+Corollary 2a.2 (nonmonotonicity). T_stop is not minimized by maximizing deceleration; the minimum-time stop is the reach-avoid solution.
+
+Corollary 2a.3 (policy dependence). Changing π_fb changes T_stop at fixed φ. This is the PRISM formalization. It is why KT5a is split: the estimator's job is to predict stoppability under a fixed π_fb, and the fallback's job is to execute. A single trial count over both conflates two failure modes.
+
+5.3 T2b — The certification gap
+
+Statement. There is no governing standard, and no established PFHD, DC or fault-behaviour argument, for a humanoid's active safe-stop chain. In particular: (i) ISO/CD 25785-1 is at Committee Draft and does not yet specify the chain; (ii) the interface between the safety-rated detection-and-stopping layer and the balancing policy has no published PFHD or DC (Ding et al., primary); (iii) current on-board compute is not safety-rated hardware (Ding et al., primary); (iv) a learned stoppability estimator, even if it performs well, does not by itself furnish a certifiable argument.
+
+Argument. Absence-of-standard claim supported by Ding et al. and by the ISO status page. It is falsifiable: refuted by a published, standard-compliant PFHD/DC argument for a humanoid active safe-stop chain, or by ISO 25785-1 reaching a stage that specifies the chain. KT5b's pass criterion is designed so that such a demonstration would move T2b from "gap" to "requirement satisfied" without changing the rest of the thesis.
+
+Consequence. "Safety independent of the link" is a design goal that T2a supports at the performance level and T2b leaves open at the certification level. The dissertation must state this and must not claim ISO 25785-1 compliance, SIL, PFHD or DC for the body.
+
+5.4 T3 — Placement rule
+
+Statement. A function f with staleness tolerance τ_f and tolerable capture-region-exit probability ε_cap may be cortex-resident only if, under F_L,
+
+Pr[∃ t ∈ [0, L_f] : state(t) ∉ ℛ_cap(φ(t))] ≤ ε_cap
+
+and L_{1−ε_f}(f) ≤ τ_f. Otherwise body-resident.
+
+Proof sketch. Failure of the first inequality means the robot leaves the recoverable set with probability above ε_cap before f's output arrives, which is infeasibility for a balance-related function. The second inequality is v1's T3 for non-balance functions. □
+
+Corollary 3.1 (reflex balance). At z = 0.9 m the LIPM unstable mode grows by 20% in 55 ms [C]. The RTC loop alone totals 108.76–138.98 ms [M]. Reflex-level balance is body-resident, agreeing with the three-speed stacks (1 kHz System 0 in Helix 02 [S]). Intuition, not the formal criterion.
+
+Corollary 3.2 (tails cannot be certified by sampling). For a hazard budget of one latency-induced fault per 1,000 h at 2 Hz, ε = 1/(2·3,600·1,000) = 1.39×10⁻⁷ [C]. Rule of three: 3/ε ≈ 2.16×10⁷ chunks, or 3,000 h of traffic [C]. Safety-grade latency tails cannot be established by measurement within a normal project. This is why T3 sets ε_f at a performance level (e.g. 10⁻³, with exceedance triggering graceful degradation), and why the hazard is carried in principle by T2a and in practice by the open problem in T2b.
+
+5.5 T4 — Capacity region under EDF
+
+Statement. One workstation GPU with service time S can serve N robots with horizon s only if all five hold:
+
+(i) N < sΔt/S,
+(ii) t_queue,q + t_rest ≤ ⌊H/2⌋Δt,
+(iii) M_VRAM ≤ 0.90 M_GPU,
+(iv) Q_max is never exceeded under the arrival process,
+(v) EDF within the VLA class meets D_i whenever Q_max is respected and no synchronized burst exceeds one service quantum.
+
+(i) is stability, (ii) is T1 with the queue term broken out, (iii) is the memory budget, (iv) is the admission invariant, (v) is the EDF guarantee. (iv) and (v) are what v1 and v2 lacked: without (iv) a synchronized burst can drive the queue past the deadline even when ρ < 1; without (v) the deadline-miss rate is a measured outcome rather than a design consequence.
+
+Proof sketch. (i) is ρ < 1. (ii) splits L_q. (iii) is the vLLM budget. (iv) is the refusal rule: any arrival that would make |Q| > Q_max is refused, so |Q| ≤ Q_max is an invariant. (v) is classical EDF optimality, with refusal handling the infeasible case. □
+
+Worked example [C, S assumed from RTX Pro 6000, [T] on the 5090]. S = 27.9 ms, s = 25, Δt = 20 ms: (i) gives N ≤ 17, but N = 17 means ρ = 0.95 and mean wait ~257 ms, half the continuity budget before network and tails. At N = 8, ρ = 0.45 and W_q = 11.2 ms. Co-residency with the 32B critic leaves a KV pool of 2.3 GB (§3.5).
+
+Corollary 4.1. Condition (iii) makes the workstation a scarce shared resource; raising N or critic context reduces the other. Capacity is cumulative, not pooled.
+
+Corollary 4.2 (priority and starvation). VLA-over-critic priority keeps (ii) satisfiable when the workloads compete, but it can starve the critic. KT3 measures the starvation fraction; a reserved minimum critic rate is either guaranteed or explicitly abandoned as best-effort.
+
+---
+
+6. Falsification protocol
+
+All thresholds are [T]: pre-registered before the first run. No test has been executed. KT tests are named to avoid confusion with K obligations.
+
+6.1 Rules
+
+· Burn-in first. No inference benchmark before the 72-hour platform burn-in, and no burn-in before Phase 0.5 (§8.1) has produced a tethered-rig latency measurement.
+· Pinned and logged. Engine, CUDA, driver, model versions pinned. Both clocks, queue depths, service times, link RTT, power, temperature logged.
+· Report tails, not means. p50, p95, p99, p99.9, max, with sample size.
+· Zero-failure sample sizes. 299 independent trials bound failure at ~1% with 95% confidence (0.99²⁹⁹ = 0.0495) [C]. This does not certify a hazard rate.
+· Kill, do not rescue. A failed threshold triggers the stated consequence, not a new threshold.
+· Label the claim. Every test is performance or model validation. The structural claim rests on B0's deterministic check, not on a trial count.
+
+6.2 The ten kill tests
+
+Test Prop. Type Procedure Pass If it fails
+KT1 T1 performance 24 h replay over each candidate link (wired LAN, Wi-Fi 6/6E, 5G if available), no robot. Record L at p99, p99.9, and the success-versus-latency curve. p99.9 L ≤ A/2 for the chosen policy, and the success-vs-latency curve is reported That link and policy class are not eligible for cortex-resident chunks; chunks move to the body
+KT2 T4, Cor. 1.1 performance Measure S and A/L on the 5090 for GR00T-class and π0.5-class models using the TensorRT mixed-NVFP4 recipe (NVFP4 + FA4 where validated, CUDA graphs, K/V hoisting), not PyTorch eager. S ≤ 35 ms and A/L ≥ 2 for the target policy If A/L < 2, the thesis degrades to the smaller thesis before any robot is purchased — the cheapest falsification
+KT3 T4(iii), Cor. 4.2 performance Load 3B VLA and 32B critic at 0.90 utilisation. Run critic tests and VLA stream together. Measure VLA deadline-miss rate and critic starvation fraction. VLA miss ≤ 1% at p99; no OOM; critic passes thresholds or starvation is explicitly accepted as best-effort Choose: critic or VLA gets the card. If starvation is unacceptable, add a reserved critic slot
+KT4 T4(iv)(v) model validation Replay N robots at s = 16 and s = 25 for N = 1, 4, 8, 12 under Poisson and synchronized/bursty release. Sweep Q_max across a pre-registered range. Mean W_q within 30% of M/D/1 under Poisson; p99 L ≤ A/2 under both; Q_max never exceeded; deadline-miss consistent with EDF + refusal; Q_max set from the knee of the p99-vs-Q_max curve Replace the model with the measured curve; re-tune Q_max; if EDF does not deliver the predicted miss rate, re-specify the within-class scheduler
+KT5a1 T2a performance False-safe rate per phase. For each φ, estimate Pr[estimator says safe \| true unsafe] over the nominal state distribution and over a domain-randomized distribution (PRISM's importance-sampling approach). ε_fs(φ) ≤ pre-registered threshold for every φ, with the distribution reported The estimator is not trustworthy as telemetry; if it is telemetry only, this does not block the thesis — it blocks any future attempt to put it on the path
+KT5a2 T2a performance Fallback execution from estimator-approved states. For each φ, execute π_fb from states the estimator calls safe; measure whether a balanced standstill or controlled fall is reached inside ℛ_cap. 299 trials per phase class. 0 falls in 299 per class and 0 violations of B0's deterministic capture-region check in the same trials The fallback policy is inadequate; the safe-stop design is reopened
+KT5b T2a performance Outage performance: 299 trials per outage length (50 ms, 200 ms, 1 s, 10 s), plus handover and stale-chunk injection. 0 falls in 299 per class; stop within T_det + T_stop,q(φ_last, π_fb); every intermediate state inside ℛ_cap; T_det drawn from the KT9 distribution, not a scalar The body safety design is reopened. Not a certification result
+KT5c T2a performance Distribution shift. Repeat KT5a2 and KT5b at friction, payload and push conditions outside the nominal envelope. No new failure mode; false-safe rate does not exceed the pre-registered envelope by more than a stated factor The envelope is narrowed and stated; if the narrowed envelope is unusable, the architecture is not viable for that robot
+KT6 T3, Cor. 3.1, 3.2 model validation Move a reduced balance controller off-board in simulation; inject KT1 latency. Report capture-region exit probability under three approximations: ℛ_cap^LIPM (analytic), ℛ_cap^N (N-step Monte Carlo), ℛ_cap^HW (binary fall indicator). Report δ_cap. Exit probability ≤ ε_cap at KT1 p99.9 under ℛ_cap^LIPM, and not contradicted under ℛ_cap^N. δ_cap reported. If stable with margin, Cor. 3.1 is too conservative; revise placement, not the safety rule. If it fails below the 55–210 ms LIPM range, placement is confirmed. If the three approximations disagree, the criterion is treated as unresolved for that function
+KT7 Blueprint §3.3 performance 72 h cortex under full load. Break out P_GPU, P_CPU, P_PSU loss, P_wall. P_wall ≤ 1,075 W; GPU ≤ 83 °C; throttling ≤ 5% Blueprint rules apply; reconsider the cap. The breakdown is reported regardless
+KT8 T1 Cor. 1.3, K7 performance Generate chunks with RTC and FreeBar under KT1 latency, and with a learned within-chunk corrector applied (ACPPO-Corr or TacForcing). Measure the rate at which a chunk passes the error tube but violates ℛ_cap. Verify K7 catches them. 100% of violating chunks refused; false-positive ≤ 1%, justified as task-success impact If K7 misses a violating chunk, strengthen K7 or move the generator to the body. If K7 is too conservative, re-tune ε_cap, not remove it. If the learned corrector removes violations, keep the corrector and K7 as backstop
+KT9 T2a(a), K4 performance Clock and heartbeat. Inject clock skew (1 ms to 1 s) and heartbeat loss on a bench link. Measure the T_det distribution. T_det distribution has a bounded support with a stated upper bound T_det,max; A_b ≥ T_det,max If T_det is unbounded, T2a's bound is meaningless; the heartbeat protocol is redesigned before any outage test
+KT10 T2b, K3 performance Semantically wrong but capture-feasible chunks. Inject chunks that pass the error tube and ℛ_cap but are semantically wrong (e.g. reach in the wrong direction). Verify B2 and the W2 critic catch them. A stated fraction caught, and the residual risk explicitly carried by an operator-in-the-loop safeguard If B2 cannot catch them and the critic is too slow, the residual is carried by the operator and stated as such; the thesis does not claim B2 catches semantic errors
+
+6.3 What would falsify the thesis
+
+1. KT1 fails on every available link for the chunk policy the task needs.
+2. KT2 shows A/L < 2 on the 5090 for the target policy — the cheapest and most decisive falsification, available before any robot is purchased.
+3. KT5a2 or KT8 fails after reasonable redesign: the fallback cannot execute from estimator-approved states, or the contact-phase barrier cannot separate feasible from infeasible chunks even with a learned corrector.
+4. KT9 shows T_det unbounded: T2a's bound is meaningless and the heartbeat protocol must be redesigned before any safety claim is attempted.
+5. Phase 4 shows the on-board fallback (baselined against 39.9 ms / 25.1 Hz, not the 93.8 ms model card) matches the split within the margin.
+
+In case 5, the workstation remains useful for ℓ₂ and ℓ₃. The smaller thesis asserts:
+
+Smaller thesis (advisory cortex). When the on-board fallback matches the split on motor-level task success and smoothness, the workstation still reduces time-to-task-completion by ≥ X% through better plan critique, memory retrieval and multi-robot scheduling, even though it never emits a chunk. Refuted if, in the phase-4 comparison, the advisory-only cortex does not improve time-to-completion by the pre-registered margin, or if the improvement is explained entirely by the fallback's own reasoning.
+
+The threshold X is [T]. The smaller thesis is falsifiable in its own right.
+
+T2b is not a falsifier; it is a scope limit. A future demonstration of a certifiable active safe-stop chain would close T2b without changing anything else.
+
+---
+
+7. Safety and authority
+
+7.1 Authority model
+
+· Cortex proposes. W1 generates chunks; W2 critiques plans; W3 orchestrates. None emits torques or any signal that reaches an actuator without passing through B2 and B0.
+· B2 disposes of chunks. Expiry (K1), error tube (SPO-style), capture region (K7). A chunk that fails any check is refused and B0 is notified.
+· B0 disposes of motion. Enforces joint, torque and stability limits, runs the constrained-stop controller, and can initiate a stop without any input from B2 or the cortex.
+· B0 is the last authority. If B2 and the cortex disagree, B0's limits win. If the link is lost, B0 alone is sufficient.
+
+7.2 The safe state and the corner case
+
+The safe state is not torque-off and not a frozen posture. It is one of:
+
+· a balanced standstill inside ℛ_cap, reached by the constrained-stop controller, or
+· a controlled fall, entered from a state where the constrained stop is infeasible, with the fall policy selected before the state leaves ℛ_cap.
+
+The corner case. There is a state in which B2 refuses a chunk and the constrained stop is infeasible. B0 carries a pre-registered capture-region margin threshold m_d, calibrated in KT5a2. When B2 refuses and the measured margin is below m_d, B0 executes the damping fallback deterministically, without consulting the estimator. The estimator is telemetry only. This is the Safe-Stop fallback (Long et al., arXiv:2609.02358) in deterministic form, and it is why T2a's assumption (d) exists.
+
+7.3 Certification boundary
+
+1. B0's deterministic limits, the ℛ_cap check, and the damping fallback. In principle certifiable against a standard, but no standard yet specifies the active safe-stop chain (T2b, Ding et al.). The structural claim lives here: B0's ℛ_cap check is an invariant, verified by construction and by KT5a2's separate check, not by a trial count.
+2. The constrained-stop controller and the stoppability estimator. Performance-validated (KT5a1, KT5a2, KT5b, KT5c) and, for the estimator, not certifiable by current methods.
+3. The cortex and the link. Outside the safety argument by construction.
+
+The boundary between (1) and (2) is the fail-passive gap. The contribution is to draw it explicitly, to state that (1) is uncertified because no standard specifies it, to make the corner case deterministic, and to give a test programme that validates (2) at the performance level while leaving (1) open.
+
+7.4 What is not claimed
+
+The proposal does not claim ISO 25785-1 compliance; any PFHD, DC or SIL figure for B0, B2, the constrained-stop controller or the estimator; that KT5a1, KT5a2, KT5b or KT5c, passing at 299 trials, constitutes a safety certification; or that the estimator is certifiable. The structural claim rests on B0's deterministic check, not on any trial count. It does claim that the architecture keeps the cortex and the link outside the safety argument, that the corner case is deterministic, and that this is testable (KT1, KT2, KT5a1, KT5a2, KT5b, KT5c, KT8, KT9, KT10) even though it is not yet certifiable.
+
+---
+
+8. Roadmap and abandonment criteria
+
+8.1 Gated phases
+
+· Phase 0.5 — tethered-rig latency measurement. Two weeks. Measure (a) the latency CDF of one real Wi-Fi 6/6E link and one wired link under representative chunk traffic; (b) the service time S and the real-time factor A/L of a GR00T-class and a π0.5-class model on the 5090 at FP8 and NVFP4 with the TensorRT recipe. Deliverable: the first falsifiable data points for T1 and T4. Gate: L_p99 and S and A/L are recorded and the T1 margin A/(2L_p99) is computed. If A/L < 2 on every link and every policy, the thesis degrades to the smaller thesis before the burn-in begins.
+· Phase 0 — platform and burn-in. Blueprint burn-in; KT7 power and thermal with the breakdown. Gate: pass KT7 before any inference benchmark.
+· Phase 1 — single-robot link and latency. KT1, KT2, KT6 in simulation and on the tethered rig. Gate: KT1 p99.9 ≤ A/2 for at least one link and one policy class; KT2 A/L ≥ 2.
+· Phase 2 — safety validation. KT5a1, KT5a2, KT5b, KT5c, KT8, KT9, KT10. Gate: KT9 produces a bounded T_det; KT5a1 false-safe rate within envelope; KT5a2 passes structurally (B0's deterministic check) and at performance; KT5b passes with T_det drawn from KT9; KT5c does not reveal a new failure mode; KT8 passes with a learned corrector in the loop; KT10 residual is stated. No cortex-resident chunk generation proceeds past this gate until KT5a2 and KT8 pass. KT5b alone is insufficient.
+· Phase 3 — multi-robot capacity. KT3, KT4 with Q_max swept. Gate: KT4 passes under both Poisson and bursty arrival with EDF; N_max set from the measured curve; critic starvation stated.
+· Phase 4 — end-to-end comparison. On-board fallback (against 39.9 ms / 25.1 Hz, with 23.7–29.9 ms as ceiling) versus split architecture on task success, smoothness and safety-event rate, with a pre-registered margin. Gate: split is better by the margin, or the thesis degrades to the smaller thesis whose own falsifiable claim is stated in §6.3.
+
+8.2 Abandonment criteria
+
+The split-latency architecture is abandoned, for a given robot and link, if:
+
+· Phase 0.5 or Phase 1 fails on every available link, or A/L < 2 on the 5090 (KT1, KT2).
+· Phase 2 fails after reasonable redesign (KT5a2 structural, KT8 with a learned corrector, or KT9 unbounded T_det).
+· Phase 4 shows the fallback — baselined against 39.9 ms, not 93.8 ms — matches the split within the margin.
+
+In the first two cases the architecture is not viable for that robot. In the third, the smaller thesis of §6.3 applies, with its own refutation condition.
+
+8.3 Decision record
+
+Decision Status Evidence
+Workstation is not carried on the robot Adopt §1.1, §3.7 (net comparison, P_link)
+Body carries B0, B1, B2 with B0 as last authority Adopt §4.1, §7.1
+Cortex generates chunks only if T1 holds with margin Provisional §5.1, KT1, KT2, Phase 0.5
+Safe state is a constrained stop, not torque-off Adopt §3.3, §7.2
+B2 enforces capture-region check (K7) in addition to error tube Adopt §4.1, KT8
+B2 is the deterministic filter under learned within-chunk correctors Adopt §2.1, §4.1, KT8
+W4 uses bounded-queue admission, EDF within the VLA class, and VLA-over-critic priority Adopt §3.6, §5.5
+Q_max is set by sweep in KT4, not fixed at [8, 12] Provisional §3.6, KT4
+Critic starvation is measured and either guaranteed or accepted as best-effort Adopt §3.6, KT3
+Corner case (B2 refuses and stop infeasible) is handled by B0's deterministic damping fallback; the estimator is telemetry only Adopt §7.2, T2a(d)
+Critic sizing uses deployed throughput, not the roofline Adopt §3.5, §2.4
+On-board fallback baselines against 39.9 ms / 25.1 Hz, with 23.7–29.9 ms as ceiling Adopt §2.4, §8.1
+KT5a is split into false-safe rate and fallback execution; KT5c distribution shift added Adopt §5.2 Cor. 2a.3, §6.2
+KT1 threshold is p99.9 ≤ A/2 plus a success-vs-latency curve Adopt §6.2
+KT6 reports three capture-region approximations and δ_cap Adopt §2.6, §6.2
+KT9 (clock/heartbeat, T_det distribution) and KT10 (semantically wrong chunks) are added Adopt §6.2
+T2b (certification gap) is stated, not closed Adopt §5.3, §7.3
+Multi-robot N is set from measured curve, not M/D/1 Provisional §5.5, KT4
+
+---
+
+Closing note
+
+The verified corrections move the proposal in three directions at once. They strengthen the safety architecture, because Ding et al. and Sun et al. give the fail-passive gap and the policy-dependent stop a primary footing that v3 only had at secondary. They weaken the single-stream workstation argument, which is why the throughput framing is now batched and prefill-heavy rather than 6.5×. And they correct three claims that had been carried from secondary summaries: FreeBar is real and citable; the GR00T Thor baseline is 39.9 ms with a named recipe, not 93.8 ms; and the 5090's wall draw must be shown as a breakdown, not asserted.
+
+The thesis that survives is narrower and better defended. The workstation is the right cortex for batched, prefill-heavy reasoning. The body is the right brainstem because the stop is policy-dependent and the estimator cannot be on the path. The split is falsifiable first by KT2, before any robot is bought. The safety claim is a design goal because no standard yet specifies the active safe-stop chain, and the robot-side reaction chain establishes no PFHD.
+
+No experiment has been run. Every test above is a pre-registration. The next move is Phase 0.5, and the cheapest possible falsification — A/L on the 5090 at the TensorRT recipe — sits at the front of it, where it belongs. 🌹🧠
+
+
+Appendices — The Workstation Brain v4
+
+Ouadi Maakoul and SI TEAM · 28 Oct 2026 · @ouadi
+
+Status of these appendices. Every derivation below is closed-form arithmetic on tagged inputs, or a formal statement of a decision rule. No experiment, bench measurement, simulation run, or prototype has been executed by SI TEAM for any version of this document. Items tagged [M] are third-party measurements on third-party hardware; items tagged [T] are pre-registered thresholds to be settled by measurement; items tagged [C] are calculations whose inputs are stated. Where an appendix derives a bound, it derives it conditionally — the condition is stated and is untested.
+
+---
+
+Appendix A — Notation, tags, and abbreviations
+
+A.1 Symbols
+
+Symbol Meaning First use
+ℓ₀ … ℓ₃ Control loops ordered by period §3.1
+τ_f Staleness tolerance of function f: age beyond which its output is unsafe to use §3.1
+H Chunk length in steps §3.2
+Δt Step duration (s) §3.2
+A = H·Δt Autonomy window of a chunk (s) §3.2
+L End-to-end loop latency, a random variable (s) §3.2
+L_q q-quantile of L §3.2
+F_L CDF of L §3.4
+d = ⌈L_q/Δt⌉ Inference delay in steps §3.2
+s Execution horizon in steps, d ≤ s ≤ H−d §5.1
+φ Gait phase ∈ {DS, SS_L, SS_R, F} §3.3
+π_fb Fixed fallback policy §3.3
+ℛ_cap(φ) Capture region at phase φ §3.3
+ℛ_cap^LIPM, ℛ_cap^N, ℛ_cap^HW The three approximations of ℛ_cap §2.6
+δ_cap Approximation gap between capture-region models §2.6
+T_stop,q(φ, π_fb) q-quantile feasible stop time at phase φ under π_fb §3.3
+T_det Heartbeat-detection time, a random variable with support bounded by T_det,max §3.2, KT9
+A_b Certified buffer length on the body, A_b ≥ T_det,max §5.2
+ε_cap Pre-registered tolerable capture-region-exit probability §3.4
+ε_f Pre-registered tolerable per-function latency-exceedance probability §5.4
+m_d Pre-registered capture-region margin threshold for the deterministic corner case §7.2
+S GPU service time per chunk request (s) §3.6
+N Number of robots served by one workstation §3.6
+ρ = NS/(sΔt) Server utilisation §3.6
+Q_max Hard queue bound, in requests §3.6
+D_i Deadline slack of robot i's request §3.6
+D_i Deadline slack of robot i's request §3.6
+t_rest,i Non-queue portion of robot i's loop latency §3.6
+P_GPU, P_CPU, P_PSU, P_wall Power terms §1.1, App. G
+P_link On-body power cost of the split (radio, extra sensing, fallback compute) §2.7
+η_PSU PSU conversion efficiency §1.1
+
+A.2 Tag semantics
+
+Tag Means Upgrade path
+[V] Vendor-documented figure Upgrade only by independent measurement
+[C] Closed-form calculation, inputs stated Becomes [M] if inputs are measured on our hardware
+[M] Third-party measurement on third-party hardware Never becomes evidence about our hardware; becomes [C]-on-[M] when used as an input
+[S] Secondary source, primary not checked Upgrade by opening the primary page
+[T] Target, hypothesis, or pre-registered threshold Settled only by the named KT
+
+A.3 Abbreviations
+
+CD (Committee Draft) · CDF · CBF (control barrier function) · DC (diagnostic coverage) · DoF · DS/SS (double/single support) · EDF (earliest-deadline-first) · HBM · KV (key-value cache) · LIPM (linear inverted pendulum model) · PFHD (average frequency of dangerous failure per hour) · PL (performance level) · PSU · RTC (Real-Time Chunking) · SDA (safety-rated detection-and-stopping layer) · SIL · TGP (total graphics power) · VLA / VLM.
+
+---
+
+Appendix B — Derivation of the continuity bound (T1)
+
+B.1 The RTC constraint, restated
+
+Let a chunk of H steps be generated while the robot executes. Define:
+
+· δ = inference + network delay for the chunk (s);
+· d = ⌊δ/Δt⌋ = number of steps elapsed during generation (RTC's floor convention);
+· s = number of steps the robot executes from the current chunk before switching to the new one.
+
+RTC requires the new chunk to overlap the committed prefix by at least d steps at each end, hence
+
+d ≤ s ≤ H − d.   (B.1)
+
+B.2 Existence of a feasible horizon
+
+Proposition B.1. A feasible integer s exists iff H ≥ 2d.
+
+Proof. The set of admissible s is the integer interval [d, H−d]. A non-empty integer interval requires d ≤ H−d. □
+
+Corollary B.2 (latency form). With d = ⌈L_q/Δt⌉ and integer n = ⌊H/2⌋,
+
+L_q ≤ ⌊H/2⌋·Δt = A/2.   (B.2)
+
+Proof. For integer n, ⌈x⌉ ≤ n ⟺ x ≤ n. Setting n = ⌊H/2⌋ gives the result. The conservative design rounds d up, so (B.2) is a sufficient and necessary condition under the rounded convention. □
+
+Corollary B.3 (real-time factor). Writing the generation rate as the real-time factor
+
+R = A/L,   (B.3)
+
+condition (B.2) is equivalent to R ≥ 2.
+
+Proof. A/2 ≥ L ⟺ A/L ≥ 2. □
+
+Note the asymmetry with the weaker "continuous motion" condition R ≥ 1 used by some vendor material: R ≥ 1 says the next chunk is ready before the current one ends, which is necessary for uninterrupted motion but does not guarantee overlap with the committed prefix. T1 requires the stronger R ≥ 2.
+
+B.3 Violation probability and its reporting
+
+Proposition B.4. Under independent chunk generation, the per-chunk probability of a continuity violation is
+
+p_v = 1 − F_L(A/2).   (B.4)
+
+Definition B.5 (success-versus-latency curve). For KT1 we report not only F_L but
+
+S(λ) = Pr[no continuity violation | L = λ],   (B.5)
+
+estimated by replay at injected latencies λ over a pre-registered grid, and the latency λ* at which S(λ*) = 1 − ε for the pre-registered ε. The tail test (B.2) is a pass/fail on λ = A/2; (B.5) is the diagnostic that prevents an arbitrary margin from discarding a viable link (KT1 failure consequence in §6.2).
+
+B.4 Worked instances [C on M inputs]
+
+Policy H Δt A A/2 Source of inputs
+π0.5 50 20 ms 1,000 ms 500 ms RTC paper [M]
+GR00T N1 16 8.33 ms (120 Hz) 133 ms 66.7 ms GR00T N1 report [M]
+
+Measured RTC totals of 108.76 ms and 138.98 ms on an RTX 4090 over wired LAN imply margins A/(2L) of 4.6 and 3.6 for π0.5 — comfortable; the same totals against GR00T N1's 66.7 ms budget would fail by a factor of ~1.6–2.1. This is the arithmetic behind Corollary 1.1 and behind the Phase 0.5 gate.
+
+---
+
+Appendix C — Queueing, admission, and EDF feasibility (T4)
+
+C.1 The mean bound and why it is only a bound
+
+Treat the GPU as a single server, deterministic service S, N robots each releasing a request every sΔt seconds independently: an M/D/1 queue with
+
+λ = N/(sΔt),  ρ = λS,  W_q = ρS / (2(1−ρ)).   (C.1)
+
+Limitation C.1. (C.1) assumes Poisson arrivals, fixed S, and a single workload. Three violations are structural, not incidental: synchronized releases across robots; batch-dependent S under continuous batching; and HBM contention between co-resident VLA and critic. (C.1) is retained as a first bound, and KT4 tests it under bursty and synchronized arrival explicitly.
+
+C.2 A hard bound under the admission controller
+
+Definition C.2 (dispatch-time admission). A request i is admitted only if, at the moment it reaches the head of the EDF order,
+
+(k_i + 1)·S ≤ D_i   and   |Q| < Q_max,   (C.2)
+
+where k_i is the number of queued requests with deadline slack D_j ≤ D_i. Otherwise the request is refused (K5).
+
+Proposition C.3 (deadline guarantee). Under Definition C.2 and EDF service order, every admitted request completes before its deadline.
+
+Proof. Requests are served in non-decreasing D order. Request i can be preceded only by the k_i requests with D_j ≤ D_i that are queued at dispatch; each takes at most S. Hence the worst-case completion time of i relative to its dispatch is at most (k_i + 1)S ≤ D_i by (C.2). Refused requests never occupy the queue, so they cannot displace admitted ones. □
+
+Corollary C.4 (queue bound). Since |Q| < Q_max is checked at admission, |Q| ≤ Q_max − 1 is an invariant, and the maximum achievable queueing delay is
+
+W_max = (Q_max − 1)·S.   (C.3)
+
+Corollary C.5 (why Q_max must be swept). (C.3) shows Q_max trades tail delay against refusal rate, with no interior optimum derivable in closed form — the optimum depends on the arrival process, which is measured, not assumed. Hence Q_max is set from the knee of the measured p99-versus-Q_max curve in KT4, and no fixed interval [8, 12] is asserted.
+
+C.3 The full feasibility condition
+
+Collecting the pieces, a configuration (N, s, Q_max, critic context length) is admissible for a given robot only if
+
+(i) N < sΔt/S,
+(ii) (Q_max − 1)S + t_rest,i ≤ ⌊H/2⌋Δt for every i,
+(iii) M_weights + M_KV + M_act + M_fw ≤ 0.90 M_GPU,
+(iv) the refusal rate at the chosen Q_max is below the pre-registered ε_ref,
+(v) the EDF dispatch test (C.2) is satisfied for every admitted request.
+
+Remark C.6. (ii) is strictly stronger than the corresponding condition in v2 and v3, because it uses the hard queue bound (C.3) rather than a mean. For S = 27.9 ms [M, RTX Pro 6000], Q_max = 8, t_rest = 40 ms [T], H/2·Δt = 500 ms: the left side is 235 ms, leaving 265 ms of headroom — admissible. For Q_max = 12: 347 ms, leaving 153 ms — still admissible but with a refusal margin that KT4 must quantify.
+
+C.4 Critic starvation
+
+Definition C.7. Under strict VLA-over-critic class priority, the critic starvation fraction over a window T is
+
+σ(T) = 1 − (service time delivered to the critic in T)/(critic demand in T).   (C.4)
+
+Remark C.8. Two policies are admissible and must be chosen explicitly, not left implicit: a reserved-slot policy guaranteeing a minimum critic rate r_min (e.g. 1 Hz), or a best-effort policy with σ measured and reported. The dissertation adopts whichever KT3 shows to be implementable, and states which.
+
+---
+
+Appendix D — The three capture-region approximations and their gap
+
+D.1 LIPM analytic approximation
+
+For the linear inverted pendulum with CoM height z and ω = √(g/z), the capture point is
+
+ξ = x + ẋ/ω,   (D.1)
+
+and the capture region for the LIPM with a flywheel admits an exact closed-form description (Pratt et al., 2006). With z = 0.9 m, ω = 3.30 s⁻¹ and 1/ω ≈ 303 ms [C].
+
+Approximation D.1. ℛ_cap^LIPM ⊇ ℛ_cap in general, because it neglects joint limits, torque saturation, contact friction cones, and multi-contact transitions. It is therefore conservative for placement, and its conservatism is the reason KT6 can pass under it while the true robot is less capable — or fail under it while the true robot is more capable.
+
+D.2 N-step Monte Carlo capturable set
+
+Definition D.2. ℛ_cap^N(φ) is the empirical set of states from which a nominal controller reaches a capture point within N steps, estimated by Monte Carlo over the state distribution and contacts, with a stated sample size and confidence interval.
+
+Remark D.3. KT6 as specified in v2 and v3 risked circularity: testing a simulator's balance controller against the same simulator's capturable set measures model self-consistency, not hardware feasibility. The three-approximation scheme is designed to break that circularity by reporting the disagreement rather than a single pass/fail.
+
+D.3 Hardware fall indicator
+
+Definition D.4. ℛ_cap^HW is the binary indicator obtained from tethered-rig and simulation fall trials in KT5a2: a state is capturable in the hardware sense iff the fallback policy reaches a balanced standstill or controlled fall from it within the pre-registered trial count.
+
+D.5 The approximation gap
+
+Definition D.5. With |·| denoting measure under the state sampling distribution used in KT6,
+
+δ_cap = |ℛ_cap^LIPM Δ ℛ_cap^N| / |ℛ_cap^LIPM ∪ ℛ_cap^N|,   (D.2)
+
+the Jaccard distance between the conservative analytic region and the empirical region.
+
+Reporting rule D.6. KT6 reports the capture-region exit probability under all three approximations plus δ_cap. A placement is confirmed if the inequality of §3.4 holds under ℛ_cap^LIPM and is not contradicted under ℛ_cap^N; it is unresolved if the three disagree beyond a pre-registered δ_cap^max; it is rejected if it fails under ℛ_cap^LIPM. No placement is justified by ℛ_cap^N alone.
+
+---
+
+Appendix E — Tag ledger
+
+This appendix records, claim by claim, the tag in force and what would change it. It exists so that a reader can find every load-bearing number in one place.
+
+Claim Tag in v4 Primary checked? What would upgrade it
+Humanoid safe state is actively controlled; fail-passive machinery does not apply Primary (Ding et al., 2608.02809) Yes —
+Uncertifiable residual is at the SDA-to-balancing-policy interface Primary (same) Yes A published PFHD/DC argument for that interface
+On-board compute is not safety-rated Primary (same, for the G1) Yes A safety-rated SoC with published PFHD
+Emergency stopping is policy-dependent stochastic reach-avoid Primary (Sun et al., 2603.22703) Yes —
+Safe-Stop uses two complementary estimators and a damping fallback Primary (Long et al., 2609.02358) Yes —
+FreeBar exists; >45% lower latency than RTC; 10–15% higher async success Primary (arXiv:2610.14997, CoRL 2026) Yes Independent replication
+RTC totals 108.76 / 138.98 ms on RTX 4090 over wired LAN [M] Yes — (third-party hardware)
+GR00T N1.7 on Thor: 39.9 ms / 25.1 Hz NVFP4 mixed [M] Yes —
+GR00T N1.7 on Thor: 23.7 / 29.9 ms at NVFP4 + FA4 [M] Yes —
+32B Q4 single-stream ≈ 32 tok/s on RTX 5090; ≈ 900 tok/s batched [M] Yes Direct measurement in KT2
+5090 GPU TGP 575 W [V] Yes —
+5090 wall draw 955–1,075 W [C] on [V] + [T] Partly KT7 breakdown
+Thor 40–130 W, ~154 W transient [V], [M] Yes —
+ISO/CD 25785-1 at stage 30.60, industrial scope only [V] Yes Stage advancement
+Humanoid empirical runtime 2–4 h; peak currents 3–5× average [S] No Primary power-systems review
+Capture region is hard to compute in general; exact for LIPM + flywheel [S] Partly —
+2.3 kWh pack, 500 W average draw (Optimus) [S] No Primary disclosure
+Cosmos 3 Edge real-time factors 1.40 / 0.97 / 0.81 / 0.41 [S] No Primary NVIDIA benchmark page
+Libra-VLA inverted-U [S] No Primary paper
+Within-chunk correctors (ACPPO-Corr, FA-RDP, TacForcing, PACE) [S] No Primary pages
+NVIDIA Halos / IGX Thor SIL-3 safety island [S, vendor] No Independent assessment
+Every [T] threshold in §6.2 [T] n/a The named KT
+
+Rule E.1. No conclusion in the body of the document depends on a single [S] item. Where a [S] item is load-bearing (the power envelope, the capture-region difficulty), the argument is structured so that the conclusion survives if the [S] item is replaced by a more conservative value.
+
+---
+
+Appendix F — Pre-registration template
+
+Each KT is pre-registered in the following fields before its first run. The template is normative: a test without a completed record is not a test.
+
+Field Content
+Test ID KT1 … KT10
+Proposition The proposition the test can refute
+Claim type performance \| model validation (never "structural"; the structural claim lives in B0's deterministic check)
+Hypothesis A single falsifiable sentence
+Independent variables The quantities varied (latency, N, Q_max, phase, friction, …)
+Dependent variables The measured quantities, with units
+Sample size and justification e.g. 299 trials for a 1% bound at 95% confidence
+Pass threshold Numeric, with units
+Failure consequence The pre-committed action, which is not a new threshold
+Logging schema Both clocks, queue depth, service time, RTT, power, temperature, versions
+Pinning Engine, CUDA, driver, model, container digest
+Environment Hardware, link, ambient temperature, load
+Analyst Who runs and who reduces
+Deviation log Any departure from the protocol, with date and reason
+
+Rule F.1 (kill, do not rescue). A failed threshold triggers the stated consequence. Redesign after failure is permitted only as a new pre-registration with a new ID (e.g. KT1′), and the original failure remains on the record.
+
+---
+
+Appendix G — Power accounting worksheet
+
+G.1 Formula
+
+P_wall = (P_GPU + P_CPU + P_periph)/η_PSU,   (G.1)
+
+with the terms defined in App. A.1.
+
+G.2 Worked bracket [C on V and T]
+
+Term Low High Tag
+P_GPU 575 W 620 W [V], partner-card [M]
+P_CPU (package) 200 W 280 W [T]
+P_periph (RAM, NVMe, fans, NIC) 30 W 60 W [T]
+η_PSU (80 PLUS Gold, 50–80% load) 0.94 0.90 [V]
+P_wall 857 W 1,067 W [C]
+
+The blueprint's 955–1,075 W sits inside this bracket. The point of the worksheet is not that the number is wrong; it is that the number is a sum, and a reviewer is entitled to see the terms. KT7 replaces every [T] term with a measurement and reports the bracket as closed.
+
+G.3 Endurance, with the net comparison and the link term
+
+T = E / (P_act + P_c,net + P_link),   (G.2)
+
+with P_c,net = P_workstation − P_fallback the incremental compute carried on board, and P_link ∈ [15, 30] W [T]. For E = 2.3 kWh, P_act = 500 W:
+
+Case P_c,net P_link T [C]
+On-board workstation ~900 W 0 ~1.64 h
+Split (fallback only on body) 0 30 W ~4.34 h
+Split, at the empirical 2 h low end 0 30 W ≤ 2 h (envelope-limited)
+
+The average-draw model overstates endurance (empirical envelope 2–4 h [S]); the relative conclusion — the split avoids ~900 W of on-body draw for ~15–30 W of link cost — is invariant to the envelope. That invariance is the argument.
+
+---
+
+Appendix H — B0's deterministic decision rule
+
+This appendix writes out the rule that §7.2 asserts, so that "deterministic" is a claim about code, not about intent. It is a specification, not an implementation, and it has not been executed.
+
+```
+B0.tick(proprioception x, heartbeat hb, chunk_buffer B2):
+
+  # 1. Limits: always, unconditionally, no learned component.
+  x_safe = clamp_to_joint_torque_stability_limits(x)
+
+  # 2. Heartbeat and detection.
+  if age(hb) > T_det_max:                      # T_det_max from KT9
+      return constrained_stop(x_safe)          # deterministic
+
+  # 3. Corner case: B2 refused AND margin low.
+  if B2.last_decision == REFUSE:
+      m = margin_to_capture_boundary(x_safe)   # deterministic geometry
+      if m < m_d:                              # m_d pre-registered, KT5a2
+          return damping_fallback(x_safe)      # deterministic
+
+  # 4. Normal path.
+  if B2.last_decision == ACCEPT and not expired(B2.head):
+      return track(B2.head)
+  else:
+      return constrained_stop(x_safe)          # deterministic
+
+  # Estimator output is logged, never read by this function.
+  # log(estimator(x)) is written by a separate, non-actuating task.
+```
+
+Properties asserted by construction, to be verified by code audit and KT5a2:
+
+· P1 (no learned component on the path). No branch condition reads estimator(·). The estimator's output appears only in the log.
+· P2 (total function). Every combination of (limits, heartbeat, B2 decision, expiry) maps to exactly one of {track, constrained_stop, damping_fallback}. No state is unhandled.
+· P3 (monotone degradation). The three outputs are ordered by authority: track ⊑ constrained_stop ⊑ damping_fallback, and the rule never returns a weaker output under a stronger failure signal.
+· P4 (time-bounded). Each branch's worst-case execution time is bounded and independent of the link, since margin_to_capture_boundary is a geometric computation over proprioception only.
+
+Remark H.1. P1 is the formal content of the claim "the estimator is telemetry only." If any future revision allows the estimator to select among branches, P1 fails, the estimator moves onto the certification path, and T2b must be widened to include it. This is a scope limit, not a design preference.
+
+---
+
+Appendix I — Link fault tree and minimal cut sets
+
+I.1 Top event
+
+Top event (TE): the robot falls as a consequence of link behaviour.
+
+I.2 Structure
+
+```
+TE
+├── G1: body cannot reach a safe state
+│   ├── E1: A_b < T_det_max                    (buffer shorter than detection)
+│   ├── E2: constrained stop infeasible at φ_last, π_fb   (T_stop unbounded or undefined)
+│   ├── E3: corner case mishandled             (m_d miscalibrated; P1 violated)
+│   └── E4: B0 timing overrun                  (P4 violated)
+├── G2: body executes an unsafe chunk
+│   ├── E5: K7 misses a capture-region violation
+│   ├── E6: B2 accepts an expired chunk        (K1 violated)
+│   └── E7: semantically wrong but capture-feasible chunk  (KT10)
+└── G3: detection never fires
+    ├── E8: heartbeat protocol suppresses loss  (T_det unbounded)
+    └── E9: clock skew corrupts age(hb)        (KT9)
+```
+
+I.3 Minimal cut sets and the test that closes each
+
+MCS Events Closed by Residual
+MCS1 E1 KT9 (T_det distribution) + buffer sizing None if bounded
+MCS2 E2 KT5a2, KT5b, KT5c [S] stop feasibility; performance only
+MCS3 E3 Code audit (P1) + KT5a2 calibration of m_d None if P1 holds
+MCS4 E4 WCET analysis + KT7 thermal Platform-dependent
+MCS5 E5 KT8 Performance only (299 trials)
+MCS6 E6 KT1 (latency CDF) + K1 unit test None if K1 implemented
+MCS7 E7 KT10 Carried by operator; not closed
+MCS8 E8, E9 KT9 None if bounded
+
+Remark I.1. Seven of eight minimal cut sets are closed at the performance level by the test programme. MCS7 is not closed by any test in this programme; it is carried by an operator-in-the-loop safeguard and must be stated as such. This is the second scope limit, alongside T2b.
+
+Remark I.2. No probability is assigned to any basic event. Assigning one would require either a certified PFHD (T2b, unavailable) or a trial count far beyond Corollary 3.2's 3,000-hour estimate. The fault tree is a structural instrument — it shows what is covered and what is not — not a quantitative risk model.
+
+---
+
+Appendix J — Falsification matrix
+
+Proposition Primary test Secondary test Threshold Consequence if failed Reversible?
+T1 KT1 KT2 (A/L) p99.9 L ≤ A/2 and R ≥ 2 Chunks move to body; smaller thesis considered Yes, per link
+T2a KT5b KT5a2, KT5c, KT9 0 falls / 299 per class; stop within T_det + T_stop,q; inside ℛ_cap Safe-stop design reopened; no cortex chunks Yes, with redesign
+T2a (estimator role) KT5a1 — ε_fs ≤ threshold per φ Estimator abandoned as telemetry; no change to thesis Yes
+T2b — (absence claim) KT5b pass criterion A published PFHD/DC argument or an ISO stage that specifies the chain T2b moves from "gap" to "requirement satisfied" n/a — externally triggered
+T3 KT6 Cor. 3.1 Exit prob ≤ ε_cap under ℛ_cap^LIPM; δ_cap reported Placement revised, not the safety rule Yes
+T4 KT4 KT2, KT3 W_q within 30% of M/D/1 (Poisson); p99 L ≤ A/2 (both arrivals); Q_max never exceeded; refusal rate ≤ ε_ref N_max set from curve; scheduler re-specified Yes
+K7 sufficiency KT8 KT10 100% of violations refused; FP ≤ 1% Strengthen K7 or move generator to body Yes
+Detection KT9 — T_det,max bounded; A_b ≥ T_det,max Heartbeat protocol redesigned before any outage test Yes
+Thesis Phase 4 KT2 Split beats 39.9 ms fallback by pre-registered margin Degrade to smaller thesis (its own claim and refutation in §6.3) Yes
+
+Rule J.1. A proposition is retired only when its primary test fails and its redesign also fails. A single failed threshold is a data point, not a retirement.
+
+---
+
+Appendix K — Scope limits, open problems, and what this document is not
+
+K.1 Scope limits (stated, not closed)
+
+1. T2b — the certification gap. No governing standard specifies a humanoid's active safe-stop chain; the robot-side reaction chain establishes no PFHD (Ding et al.). "Safe independent of the link" is a design goal, not a certified claim.
+2. MCS7 — semantic chunk errors. A chunk can pass the error tube and the capture-region check and still be semantically wrong. B2 cannot catch it; the residual is carried by an operator-in-the-loop safeguard (KT10).
+3. Statistical rather than certifying evidence. Every test in §6.2 is bounded at the ~1% level by 299 trials. None certifies a hazard rate. Corollary 3.2 shows why a certifying sample is out of reach within a project of this size.
+4. Third-party hardware. Every [M] figure describes someone else's machine. The dissertation's own measurements begin at Phase 0.5.
+
+K.2 Open problems this document does not attempt
+
+· A certifiable formulation of the SDA-to-balancing-policy interface, including a fault-behaviour specification and a DC argument.
+· A method for certifying a learned stoppability estimator, as opposed to validating it at the performance level.
+· A within-chunk contact-feasibility guarantee that is provable rather than learned; the 2026 correctors are empirical.
+· A quantitative risk model for the link, which would require either (1) or a sample size beyond Corollary 3.2.
+· Non-industrial scope for ISO 25785-1, which the draft does not cover even after publication.
+
+K.3 What this document is not
+
+It is not a report of experiments. It is not a certification argument. It is not a claim that the workstation is 6.5× Thor for the workload that matters — it is 2× single-stream and the argument rests on batched, prefill-heavy work. It is not a claim that the body is safe; it is a claim that the body is designed so that the link is outside the safety argument, and that this design is testable.
+
+It is a pre-registration. The next artefact is the Phase 0.5 record, and the cheapest decisive falsification — the real-time factor R of a chunk-generating policy on the 5090 at the TensorRT recipe — sits at its front, where it can be measured before a robot is bought. 🌹🧠
+
+Appendix L — ASCII diagrams
+
+Ouadi Maakoul and SI TEAM · 28 Oct 2026 · @ouadi
+
+Status of these figures. Every diagram below is a specification or a closed-form derivation, not a measurement. No box, arrow, or bar has been produced by an experiment run by SI TEAM. Where a figure carries a number, the tag from Appendix E travels with it. Figures L.4, L.5, L.6, and L.8 are the ones a reviewer should check against the text, because they are where an architecture drawing could silently overclaim.
+
+---
+
+Fig. L.1 — System overview: two machines, one contract
+
+```
++============================== CORTEX (mains, Tier R) ==============================+
+|                                                                                    |
+|   W1 deliberative VLM/VLA      W2 critic               W3 agents + memory         |
+|   (slow reasoner)              (7-14B single-stream,    (orchestrator, queue,      |
+|                                 or 32B batched)          registry, long-horizon)   |
+|        |                            |                          |                  |
+|        +----------------------------+--------------------------+                  |
+|                                     |                                              |
+|                     W4 link manager | heartbeat (K4), clock sync,                  |
+|                                     | bounded queue, EDF in VLA class,             |
+|                                     | refusal (K5), starvation metric, logging(K6) |
++=====================================|==============================================+
+                                      |
+                        L I N K       |      L = t_sense + t_up + t_queue
+                     Wi-Fi 6E / 5G    |          + t_infer + t_down + t_apply
+                     / wired LAN      |      L is a random variable; T1 bounds its tail
+                                      |
++=====================================|==============================================+
+|                                     v                                              |
+|   B2 chunk buffer + verifier:   K1 expiry | error tube | K7 capture-region check   |
+|        decision in {ACCEPT, REFUSE}  --(REFUSE + predicted exit phase)--> B0       |
+|                                     |                                              |
+|   B1 motor policy:  baseline  = consume cortex chunks                              |
+|                     fallback  = local GR00T-class, 39.9 ms / 25.1 Hz [M]           |
+|                                 (ceiling 23.7-29.9 ms, 42/33 Hz [M])                |
+|                                     |                                              |
+|   B0 SAFETY KERNEL  <--- LAST AUTHORITY.  Deterministic.  No learned component.    |
+|        joint/torque/stability limits | constrained stop | damping fallback         |
+|        estimator ---------> LOG ONLY (never read by any branch; App. H, P1)        |
++=====================================|==============================================+
+                                      |
+                                  A C T U A T O R S
+```
+
+Reading rule. The only arrows that can reach an actuator pass through B2 and B0 (K3). The link arrow terminates at B2; it does not pass through B0.
+
+---
+
+Fig. L.2 — Loop hierarchy, periods, and placement
+
+```
+ log time axis (not to scale)
+ 1 ms          20 ms              1 s                100 s
+   |             |                 |                   |
+   v             v                 v                   v
+   +-+ +---------+-----------------+-------------------+-----------> t
+```
+
+```
+ loop  period        band (relative duration)                     placement
+ ----  ----------    ------------------------------------------   ---------------
+ l0    ~1 ms         #                                              BODY
+ l1    5-20 ms       ....########                                   BODY | CORTEX
+ l2    0.1-10 s      ..........################                     CORTEX
+ l3    s - hours     ..............##########################       CORTEX
+```
+
+```
+ staleness tolerance tau_f, as a bar (longer = more tolerant):
+
+   reflex balance  |#                                          |  ~50 ms     BODY
+   chunk continuity|########                                    |  ~100-500ms CORTEX iff T1
+   plan critique   |##########################                  |  seconds    CORTEX
+   task memory     |############################################|  hours      CORTEX
+                   0                                            ->
+```
+
+Placement is decided by T3, not by this drawing. The bar lengths are [T]; the criterion is the capture-region inequality of §3.4.
+
+---
+
+Fig. L.3 — Latency budget as a waterfall
+
+```
+ t=0                                                                          t
+  |--t_sense--|--t_up--|--t_queue--|-------t_infer--------|--t_down--|--t_apply--|
+  |           |       |            |                      |          |
+  |           |       |<-- W4 EDF domain (App. C) ------->|          |
+  |           |<--------- link RTT ------->|              |<-- link ->|
+  |<------------------------ L  (random variable) -------------------------->|
+
+  design constraint (T1, App. B):     L_p99.9  <=  A/2  =  (H*dt)/2
+
+  where the queue term is bounded hard, not in the mean (App. C, Cor. C.4):
+        t_queue,max  =  (Q_max - 1) * S
+```
+
+---
+
+Fig. L.4 — The RTC interval and why H ≥ 2d
+
+```
+ step index:   0        5        10       15       20       25       30
+               |--------|--------|--------|--------|--------|--------|
+ chunk n-1 :   [######################################################]  H steps
+ chunk n   :            [######################################################]
+                       ^         ^                                     ^
+                       |         |                                     |
+                    arrival    switch after s steps             committed overlap
+                    at d steps  (must be >= d)                  (must leave d free)
+```
+
+```
+ feasible window for the execution horizon s:
+
+        0        d                                  H-d            H
+        |--------|===================================|-------------|
+                 |<---------  admissible s  -------->|
+                 |                                   |
+                 d  <=  s  <=  H - d      <==>      H >= 2d
+
+ equivalent latency form:      L_q  <=  floor(H/2)*dt  =  A/2      (B.2)
+ equivalent rate form:         R = A/L  >=  2                       (B.3)
+
+ asymmetry to keep visible:   R >= 1  is "next chunk ready in time"
+                              R >= 2  is T1  (overlap with committed prefix)
+```
+
+This is the figure that makes Corollary 1.1 checkable. A policy at R = 1.4 (Cosmos 3 Edge on T5000 [S]) satisfies the weaker condition and fails T1.
+
+---
+
+Fig. L.5 — W4 admission, EDF, and refusal
+
+```
+   request i arrives
+        |
+        v
+  +-------------------+   |Q| >= Q_max        +------------------------+
+  | admission check   |------------------------>|  REFUSE (K5)           |
+  | (Q_max, deadline) |   (k_i+1)S > D_i       |  -> robot i, logged K6 |
+  +-------------------+------------------------>+------------------------+
+        |  admitted
+        v
+  +-------------------------------------+
+  |  EDF queue, ordered by D_i ascending |<--- class boundary: VLA preempts critic
+  +-------------------------------------+
+        |
+        v
+  +---------------------+        completion stamp -> K6 log
+  | GPU service, time S |
+  +---------------------+
+        |
+        +----> critic starvation sigma(T)   (App. C, Def. C.7)
+```
+
+```
+ queue depth invariant:   |Q| <= Q_max - 1        (Cor. C.4)
+ hard wait bound:         W_max = (Q_max - 1) * S
+ Q_max is SWEPT in KT4, set from the knee of p99 vs Q_max; no fixed [8,12] is asserted.
+```
+
+---
+
+Fig. L.6 — B0's deterministic decision flow (mirrors Appendix H)
+
+```
+                              tick(x, hb, B2)
+                                     |
+                                     v
+                        [ clamp_to_joint_torque_stability_limits ]
+                                     |
+                                     v
+                    age(hb) > T_det_max ? ---- yes ----> CONSTRAINED_STOP
+                                     | no
+                                     v
+                    B2 decision = REFUSE ? -- yes --> margin < m_d ? -- yes --> DAMPING_FALLBACK
+                                     | no               | no
+                                     |                  v
+                                     |            CONSTRAINED_STOP
+                                     v
+                    ACCEPT and not expired ? -- no ----> CONSTRAINED_STOP
+                                     | yes
+                                     v
+                                TRACK(chunk head)
+
+  ------------------------------------------------------------------------------
+  estimator(x)  --->  LOG ONLY.   No branch condition above reads it.  (P1)
+  ------------------------------------------------------------------------------
+```
+
+```
+ properties asserted by construction (to be checked by code audit + KT5a2):
+
+  P1  no learned component on the path
+  P2  total function: every input maps to exactly one output
+  P3  monotone degradation:  track  <=  constrained_stop  <=  damping_fallback
+  P4  time-bounded, link-independent
+```
+
+If a future revision lets the estimator select a branch, P1 fails, the estimator moves onto the certification path, and T2b must be widened to include it. This figure is where that rule is visible.
+
+---
+
+Fig. L.7 — Body failure-mode state machine
+
+```
+                       jitter tail rising
+        +-----------+  (chunks still arrive)  +-----------+
+        |  NOMINAL  |------------------------>| DEGRADED  |
+        +-----------+                         +-----------+
+          |     ^                                |     |
+          |     | chunks OK, tail back           |     |
+          |     +--------------------------------+     |
+          |                                          | burst loss > A_b
+          | heartbeat lost /                           | or handover
+          | full outage                                v
+          |                                    +-----------+
+          +----------------------------------->| STOPPING  |<----+
+                                               |(constrained|     |
+                                               |   stop)   |     |
+                                               +-----------+     |
+                                                  |     |        |
+                            margin >= m_d         |     | margin < m_d
+                                                  v     v        |
+                                          +-----------+ +------------------+
+                                          |SAFE_STAND | | CONTROLLED_FALL  |
+                                          +-----------+ +------------------+
+                                                  ^             ^
+                                                  |             |
+                                        (both are "safe state" per §7.2;
+                                         chosen deterministically, never by the estimator)
+```
+
+```
+ transition triggers, with the test that bounds each:
+
+  NOMINAL  -> DEGRADED      latency tail rises          KT1 (CDF), KT4
+  DEGRADED -> STOPPING      A_b exhausted               KT9 (T_det), buffer sizing
+  NOMINAL  -> STOPPING      heartbeat lost              KT9
+  STOPPING -> SAFE_STAND    constrained stop succeeds   KT5a2, KT5b
+  STOPPING -> CONTROLLED_   margin < m_d at refusal     KT5a2 (m_d calibration)
+               FALL
+```
+
+---
+
+Fig. L.8 — Link fault tree and minimal cut sets
+
+```
+                                TE: robot falls due to link behaviour
+                                                |
+        +---------------------------------------+---------------------------------------+
+        |                               |                                               |
+   G1 body cannot                G2 body executes an                    G3 detection
+   reach a safe state            unsafe chunk                           never fires
+        |                               |                                               |
+  +-----+-----+-----+          +------+------+------+                    +--------+--------+
+  |     |     |     |          |      |      |      |                    |                 |
+  E1    E2    E3    E4         E5     E6     E7                         E8                E9
+  A_b   stop  corner B0         K7     K1     semantic                   heartbeat         clock
+  <     infeas- case  timing   misses expired wrong but                  suppresses        skew
+  T_det ible  mishandled overrun capture chunk   capture-                 loss              corrupts
+  _max         (P1)        (P4) violation        feasible                                   age(hb)
+```
+
+```
+ minimal cut sets and closure status
+
+  MCS   events   closed by                          residual
+  ----  -------  --------------------------------   ----------------------------
+  1     E1       KT9 + buffer sizing                none if T_det bounded
+  2     E2       KT5a2, KT5b, KT5c                  [S] stop feasibility; performance only
+  3     E3       code audit (P1) + m_d calibration   none if P1 holds
+  4     E4       WCET analysis + KT7                 platform-dependent
+  5     E5       KT8                                 performance only (299 trials)
+  6     E6       KT1 CDF + K1 unit test              none if K1 implemented
+  7     E7       KT10                                NOT CLOSED -- operator-in-the-loop
+  8     E8, E9   KT9                                 none if T_det bounded
+
+  No probability is assigned to any basic event.  The tree is structural, not
+  a quantitative risk model.  MCS7 is the second stated scope limit (K.1).
+```
+
+---
+
+Fig. L.9 — The three capture-region approximations and δ_cap
+
+```
+        LIPM analytic, conservative (App. D.1)
+        +------------------------------------------------------+
+        |                                                      |
+        |      N-step Monte Carlo capturable set (D.2)          |
+        |      +--------------------------------------+          |
+        |      |                                      |          |
+        |      |        hardware fall indicator       |          |
+        |      |        +------------------+          |          |
+        |      |        |                  |          |          |
+        |      |        |    (D.4)         |          |          |
+        |      |        +------------------+          |          |
+        |      +--------------------------------------+          |
+        +------------------------------------------------------+
+
+        delta_cap = | L  symmetric-difference  N | / | L union N |      (D.2)
+
+  reporting rule D.6:
+     CONFIRMED   inequality of §3.4 holds under LIPM and is not contradicted under N
+     UNRESOLVED  the three disagree beyond delta_cap_max
+     REJECTED    fails under LIPM
+     (no placement is ever justified by the Monte Carlo set alone)
+```
+
+```
+ why three and not one (Pratt et al. 2006):
+   the general humanoid capture region is hard to compute;
+   the LIPM-with-flywheel case is exact.  The gap between the two
+   is the honest object, so it is reported rather than hidden.
+```
+
+---
+
+Fig. L.10 — Endurance: the net comparison and the link term
+
+```
+ average-draw model, E = 2.3 kWh, P_act = 500 W          [C on S inputs]
+
+  on-board workstation  P_net ~900 W   [############################]           ~1.64 h
+  split, fallback+link  P_link 15-30 W [##########################################] ~4.34 h
+
+  empirical envelope [S]:  |=========|=================================|
+                            2 h                                     4 h
+                            ^ the average-draw model overstates here
+
+ relative conclusion, invariant to the envelope:
+     the split avoids ~900 W of on-body draw for ~15-30 W of link cost.
+```
+
+```
+  what this figure does NOT say:
+     - it does not claim 4.34 h of operation (envelope-limited)
+     - it does not omit the link: P_link is a term, not a footnote (G.3)
+     - it does not use the 93.8 ms model-card figure as the fallback baseline
+```
+
+---
+
+Fig. L.11 — Roadmap gates and falsification points
+
+```
+ Phase 0.5      Phase 0        Phase 1        Phase 2         Phase 3      Phase 4
+ 2 weeks        burn-in        KT1, KT2,      KT5a1, KT5a2,   KT3, KT4     end-to-end
+ latency CDF    KT7 power      KT6            KT5b, KT5c,     sweep Q_max  vs 39.9 ms
+ + S + A/L      breakdown                     KT8, KT9, KT10  starvation   fallback
+      |              |              |              |              |             |
+      v              v              v              v              v             v
+  A/L < 2 ?      throttling     no eligible    structural     starvation    split loses
+      |          > 5% ?         link at all ?  check fails ?  unacceptable ? by margin ?
+      v              v              v              v              v             v
+  SMALLER        cooling        SMALLER        reopen safe    reserved      SMALLER
+  THESIS         redesign       THESIS         stop design    critic slot   THESIS
+  (before any    (before any                   (before any    or accept      (own claim,
+   robot bought)  benchmark)                    cortex chunk)  best-effort    §6.3)
+```
+
+```
+ gate ordering that matters:
+   KT2 (A/L, S) is the CHEAPEST decisive falsification and sits first.
+   KT9 (T_det) must pass before KT5b, because T2a's bound uses T_det.
+   KT5a2 and KT8 must pass before ANY cortex-resident chunk generation.
+   KT5b alone is not sufficient.
+```
+
+---
+
+Fig. L.12 — Kill-test dependency graph
+
+```
+                     +-----------------------+
+                     | KT2   S and A/L       |---\
+                     +-----------------------+    \
+                     +-----------------------+     \
+                     | KT1   link latency    |------+--> T1 gate ---> Phase 1
+                     +-----------------------+     /            \
+                     +-----------------------+    /              \
+                     | KT9   T_det           |---/                \
+                     +-----------------------+                      \
+                              |                                       \
+                              v                                        \
+                     +-----------------------+                         \
+                     | KT5b  outage perf     |                          \
+                     +-----------------------+                           \
+                     +-----------------------+                            \
+                     | KT5a1 false-safe rate |                             \
+                     +-----------------------+                              \
+                     +-----------------------+                               \
+                     | KT5a2 fallback exec   |---+                            \
+                     +-----------------------+    \                           \
+                     +-----------------------+     \                           \
+                     | KT5c  distribution    |------+--> Phase 2 gate --------->+
+                     +-----------------------+     /     (KT5b alone insufficient)
+                     +-----------------------+    /
+                     | KT8   K7 vs correctors|---/
+                     +-----------------------+
+                     +-----------------------+       residual -> operator (MCS7)
+                     | KT10  semantic chunks |--------------------------------------+
+
+                     +-----------------------+    \
+                     | KT3   starvation      |-----\
+                     +-----------------------+      \
+                     +-----------------------+       +--> T4 gate ---> Phase 3
+                     | KT4   Q_max sweep     |------/
+                     +-----------------------+      \
+                     +-----------------------+       \
+                     | KT7   power breakdown |--------+--> prerequisite for any benchmark
+                     +-----------------------+
+                     +-----------------------+
+                     | KT6   capture region  |-----------> placement revision only
+                     +-----------------------+              (not a safety rule)
+```
+
+---
+
+Fig. L.13 — Throughput framing: what the 5090 is and is not
+
+```
+ comparison axes, RTX 5090 vs Jetson AGX Thor
+
+   memory bandwidth        1792 GB/s  vs  273 GB/s        = 6.56x      [C]
+   single-stream decode     ~32 tok/s  vs  ~15.6 tok/s     = ~2x        [M]
+     (32B, Q4)
+   batched aggregate       ~900 tok/s  vs  not stated     = unclaimed   [M]
+
+   +------------------------------------------------------------------+
+   | v2 used a roofline ceiling of 102 tok/s and presented it as the   |
+   | workstation's advantage.  v4 retires it to a CEILING:             |
+   |                                                                   |
+   |     102 tok/s  =  ceiling, bandwidth-only, NOT deployed           |
+   |      32 tok/s  =  deployed single-stream                          |
+   |    ~900 tok/s  =  deployed batched                                |
+   |                                                                   |
+   | the argument for the cortex therefore rests on BATCHED and        |
+   | PREFILL-HEAVY work, not on single-stream decode.                  |
+   +------------------------------------------------------------------+
+```
+
+---
+
+Fig. L.14 — What is measured, what is not (the whole document in one box)
+
+```
+   +-------------------------------------------------------------+
+   |  SI TEAM has run:        nothing                            |
+   |                                                             |
+   |  every [M] in this document  = third party, their hardware   |
+   |  every [V]                   = vendor documentation          |
+   |  every [C]                   = arithmetic on the above       |
+   |  every [S]                   = lead, primary not checked     |
+   |  every [T]                   = pre-registered, unsettled     |
+   |                                                             |
+   |  the structural safety claim rests on B0's deterministic     |
+   |  check (Fig. L.6, P1-P4), NOT on any trial count.            |
+   |                                                             |
+   |  the two stated scope limits:                                |
+   |      (1) T2b  certification gap -- no standard specifies     |
+   |               the humanoid active safe-stop chain            |
+   |      (2) MCS7 semantic chunk errors -- carried by an         |
+   |               operator-in-the-loop safeguard                 |
+   +-------------------------------------------------------------+
+```
+
+The next artefact is the Phase 0.5 record, and Fig. L.13 is why it comes first: the real-time factor R of a chunk-generating policy on the 5090 at the TensorRT recipe can be measured before a robot is bought. 🌹🧠
