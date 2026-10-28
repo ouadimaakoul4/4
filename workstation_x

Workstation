@@ -1,0 +1,1182 @@
+
+Workstation architecture for multi-agent orchestration and hybrid local inference
+Engineering document
+
+28 October 2026
+
+ouadi Maakoul and SI TEAM
+
+
+1. Purpose and epistemic status
+
+This blueprint specifies a single compute node designed to orchestrate more than twenty artificial-intelligence agents, run language models locally, delegate part of the workload to external APIs, and preserve reproducible research results.
+
+Epistemic status. This is a design specification, not an experimental report. No prototype has been assembled, no component has been purchased, no benchmark has been executed on the configurations described here. Every numerical value labelled specification is either a vendor-documented figure or a closed-form calculation whose inputs are stated. Every performance figure labelled target or acceptance threshold is an objective to be verified during the benchmark phase. Where the document states a conclusion about feasibility, that conclusion follows from arithmetic on documented quantities, not from an observed run. It must be confirmed by measurement before it justifies a purchase.
+
+The document is organised around three candidate tiers, a mandatory platform burn-in, an expanded benchmark protocol covering dense, MoE and hybrid model classes, and a buy-versus-API cost rule. The discipline is explicit: rent capacity, benchmark, then purchase one GPU and expand only what measurement justifies.
+
+---
+
+2. Mathematical foundations
+
+Four closed-form models govern the choice of hardware and software. None substitutes for measurement; each bounds what measurement must confirm.
+
+2.1 Memory model
+
+The video memory required for inference decomposes into four terms:
+
+M_{\text{VRAM}} = M_{\text{weights}} + M_{\text{KV}} + M_{\text{activations}} + M_{\text{framework}}
+
+Weights. For $N$ parameters quantized at $b$ bits:
+
+M_{\text{weights}} = \frac{N \cdot b}{8 \times 10^9} \text{ GB}
+
+A 32-billion-parameter dense model at 4 bits occupies ~16 GB of raw weights, ~17–18 GB after metadata. A 70-billion-parameter dense model at 4 bits occupies ~35 GB; at FP8, ~70 GB.
+
+Sparse MoE clarification. For a mixture-of-experts model, the total parameter count governs storage, but the active parameter count governs decode bandwidth. GPT-OSS-120B has 117B total parameters and 5.1B active parameters per token (128 experts, top-4 routing), which is why it can decode interactively on hardware that cannot hold a dense 117B model at usable speed.
+
+KV cache — corrected formula, with batch explicit.
+
+M_{\text{KV}} = 2 \cdot L \cdot H_{kv} \cdot d \cdot S \cdot B \cdot \frac{b_{kv}}{8 \times 10^9} \text{ GB}
+
+For a Qwen3-32B-class model (64 layers, 8 KV heads, $d=128$) at FP16, the per-token cost is 256 KiB. A 32 GB card at gpu_memory_utilization=0.90 leaves roughly 9–10 GB for KV after weights and framework overhead. That is approximately 35–40K tokens at FP16 and 70–80K tokens at FP8. A dozen concurrent requests at 4K–32K will not fit without preemption or queuing. The acceptance criterion is therefore measured KV pool capacity and preemption rate, not a Little's-law average $L$.
+
+KV precision policy — three tiers.
+
+Engine role KV precision Precondition
+Critic / reasoning engine BF16 until it passes the SI TEAM reasoning test under FP8; then FP8 Mandatory quality test on critical-analysis and documentary-research tasks, not a generic needle-in-a-haystack
+Generalist engine (above 8K context) FP8 Passes retrieval and summarisation tests at FP8 on sm_120
+Batch documentary synthesis FP8 (default) Human review before result registry ingestion
+
+The FP8 accuracy evidence that drove an earlier, more conservative policy was measured on Hopper GPUs with FlashAttention-3 at 128K context, where a kernel-level accumulation issue collapsed needle-in-a-haystack accuracy from 91% to 13% before a fix restored it to 89%. That issue was architecture- and context-specific. On sm_120 (consumer Blackwell), FP8 KV must be tested directly at 4K and 32K on the SI TEAM tasks; extrapolation from Hopper results is not sufficient evidence either to reject or to accept FP8.
+
+TurboQuant is not a recommended lever. The vLLM study concludes that FP8 remains the default choice; aggressive 4-bit KV quantization extends capacity to 2.3–3.7× but incurs a 40–52% throughput reduction, and lower KV storage cost does not translate into faster serving. TurboQuant is an experiment to be measured, not a production policy.
+
+2.2 Concurrency model
+
+Little's law remains the dimensioning tool: $L = \lambda \cdot W$. The reference scenario is a design hypothesis, not a measured distribution:
+
+Task type Share Target $\lambda$ (req/s/agent) Expected $W$ Implied $L$ (20 agents)
+Summary (4K) 40% 0.10 1–2 s 2–4
+Critical analysis (8K) 30% 0.05 4–6 s 4–6
+Documentary research (32K) 20% 0.01 15–30 s 3–6
+Script generation 10% 0.02 8–12 s 3–5
+
+The benchmark must record real $\lambda$ and $W$ per task type and recompute $L$ from those measurements, with separate service-time profiles for dense and MoE engines.
+
+2.3 Roofline — pedagogical only
+
+Autoregressive generation is memory-bound:
+
+\text{Tok/s}_{\max} \approx \frac{\beta_{\text{VRAM}}}{M_{\text{weights, active}} + B \cdot m_{\text{KV per token}}}
+
+For a sparse MoE, the denominator uses active weight bytes, not total weight bytes. This is why GPT-OSS-120B can decode at tens of tokens per second on hardware whose bandwidth would make a dense 117B model unusable. The roofline explains behaviour; it does not appear in acceptance thresholds.
+
+2.4 Parallelism and Amdahl's law
+
+Amdahl's bound applies to tensor parallelism of a single model. It does not apply to Mode B, where each GPU runs an independent engine. Without NVLink, inter-GPU communication transits PCIe, reducing the parallelisable fraction; two GPUs do not form a GPU of double capacity. Mode B (independent models) is preferred over shared tensor parallelism until a measured gain justifies the complexity.
+
+---
+
+3. Architecture
+
+3.1 Three candidate tiers
+
+No tier is purchased until the benchmark of §5 returns measured values. The burden of proof runs upward: Tier V must fail a specific threshold before Tier R is selected; Tier R must fail before Tier C is considered.
+
+Tier V — Value tier
+
+Component Specification
+GPU 2–4× used RTX 3090, 24 GB GDDR6X
+CPU / MB / RAM Threadripper PRO 9965WX (24c, 350 W) / WRX90 / 128 GB (8×16 GB RDIMM, all channels populated)
+PSU 1,200–1,400 W ATX 3.1
+Intended use Mode B with independent engines; or a single 32B model at higher batch than one 5090 can sustain
+
+The 3090's bandwidth (~936 GB/s) is roughly half the 5090's (~1,792 GB/s), but its capacity per dollar is materially higher. The value tier exists to test whether capacity, not throughput, is the binding constraint for the SI TEAM workload.
+
+Tier R — Reference tier
+
+Component Specification
+GPU 1× RTX 5090, 32 GB GDDR7
+CPU / MB / RAM 9965WX / WRX90 / 128 GB (8×16 GB RDIMM, all channels populated)
+PSU 1,200 W ATX 3.1, native 12V-2x6
+Intended use 32B dense @ 4-bit, FP8 KV, 32K, batch 1–4; GPT-OSS-120B MXFP4/NVFP4 with expert offloading
+
+The Threadripper PRO 9965WX is a 24-core, 350 W TDP part with 128 PCIe 5.0 lanes on WRX90, an 8-channel DDR5 memory interface, and support for up to 144 usable lanes total. The core count is capped at 24 until a benchmark demonstrates CPU saturation. RAM is staged at 8×16 GB, not 256 GB, because the orchestrator's bottleneck is VRAM and bandwidth, and because 256 GB RDIMM pricing is volatile — kits range from ~$1,450** for a 5600 MT/s 8×32 GB kit to **~$13,000 for a 7600 MT/s 8×32 GB kit. Expansion follows measurement.
+
+Tier C — Capacity tier
+
+Component Specification Role
+1× RTX PRO 6000 Max-Q, 96 GB GDDR7 ECC 300 W, dual-slot, blower-cooled; ~$8,500–$15,000 depending on channel Benchmark candidate for dense 70B at batch, or 32B at high batch and long context
+2× RTX 5090 at 450 W per card Mode B Benchmark candidate; connector and thermal risk must be weighed against throughput
+DGX Spark, 128 GB ~$6,950 Batch/offline node only
+Strix Halo mini PC, 128 GB unified LPDDR5X ~$3,000–$5,900 depending on vendor Cheap capacity candidate for batch/offline and 70B-class quantised models; ~256 GB/s theoretical bandwidth
+
+The RTX PRO 6000 Max-Q is the multi-GPU density variant: 96 GB, 1,792 GB/s, 300 W, dual-slot, single-fan blower, and designed for up to four GPUs per workstation. It fits the thermal problem that makes dual 5090s difficult, at a price that is lower than the full 600 W Workstation Edition but still material. The DGX Spark is reclassified as a batch/offline appliance. Its measured 70B dense FP8 decode is 2.7–4 tok/s, bounded by 273 GB/s of bandwidth; it is not an interactive engine. It does well on MoE models: GPT-OSS-120B reaches ~31.4 tok/s at concurrency 1 and ~162.7 tok/s at 64 concurrent requests on the Spark in NVFP4. The Strix Halo provides 128 GB of unified LPDDR5X at ~256 GB/s, enough to load quantised 70B models for batch use, at a price below any discrete-GPU capacity option.
+
+3.2 Platform and topology
+
+```
+[Threadripper PRO 9965WX, sTR5]
+│
+├── 8 channels DDR5 RDIMM ECC — 128 GB (8×16 GB), extensible
+│
+├── PCIe 5.0 (128 lanes on WRX90)
+│   ├── Slot 7 (x16 CPU) — GPU 0: primary inference engine
+│   ├── Slot 5 (x16 CPU) — GPU 1 (optional): second independent engine
+│   ├── Slot 6 (x8 CPU)  — secondary card only, never a primary GPU
+│   └── remaining x16 slots — GPU / NVMe / network reserve
+│
+├── M.2_1 (PCIe 5.0 x4, CPU) — system NVMe + model weights
+├── M.2_2 (PCIe 4.0 x4, PCH) — data NVMe + journals + checkpoints
+│
+└── Network
+    ├── 2× 10 GbE (Intel X710) — NAS with snapshot, future compute node
+    └── ASPEED AST2600 BMC — IPMI (out-of-band management)
+```
+
+WRX90 is not plug-and-play. Documented issues include crashes after extended operation, memory modules not recognised by monitoring tools, PCIe bus drops ("GPU has fallen off the bus"), and boot failures after BIOS updates. The IPMI requirement is a recovery mechanism, and the 72-hour platform burn-in of §3.4 is mandatory before any inference benchmark begins.
+
+3.3 Power and thermal
+
+Tier V (two 3090s). Peak draw ≈ 1,080–1,200 W. A 1,200 W ATX 3.1 unit is adequate; 1,400 W is preferred for transient headroom.
+
+Tier R (one 5090). Peak draw ≈ 955–1,075 W. A 1,200 W ATX 3.1 unit with a native 12V-2x6 connector is specified. ATX 3.1 requires the PSU to sustain 200% of rated power for 100 µs (the 1 ms allowance is 180%). This is the transient specification the PSU must meet, not a 200% / 1 ms figure.
+
+Tier C (dual 5090, Mode B). Each 5090 is power-limited to 450 W, not 575 W. Measured testing shows ~5% gaming performance loss at 450 W and ~10% loss at 400 W. A 5% loss is an easy trade for reduced connector current and thermal stress. The benchmark must measure the inference throughput loss at the reference batch sizes; if the loss exceeds 15%, the 450 W cap is reconsidered; if it exceeds 25%, dual-5090 Mode B is rejected.
+
+Mode B electrical limit. Dual 5090s at 450 W plus a 350 W CPU and system overhead draw ~1,450–1,550 W at the wall. A 120 V / 15 A circuit is limited to ~1,440 W continuous, so Mode B requires either a 240 V circuit or a dedicated 20 A circuit. A 1,500 VA UPS is insufficient; the UPS must be sized to the measured peak. The PSU is 2,000 W ATX 3.1, or dual 1,000 W units with two independent 12V-2x6 circuits and no Y-cable.
+
+Thermal acceptance. Dual-GPU load for 30 minutes: GPU 0 and GPU 1 below 83 °C, no clock throttling above 5%, ambient below 25 °C. If the chassis cannot meet these thresholds with the chosen card spacing, Mode B is not mechanically feasible in that chassis.
+
+3.4 Platform burn-in protocol — mandatory before inference benchmarking
+
+Test Protocol Acceptance
+Suspend/resume 20 cycles of suspend-to-RAM and resume No crash, no PCIe device loss, IPMI log clean
+Memory stress memtest86+ or equivalent, minimum 4 full passes Zero errors across all eight channels
+PCIe AER monitoring 24 h idle + 24 h light load, sample once per second No uncorrectable errors, no "GPU has fallen off the bus" events
+ZFS scrub after simulated power loss Hard power cut, reboot, full scrub Zero checksum errors; pool imports cleanly
+Thermal soak 8 h sustained combined CPU/GPU load GPU < 83 °C, throttle < 5%, no shutdown
+
+A node that passes a 24-hour inference run but crashes on the third suspend/resume cycle is not a reliable orchestration node.
+
+3.5 Software execution architecture
+
+The six service layers are retained: orchestrator (durable state in PostgreSQL), bounded task queue (priorities, quotas, deadlines, backpressure — an unbounded queue is prohibited), local inference gateway (OpenAI-compatible, one engine per GPU, gpu_memory_utilization set explicitly), external API gateway (centralised keys, quotas, costs), result registry (sources, model versions, parameters, fact/inference/hypothesis), and observability (Prometheus, Grafana, structured logs).
+
+Mandatory metrics. TTFT p50/p95/p99, TPOT p50/p95/p99, tokens/s per agent, queue rejection rate, KV pool size, preemption rate, VRAM utilisation, system RAM utilisation, Wh per successful task, cost per successful task, error count by category.
+
+Prefix cache isolation. Prefix caching is enabled only for the verified common prefix (system prompt and tool definitions), never for user content. cache_salt must be populated with a distinct tenant- or security-context-specific salt in every chat completion request; vLLM partitions the prefix cache so that only requests carrying the same salt can share cached blocks. A known vulnerability class involves cache salts being dropped during tool continuations, defeating tenant isolation; the gateway must enforce salt presence and pin the vLLM image version to one where the fix is applied.
+
+Engine selection. vLLM and SGLang are both benchmarked on the 40/30/20/10 reference scenario at 20 concurrent agents. SGLang's prefix-cache advantage is workload-shape dependent: it cuts TTFT from 440 ms to 38 ms on multi-turn agent traffic with an 8,000-token system context, but ties vLLM on unique prompts. The selection rule is measured TTFT p95 under the actual workload: SGLang is selected if it reduces TTFT p95 by more than 20% at equal or better task success; vLLM is selected if the gain is below 10% or if model support is the deciding constraint. Between 10% and 20%, vLLM is preferred for operational simplicity.
+
+Quantization. W4A16 (4-bit weight-only) offers the best cost-efficiency for synchronous deployments and is competitive with 8-bit formats on accuracy, with low single-digit degradation on standard benchmarks. FP8 W8A8 is lossless across model scales and is the preferred format where memory permits. NVFP4 is the format of choice for MoE models with native hardware support; GPT-OSS-120B in NVFP4 fits in ~57 GB and decodes at 31.4 tok/s at concurrency 1 on the DGX Spark.
+
+---
+
+4. Technical specifications
+
+4.1 Bill of materials — three tiers
+
+Component Tier V (value) Tier R (reference) Tier C (capacity)
+GPU 2–4× used RTX 3090 24 GB 1× RTX 5090 32 GB RTX PRO 6000 Max-Q 96 GB or 2× RTX 5090 at 450 W or DGX Spark or Strix Halo 128 GB
+CPU 9965WX, 24c, 350 W 9965WX, 24c, 350 W 9965WX, 24c, 350 W
+Motherboard WRX90 WS EVO WRX90 WS EVO WRX90 WS EVO
+RAM 128 GB (8×16 GB RDIMM), extensible 128 GB (8×16 GB RDIMM), extensible 128 GB (8×16 GB RDIMM), extensible
+System storage ZFS mirror 2× 4 TB PCIe 5.0 NVMe ZFS mirror 2× 4 TB PCIe 5.0 NVMe ZFS mirror 2× 4 TB PCIe 5.0 NVMe
+Data storage 4 TB NVMe + 10 GbE NAS 4 TB NVMe + 10 GbE NAS 4 TB NVMe + 10 GbE NAS
+PSU 1,200–1,400 W ATX 3.1 1,200 W ATX 3.1, 12V-2x6 2,000 W ATX 3.1 or dual 1,000 W with independent circuits
+UPS ≥ 1,500 VA, clean shutdown ≥ 1,500 VA, clean shutdown Sized to measured peak, not TDP sum
+
+4.2 Price references (October 2026, reference points, not quotes)
+
+Item Street price Source category
+Used RTX 3090, 24 GB $600–$1,000+ (volatile) Sold listings
+RTX 5090, 32 GB ~$4,000–$5,000 Retail, resale
+RTX PRO 6000 Max-Q, 96 GB ~$8,500–$15,000 (varies by channel; official Workstation Edition is higher) Reseller, marketplace
+DGX Spark, 128 GB ~$6,950 Official store
+Strix Halo mini PC, 128 GB ~$2,999–$5,930 (BOSGAME M5 at $2,999; other vendors higher) Retail, OEM
+DDR5 RDIMM 256 GB kit (8×32 GB, 5600 MT/s) ~$1,450 Retail
+DDR5 RDIMM 256 GB kit (8×32 GB, 7600 MT/s) ~$13,000 Retail
+
+Budget rule. No Tier C component is purchased until Tier V and Tier R have been benchmarked and have failed a specific acceptance threshold. The RTX PRO 6000 Max-Q must not be purchased until the DGX Spark and Strix Halo have been tested on the actual 70B batch workload and found insufficient.
+
+4.3 Energy and TCO
+
+Monthly consumption is computed from measured average draw at the wall, not TDP sums:
+
+E = P_{\text{avg measured}} \times h \times 30
+
+At 0.8 kW average over 8 h/day, ~192 kWh/month. At 1.2 kW continuous, ~864 kWh/month. The monetary cost depends on the applicable tariff and is included in the 12–36 month TCO alongside room cooling and the recurring API budget.
+
+Buy-versus-API rule. The purchase is justified only if the measured local cost per successful task beats the API cost per successful task for the same reference workload over a 24-month horizon:
+
+\text{Local cost per task} = \frac{\text{amortised hardware} + \text{energy} + \text{cooling}}{\text{successful tasks per month}}
+
+\text{API cost per task} = \text{measured API spend} \div \text{successful tasks}
+
+Self-hosted break-even against frontier APIs ranges from ~5M to ~250M tokens per month depending on what is counted, and prompt caching can cut realised API cost by ~88% on cache-heavy agent workloads. The benchmark must produce this number, not assume it.
+
+---
+
+5. Benchmark protocol
+
+The benchmark is executed on rented GPU capacity before any purchase. A week of rental on a 5090-class instance costs a small fraction of the price of a wrong purchase.
+
+5.1 Workload and concurrency
+
+The 40/30/20/10 reference mix, with real SI TEAM tasks. Concurrency 5, 10, 20, and 40 simultaneous logical agents. Active inference requests are recorded separately from agent count. Context 4K, 8K, 32K; a 128K sub-test for the DGX Spark only. Duration: 1 h validation, 8 h sustained, 24 h acceptance.
+
+5.2 Model classes — dense, MoE, hybrid
+
+Class Candidate Why it is tested
+Dense Qwen3-32B at 4-bit Baseline for interactive latency; full-attention KV formula applies
+Sparse MoE GPT-OSS-120B (117B total, 5.1B active) Tests whether active-parameter decoding meets interactive thresholds on one GPU
+Hybrid / long-context A hybrid-attention 27B–35B class model Tests whether a non-standard KV layout changes the capacity calculus; software maturity on sm_120 is a risk to measure
+
+The benchmark records decode tok/s, prefill tok/s, TTFT p95, TPOT p95, and quality on the SI TEAM critical-analysis task for each class.
+
+5.3 Engine comparison
+
+vLLM and SGLang on the same hardware, same model, same workload, 20 agents. Record TTFT p50/p95/p99, TPOT p95, preemption rate, KV pool size, and task success. Apply the selection rule of §3.5.
+
+5.4 KV quality tests
+
+FP16/BF16 vs FP8 needle-in-a-haystack at 4K and 32K on sm_120, using SI TEAM tasks, not synthetic prompts. FP8 is accepted for the generalist engine only if accuracy is within 2 percentage points of BF16 and the reasoning test is not degraded. The critic engine remains BF16 until it passes the same test under FP8.
+
+5.5 Power-cap measurement
+
+Dual 5090 at 575 W vs 450 W, same workload. Record decode tok/s, TTFT p95, TPOT p95, and wall power. The 450 W cap is adopted if the throughput loss is ≤ 15%. If the loss is > 25%, dual-5090 Mode B is rejected.
+
+5.6 Day-in-the-life test
+
+One working day of the actual SI TEAM workload: twenty agents, real documents, real API fallback. Record task completion time, agent idle time, queue wait time, human intervention rate, and cost per successful task. A configuration that meets p95 TPOT but leaves agents waiting in the queue for minutes has failed the orchestration requirement, not the inference requirement.
+
+5.7 Acceptance thresholds
+
+Metric Threshold Action if failed
+Platform burn-in 72 h without crash, PCIe loss, or memory error Do not proceed; diagnose platform
+p95 TPOT (interactive) ≤ 100 ms Reduce batch or context; requalify
+p95 TTFT (interactive) ≤ 2 s Reduce queue depth; enable chunked prefill
+24 h, 20 agents ≥ 99% task success, excluding external API errors Investigate; do not purchase until corrected
+Memory No fatal OOM during 24 h Adjust context, KV precision, or batch ceiling
+Preemption rate Recorded; no unbounded growth under load Tighten batch ceiling or KV budget
+Thermal GPU < 83 °C, throttle < 5% Redesign cooling before purchase
+Power (Mode B) No shutdown, no trip; 450 W cap loss ≤ 15% Upgrade PSU or reject dual-5090 Mode B
+TCO Measured local cost/task ≤ API cost/task over 24 months Do not purchase
+
+5.8 Tooling and reproducibility
+
+A measurement harness injects the 20-agent workload and logs TTFT, TPOT, tokens/s, KV pool size, preemption rate, and cost per task. Image versions are pinned (vLLM, SGLang, CUDA, driver). cache_salt is set per request and verified present in logs. Without this harness the benchmark cannot be reproduced and the purchase cannot be justified.
+
+---
+
+6. Principles and constraints
+
+P1 — Measure before investing. No component is added without a benchmark demonstrating that it lifts an identified bottleneck. This is binding on CPU core count, RAM capacity, the second GPU, KV precision, and the power cap.
+
+P2 — Separate orchestration from inference. The agent scheduler and the inference scheduler are distinct. A GPU, a model, or an API provider can be replaced without rebuilding the architecture.
+
+P3 — Do not confuse cumulative capacity with shared capacity. Two GPUs do not form a double-capacity GPU. Mode B (independent engines) is preferred over tensor parallelism until a gain is measured.
+
+P4 — Bound queues and budgets. Every task has a time, token and spending cap. Every queue is bounded. Backpressure is explicit. An unbounded system saturates RAM or empties an API budget.
+
+P5 — Distinguish fact, inference and hypothesis. The result registry traces every conclusion to its source, model version and parameters. A conclusion is not evidence because an agent copied it into a report.
+
+Non-negotiable constraints.
+
+· No purchase before 72-hour platform burn-in.
+· No dual-5090 Mode B before the 450 W power-cap test.
+· No FP8 KV on the critic engine without a task-specific reasoning test on sm_120.
+· No DGX Spark or Strix Halo in an interactive path.
+· No Tier C component before Tier V and Tier R have failed a specific threshold.
+· cache_salt is mandatory on every request; prefix caching is never shared across confidential content.
+· Backups are validated by a real restore, not by the existence of a backup job.
+· Mode B requires a 240 V or dedicated 20 A circuit; a 1,500 VA UPS is insufficient.
+
+---
+
+7. Status and next revision
+
+This document fixes the reference architecture, the mathematical sizing plan, the three candidate tiers, and the expanded benchmark protocol. It does not fix the definitive GPU choice, the definitive engine, the definitive KV precision, the definitive model class, or the final budget — decisions that belong to measurement and vendor quotes.
+
+The next revision must integrate:
+
+1. The 72-hour platform burn-in results on the selected WRX90 board.
+2. The measured TTFT p95 comparison between vLLM and SGLang at 20 agents.
+3. The measured throughput cost of the 450 W Mode B power cap.
+4. The measured decode and quality of dense 32B, GPT-OSS-120B MoE, and a hybrid-attention model on the 5090.
+5. The measured DGX Spark and Strix Halo decode rates on the actual 70B batch workload.
+6. The day-in-the-life task-completion metrics and the local-vs-API cost per successful task.
+7. Written vendor quotes with exact references, warranty terms including cable coverage, and delivery dates.
+
+Until these seven elements are assembled, this blueprint remains an architecture of reference, not a purchase order. That discipline is what distinguishes an engineering dossier from a component list.
+
+Appendices
+
+Architecture and technical specification detail supporting the SI TEAM blueprint
+28 October 2026
+
+---
+
+Appendix A — Platform topology and PCIe lane allocation
+
+The WRX90 WS EVO exposes seven physical PCIe 5.0 x16 slots, but only one is wired at x8. The remaining six are full x16 from the CPU. This asymmetry determines which slots may host a primary inference engine.
+
+Slot Wiring Source Permitted use Prohibited use
+Slot 7 PCIe 5.0 x16 CPU Primary GPU (GPU 0) —
+Slot 5 PCIe 5.0 x16 CPU Secondary GPU (GPU 1, Mode B) —
+Slot 4 PCIe 5.0 x16 CPU GPU reserve / high-speed NIC —
+Slot 3 PCIe 5.0 x16 CPU GPU reserve / NVMe HBA —
+Slot 2 PCIe 5.0 x16 CPU Future expansion —
+Slot 1 PCIe 5.0 x16 CPU Future expansion —
+Slot 6 PCIe 5.0 x16 physical, x8 electrical CPU Secondary x8 card only Primary GPU — never
+
+The board also provides two MCIO connectors (PCIe 5.0 x4 or 4× SATA) and one SlimSAS SFF-8654 connector (PCIe 4.0 x4 or 4× SATA) for storage expansion. The MCIO and SlimSAS lane assignments must be checked against the lane-sharing matrix before populating any PCIe slot beyond Slots 7 and 5; a populated MCIO connector can disable or bifurcate an adjacent PCIe slot depending on the board revision.
+
+Two further platform constraints are non-negotiable. First, the board supports only DDR5 RDIMM ECC; UDIMM modules are physically incompatible with the slot keying and will not POST. Second, the board requires the 2×6-pin GFX_12V1 or GFX_12V2 PCIe power connector to be populated in addition to the 24-pin ATX and the 2×8-pin CPU power connectors; omitting it leaves the PCIe slots without auxiliary rail capacity.
+
+For Mode B, the recommendation is one GPU in Slot 7 and one in Slot 5. This places both cards on independent CPU root ports and avoids the x8 electrical limit of Slot 6. If a third GPU is later added for a dedicated batch engine, Slot 4 is the next full-x16 slot; Slot 6 should be reserved for a NIC or HBA.
+
+---
+
+Appendix B — Memory subsystem and population rules
+
+The Threadripper PRO 9965WX exposes an 8-channel DDR5 memory interface, one DIMM per channel, with a maximum of 8 RDIMMs per processor. Populating fewer than eight channels degrades aggregate bandwidth proportionally; populating more than one DIMM per channel is not supported on WRX90.
+
+Population Capacity with 16 GB modules Capacity with 32 GB modules Bandwidth efficiency
+4 DIMMs (one per channel pair) 64 GB 128 GB ~50–60% of peak
+8 DIMMs (one per channel) 128 GB 256 GB ~100% of peak
+
+The staged build populates 8×16 GB RDIMM at 5600 MT/s, delivering 128 GB across all eight channels. This satisfies the dual requirement of full channel population and bounded capital outlay. The board supports speeds up to 6400 MT/s with validated RDIMM kits; running at 5600 MT/s is a stability margin, not a platform limit.
+
+Memory capacity is not the binding constraint for the orchestrator. The binding constraint is VRAM. The 128 GB stage covers PostgreSQL, Prometheus, the corpus cache, the result registry, and twenty agent-state records with headroom; expansion to 256 GB follows only if measurement shows system RAM utilisation above 80% during the 24-hour acceptance run.
+
+---
+
+Appendix C — GPU power delivery and connector design
+
+C.1 Transient behaviour of the RTX 5090
+
+The RTX 5090 carries a 575 W sustained TDP, but its transient profile is the design driver, not the sustained figure. Independent measurement records excursions of 627.5 W for 10–20 ms, 738.2 W for 5–10 ms, 823.6 W for 1–5 ms, and 901.1 W for under 1 ms. The 12V-2x6 connector's continuous rating is 600 W; the card is therefore operating at the connector's continuous limit while producing transients 50% above it.
+
+C.2 ATX 3.1 transient specification
+
+ATX 3.1 requires the PSU to sustain 200% of rated power for 100 µs and 180% for 1 ms. A 1,200 W ATX 3.1 unit therefore tolerates a 2,400 W excursion for 100 µs and a 2,160 W excursion for 1 ms. A single 5090's 901 W sub-millisecond spike is well inside that envelope. Two 5090s spiking simultaneously produce approximately 1,800 W, which is 150% of a 1,200 W unit's rating — still within the 1 ms allowance but with less margin. A 2,000 W ATX 3.1 unit for Mode B is sized to keep the simultaneous spike below 100% of nominal.
+
+C.3 Connector current distribution
+
+The 12V-2x6 connector uses 12 power pins (6 pairs of 12V wires) and 4 signal pins for current monitoring and temperature feedback. At 600 W and 12 V, the aggregate current is 50 A, or approximately 8.3 A per pin if perfectly balanced. Uneven contact resistance across pins is the documented failure mechanism in melting cases; the connector's per-pin current is not the problem, the distribution is.
+
+Power-limiting each Mode B 5090 to 450 W reduces aggregate current to 37.5 A and per-pin current to approximately 6.25 A under balanced load. This is a 25% reduction in connector stress at a measured performance cost of ~5%. The 450 W cap is therefore the default Mode B configuration, not an optional experiment.
+
+C.4 Mode A vs Mode B PSU specification
+
+Mode GPU configuration PSU specification Rationale
+A 1× 5090 at 575 W 1,200 W ATX 3.1, native 12V-2x6 Peak system draw ~955–1,075 W; 1,200 W provides 10–20% transient margin
+B 2× 5090 at 450 W each 2,000 W ATX 3.1, two independent 12V-2x6 circuits Peak system draw ~1,450–1,550 W; 2,000 W keeps simultaneous spikes below nominal
+B (alternative) 2× 5090 at 450 W Dual 1,000 W PSUs, two distinct 12V-2x6 circuits, no Y-cable Permitted only if each PSU is loaded below 85% at combined peak; a Y-cable defeats the purpose
+
+A 1,200 W Mode A unit cannot serve Mode B. If Mode B is a realistic near-term target, the 2,000 W unit should be specified at build time to avoid a post-hoc PSU swap.
+
+---
+
+Appendix D — Thermal design and dual-GPU chassis requirements
+
+Two RTX 5090s at 575 W each dissipate 1,150 W into the chassis volume. The thermal failure mode is not gradual; it is throttling within the first hour of sustained inference.
+
+Measured data from a production dual-5090 air-cooled workstation: both GPUs consistently hit 80–83 °C under sustained load, fans ramped to 2,800 RPM, and boost clocks sagged from 2,407 MHz to 2,200 MHz, a ~200 MHz reduction that produced inconsistent, asymmetric throttling between the two cards. A custom water loop reduced load temperatures to 52–55 °C, recovered 3–5% boost clock, and cut noise from 48 dB to 29 dB.
+
+The SI TEAM thermal acceptance protocol is calibrated to this evidence:
+
+Parameter Threshold Action if exceeded
+GPU 0 / GPU 1 temperature under 30 min dual load < 83 °C Redesign airflow or adopt water cooling
+Clock throttling < 5% Verify boost clock retention against rated spec
+Ambient room temperature < 25 °C Facility cooling insufficient for the node
+Thermal soak (8 h combined CPU/GPU) No shutdown, no throttle > 5% Chassis or cooling inadequate for Mode B
+
+The 83 °C threshold is the air-cooling boundary, not the silicon limit. NVIDIA has raised the edge-throttle threshold on the 5090 to approximately 90 °C, but operating at the edge of the throttle curve produces the asymmetric behaviour that makes multi-GPU inference unpredictable. The 83 °C acceptance threshold preserves a 7 °C margin to the hardware limit.
+
+Chassis requirement for Mode B. The chassis must accept two 3–4-slot cards with at least one free slot of spacing between them, and must provide direct airflow to the intake fans of the lower card. Cards mounted 10–15 mm above the chassis floor starve their intake fans and overheat regardless of case fan count. A full-tower chassis with a ventilated floor and a front-to-back airflow path is the minimum; a water-cooled configuration is the only measured path to sustained sub-60 °C operation.
+
+---
+
+Appendix E — KV cache sizing calculations and model-specific parameters
+
+E.1 Closed-form KV formula
+
+The KV cache per token is:
+
+m_{\text{KV per token}} = 2 \cdot L \cdot H_{kv} \cdot d \cdot \frac{b_{kv}}{8 \times 10^9} \text{ GB}
+
+For a Qwen3-32B-class dense model with 64 layers, 8 KV heads, head dimension 128:
+
+· FP16 KV: $2 \times 64 \times 8 \times 128 \times 2 = 262{,}144$ bytes = 256 KiB per token.
+· FP8 KV: 128 KiB per token.
+· 4K context, batch 1, FP16: 1 GB.
+· 32K context, batch 1, FP16: 8 GB.
+· 128K context, batch 1, FP16: 32 GB.
+
+At gpu_memory_utilization=0.90 on a 32 GB card, the engine is permitted 28.8 GB. After 17–18 GB of 4-bit weights and 1–2 GB of framework and activation overhead, approximately 9–10 GB remains for KV. That budget supports:
+
+Context length Batch at FP16 KV Batch at FP8 KV
+4K ~8–10 ~16–20
+8K ~4–5 ~8–10
+32K ~1 ~2–3
+
+These are theoretical ceilings. In practice, vLLM's paged KV allocator, block fragmentation, and preemption behaviour reduce the usable batch. The benchmark must record KV pool size and preemption rate as measured values, not infer them from the formula.
+
+E.2 Active-parameter KV for sparse MoE
+
+GPT-OSS-120B has 117B total parameters, 36 layers, 128 experts, 4 active experts per token, and ~5.1B active parameters. Its KV cache is computed from the layer count and KV head configuration of the attention stack, not from the expert count. The active-parameter advantage applies to weight reads per token, not to KV capacity. A 120B MoE therefore has a KV footprint comparable to a dense model of similar layer count and head dimension, while decoding faster because it reads only ~5.1B active parameters' worth of expert weights per step.
+
+E.3 KV precision decision matrix
+
+Engine role Precision Precondition Fallback
+Critic / reasoning BF16 Passes SI TEAM reasoning test at FP8 on sm_120 within 2 pp of BF16 Remain BF16; reduce batch or context instead
+Generalist (> 8K) FP8 Passes 4K and 32K needle tests on sm_120 Reduce context to 8K or offload long tasks to batch
+Batch documentary FP8 Human review before registry ingestion Q4 only as an experiment with measured 40–52% throughput cost
+
+TurboQuant and other aggressive KV quantization methods are not production levers. The measured throughput cost of 4-bit KV is 40–52%, and lower KV storage cost does not translate into faster serving. FP8 is the default; BF16 is the critic safeguard.
+
+---
+
+Appendix F — Inference engine configuration parameters
+
+F.1 vLLM parameters for the SI TEAM gateway
+
+Parameter Value Rationale
+gpu_memory_utilization 0.90 (explicit) Leaves 10% for CUDA context and framework; higher values risk OOM under fragmentation
+enable_prefix_caching True Shared system prompt and tool definitions across 20 agents
+cache_salt Mandatory per request Partitions prefix cache by tenant or security context
+max_num_seqs Measured, not default Set to the measured KV-capacity batch ceiling, not the library default
+max_model_len 32,768 for generalist; 8,192 for critic Prevents a single 128K request from monopolising the KV pool
+enable_chunked_prefill True Prevents long prefill from blocking decode of in-flight requests
+kv_cache_dtype fp8 (generalist), auto (critic = BF16) Per Appendix E.3
+swap_space 0 or minimal CPU swap for KV is a latency cliff; bound the queue instead
+
+cache_salt mechanics. The salt is injected into the hash of the first KV block, so only requests carrying the same salt can reuse cached blocks. The gateway must populate cache_salt with a distinct value per tenant or per security context, not a global constant. A known failure mode involves the salt being dropped on the pooling path when chunked preprocessing is enabled; the gateway must verify salt presence in logs and pin the vLLM image to a version where the fix is applied.
+
+Chunked prefill interaction. In some vLLM versions, enable_chunked_prefill conflicts with enable_prefix_caching, and the server silently falls back to non-cached mode. The benchmark must verify that prefix caching remains active when chunked prefill is enabled; a silent fallback invalidates the TTFT comparison between engines.
+
+F.2 SGLang parameters
+
+SGLang uses RadixAttention for prefix caching and does not expose cache_salt in the same form. For the SI TEAM deployment, SGLang is a benchmark candidate only, not the default engine, because the tenant-isolation mechanism is less directly controlled. If SGLang wins the TTFT comparison by more than 20%, the gateway must implement prefix isolation at the routing layer — separate engine instances per security context — rather than relying on a salt parameter.
+
+F.3 Engine selection rule
+
+Measured TTFT p95 improvement (SGLang vs vLLM at 20 agents) Selection
+> 20% and task success equal or better SGLang
+10–20% vLLM (operational simplicity)
+< 10% or task success worse vLLM
+
+The rule is evaluated on the 70B-class and 120B-class models, not on an 8B proxy. The published 29% advantage of SGLang over vLLM narrows to single digits at 70B FP8; the threshold reflects that scale.
+
+---
+
+Appendix G — Model class specifications for the benchmark matrix
+
+Class Candidate Total params Active params Layers Attention Quantization VRAM footprint
+Dense Qwen3-32B 32.8B 32.8B 64 GQA, 8 KV heads, dim 128 4-bit W4A16 ~17–18 GB
+Sparse MoE GPT-OSS-120B 117B 5.1B 36 Alternating sliding-window / full attention Native MXFP4 ~57–64 GB
+Hybrid / long-context Hybrid-attention 27B–35B class ~27–35B ~27–35B Varies Hybrid KV layout Model-dependent Measured
+
+GPT-OSS-120B is the critical MoE candidate. Its native MXFP4 quantization means the MoE weights are trained at 4-bit precision, not post-hoc quantized; this preserves quality better than post-training 4-bit weight-only quantization of a dense model. Its 5.1B active parameters per forward pass mean that decode bandwidth is governed by ~3–4 GB of active expert weights, not the full 57–64 GB on-disk footprint. On hardware with 32 GB of VRAM, expert offloading to system RAM is required; the decode rate depends on the PCIe and system-memory bandwidth available for offloaded experts.
+
+The hybrid-attention model is a risk probe, not a recommendation. Hybrid KV layouts (sliding-window plus full attention, or linear-attention layers interleaved with standard attention) do not obey the standard KV formula in Appendix E.1. Community reports of 35B-A3B hybrid models running 256K context on a single 5090 are anecdotal and unverified; the benchmark must measure whether stock vLLM or SGLang can execute the model's KV layout on sm_120 at all. If the software stack cannot run it, the class is excluded regardless of its theoretical capacity.
+
+---
+
+Appendix H — Storage and data residency architecture
+
+Data class Residence Sensitivity Protection Restore test
+Model weights ZFS mirror, 2× 4 TB PCIe 5.0 NVMe Public Re-download or reinstall Not required (public artefact)
+Active KV cache GPU VRAM Ephemeral None Not applicable
+Agent state RAM + PostgreSQL on data NVMe Internal Encrypted at rest; daily snapshot Monthly
+Corpus Data NVMe (4 TB) + 10 GbE NAS Variable ZFS snapshots; versioning Monthly
+Execution logs Data NVMe + Prometheus Internal (no raw prompts) Encrypted at rest; task IDs, metrics, fingerprints only Monthly
+API keys HashiCorp Vault or equivalent Critical Encrypted, offline backup Quarterly
+Results and provenance Research repository Internal Versioned; monthly restore test Monthly
+
+The ZFS mirror uses two identical PCIe 5.0 NVMe drives with DRAM cache. DRAM-less drives are excluded from the system mirror because their write amplification and latency variance under sustained checkpointing are unacceptable for a PostgreSQL journal and model-weight volume. The data volume is a separate 4 TB NVMe drive plus the 10 GbE NAS; separating system and data volumes allows the system mirror to be rebuilt without touching the corpus.
+
+Execution logs must not contain complete user prompts. Log entries carry the task identifier, model version, execution parameters, TTFT, TPOT, token count, and a content fingerprint (SHA-256 of the prompt), but not the prompt text. The fingerprint supports reproducibility and provenance without creating a second copy of confidential content.
+
+---
+
+Appendix I — Observability schema and mandatory metrics
+
+The following metrics are mandatory. A benchmark run that does not record all of them is not reproducible and cannot justify a purchase.
+
+Metric Type Source Purpose
+ttft_p50/p95/p99_ms Histogram Gateway Interactive latency acceptance
+tpot_p50/p95/p99_ms Histogram Gateway Per-token decode latency
+tokens_per_second_per_agent Gauge Gateway Throughput attribution
+queue_rejection_rate Counter Scheduler Backpressure evidence
+kv_pool_used_bytes / kv_pool_total_bytes Gauge Engine metrics KV pressure
+preemption_rate Counter Engine metrics Leading indicator of KV exhaustion
+vram_used_bytes / vram_total_bytes Gauge NVML Memory headroom
+system_ram_used_bytes Gauge Node exporter Offload pressure for MoE
+wh_per_successful_task Gauge PSU telemetry or wall meter TCO input
+cost_per_successful_task Gauge Gateway + API billing Buy-versus-API rule
+error_count_by_category Counter Gateway Station-side vs API-side separation
+gpu_core_temp_c / gpu_hotspot_temp_c Gauge NVML Thermal acceptance
+gpu_throttle_reason Gauge NVML Throttle detection
+pcie_aer_uncorrectable_errors Counter dmesg / AER Platform burn-in evidence
+zfs_checksum_errors Counter zpool status Storage integrity
+
+Structured logging fields. Every inference request log entry includes: request_id, agent_id, model_id, model_hash, quantization, kv_dtype, context_tokens, batch_size_at_admission, cache_salt_present, ttft_ms, tpot_ms, tokens_out, preempted (boolean), error_category (nullable), cost_estimate.
+
+The cache_salt_present field is not optional. If the salt is absent from a request that should carry it, the gateway must reject the request rather than risk a cross-tenant prefix-cache hit.
+
+---
+
+Appendix J — Benchmark execution sequence
+
+The benchmark is executed in strict order. A failure at any stage stops the sequence; later stages are not run on a failed platform.
+
+Stage Duration Pass criterion If fail
+1. Platform burn-in 72 h Appendix D thermal + AER + memory + ZFS scrub Diagnose platform; do not proceed
+2. Single-GPU baseline 8 h 32B dense at 32K, batch 1–4, no OOM Reduce context or KV precision; requalify
+3. KV quality 4 h FP8 within 2 pp of BF16 on SI TEAM reasoning task Critic engine stays BF16; generalist may still use FP8 if retrieval passes
+4. Engine comparison 8 h vLLM vs SGLang TTFT p95 at 20 agents Apply Appendix F.3 rule
+5. MoE track 8 h GPT-OSS-120B decode ≥ 30 tok/s at batch 1 MoE is batch-only; dense 32B remains interactive engine
+6. Power-cap test 4 h 450 W inference loss ≤ 15% vs 575 W Reject dual-5090 Mode B if > 25%; 15–25% is conditional
+7. Day-in-the-life 8 h (one working day) Task completion, queue wait, human intervention recorded If queue wait dominates, the architecture fails the orchestration requirement
+8. TCO computation 1 h Local cost/task ≤ API cost/task over 24 months Do not purchase; remain on API
+
+Stage 1 is the gate. A node that passes stages 2–8 but fails stage 1 is not a reliable orchestration node, and its inference numbers are not evidence for a purchase.
+
+---
+
+Appendix K — Design decision record
+
+Decision Alternatives considered Selected Binding evidence Reversal condition
+Platform WRX90 vs. consumer X870E vs. server SP5 WRX90 128 PCIe 5.0 lanes, 8-channel RDIMM, IPMI None; consumer platform cannot host two x16 GPUs and 8-channel ECC
+CPU 9965WX (24c) vs. 64/96-core 9965WX Orchestrator is VRAM/bandwidth-bound, not core-bound Benchmark shows CPU saturation > 80% under 20 agents
+RAM stage 128 GB vs. 256 GB at build 128 GB (8×16 GB) 256 GB RDIMM pricing volatile; 8 channels populated either way System RAM > 80% during 24 h acceptance
+GPU 0 RTX 5090 vs. used 3090 vs. PRO 6000 RTX 5090 1,792 GB/s bandwidth; 32 GB fits 32B 4-bit with FP8 KV 3090 Tier V meets interactive thresholds at lower cost
+Mode B power 575 W vs. 450 W per card 450 W ~5% performance loss; 25% connector-current reduction Inference loss > 15% at 450 W
+PSU Mode B 1,200 W vs. 1,600 W vs. 2,000 W 2,000 W Simultaneous 5090 spikes ~1,800 W; 1,600 W leaves no transient margin None; a smaller unit trips under dual transient
+KV precision (critic) BF16 vs. FP8 BF16 until tested Hopper FP8 collapse was architecture-specific; sm_120 untested Critic passes FP8 reasoning test within 2 pp
+KV precision (generalist) FP8 vs. TurboQuant FP8 TurboQuant costs 40–52% throughput Measured FP8 retrieval failure on sm_120
+Engine vLLM vs. SGLang Measured at 70B+ 29% advantage at 8B collapses to single digits at 70B SGLang TTFT p95 > 20% better at 20 agents
+Model class Dense only vs. dense + MoE Both benchmarked GPT-OSS-120B active 5.1B changes decode economics MoE decode < 30 tok/s at batch 1
+DGX Spark role Interactive vs. batch Batch only Measured 2.7–4 tok/s for 70B dense FP8 None; bandwidth ceiling is 273 GB/s
+
+The decision record is the audit trail. Each row states what was decided, what was rejected, the evidence that drove the decision, and the measured condition that would reverse it. A purchase order that does not cite a row in this table is not justified by the blueprint.
+
+ASCII Diagrams
+
+Architecture and technical specification figures supporting the appendices. All diagrams are drawn in monospace ASCII; they are intended to be read inside a code block.
+
+---
+
+Figure A-1 — Node topology (logical)
+
+```
++===============================================================================+
+|                     SI TEAM COMPUTE NODE  ·  single host                      |
++===============================================================================+
+|                                                                               |
+|   +-----------------------------------------------------------------------+   |
+|   |  CPU   AMD Threadripper PRO 9965WX                                    |   |
+|   |        24 cores / 48 threads / 350 W TDP / sTR5 / 128 PCIe 5.0 lanes  |   |
+|   +-----------------------------------------------------------------------+   |
+|        |              |               |               |              |         |
+|        |              |               |               |              |         |
+|   +----v-----+  +-----v-----+   +-----v-----+   +-----v-----+  +-----v----+   |
+|   | DDR5 CH  |  | DDR5 CH   |   |  SLOT 7   |   |  SLOT 5   |  |  M.2_1   |   |
+|   | A B C D  |  | E F G H   |   | x16 CPU   |   | x16 CPU   |  | x4 CPU   |   |
+|   | 4x16 GB  |  | 4x16 GB   |   +-----------+   +-----------+  +----------+   |
+|   +----------+  +-----------+         |               |              |         |
+|     64 GB          64 GB        +-----v-----+   +-----v-----+  +-----v----+   |
+|     RDIMM ECC      RDIMM ECC    |  GPU 0    |   |  GPU 1    |  | SYSTEM   |   |
+|                                 |  RTX 5090 |   |  RTX 5090 |  | NVMe     |   |
+|       128 GB total,             |  32 GB    |   |  (opt.)   |  | ZFS      |   |
+|       8 channels, 100% BW       |  575 W    |   |  450 W    |  | MIRROR   |   |
+|                                 +-----------+   +-----------+  +----------+   |
+|                                                                               |
+|   +-----------------------------------------------------------------------+   |
+|   |  PCH   ·   BMC AST2600 (IPMI)   ·   2x 10 GbE Intel X710   ·   M.2_2   |   |
+|   +-----------------------------------------------------------------------+   |
++===============================================================================+
+```
+
+---
+
+Figure A-2 — PCIe slot map and electrical widths
+
+```
+                    REAR OF CHASSIS   (slot numbering left to right)
+
+   +------+------+------+------+------+------+------+
+   |  1   |  2   |  3   |  4   |  5   |  6   |  7   |
+   | x16  | x16  | x16  | x16  | x16  | x8*  | x16  |
+   | CPU  | CPU  | CPU  | CPU  | CPU  | CPU  | CPU  |
+   +------+------+------+------+------+------+------+
+      ^      ^      ^      ^      ^      ^      ^
+      |      |      |      |      |      |      |
+   future future  NVMe   GPU    GPU 1  x8 ONLY GPU 0
+    res.   res.   HBA    res.  (Mode B) secondary PRIMARY
+                                          card
+   * Slot 6 is x16 PHYSICAL but x8 ELECTRICAL.
+     Permitted: NIC, HBA, secondary accelerator.
+     PROHIBITED: any primary inference GPU.
+```
+
+---
+
+Figure A-3 — Memory channel population and anti-pattern
+
+```
+8-CHANNEL DDR5 RDIMM POPULATION  (Threadripper PRO 9965WX)
+
+  ch A    ch B    ch C    ch D    ch E    ch F    ch G    ch H
+  [16G]   [16G]   [16G]   [16G]   [16G]   [16G]   [16G]   [16G]
+    |       |       |       |       |       |       |       |
+    +-------+-------+-------+-------+-------+-------+-------+
+                                |
+                        128 GB total
+                        ~100% of peak bandwidth
+                        upgrade = swap modules, not add them
+
+
+  ANTI-PATTERN  (do not build this)
+
+  [32G]   [ -- ]  [32G]   [ -- ]  [32G]   [ -- ]  [32G]   [ -- ]
+     4 DIMMS  ->  50-60% of peak bandwidth
+                  and any later upgrade forces a FULL re-population
+                  instead of an addition.
+```
+
+---
+
+Figure B-1 — VRAM budget on a 32 GB card
+
+```
+VRAM BUDGET  ·  RTX 5090 32 GB  ·  gpu_memory_utilization = 0.90
+
+ 0 GB          8            16            24            32 GB
+ +-------------+-------------+-------------+-------------+------+
+ |<-- 17-18 GB model weights -->|<2 GB>|<-- 9-10 GB -->| 3.2  |
+ |   4-bit dense 32B            |activ |   KV POOL     | res. |
+ |                              |      |               | (10%)|
+ +-------------+-------------+-------------+-------------+------+
+                                ^             ^
+                                |             |
+                     framework + activations   the ONLY variable
+                                               the benchmark tunes
+
+  If KV pool is exhausted  ->  preemption  ->  TPOT tail blows out
+  The acceptance metric is PREEMPTION RATE, not a Little's-law average.
+```
+
+---
+
+Figure C-1 — KV pool capacity grid
+
+```
+KV POOL CAPACITY  ·  9-10 GB budget  ·  Qwen3-32B-class (64L, 8 KVH, d=128)
+  cells = maximum concurrent requests
+
+                          BATCH SIZE
+                1     2     4     8    16    32
+            +-----+-----+-----+-----+-----+-----+
+   4K FP16  |  10 |   5 |   2 |   1 |   - |   - |
+   4K FP8   |  20 |  10 |   5 |   2 |   1 |   - |
+            +-----+-----+-----+-----+-----+-----+
+   8K FP16  |   5 |   2 |   1 |   - |   - |   - |
+   8K FP8   |  10 |   5 |   2 |   1 |   - |   - |
+            +-----+-----+-----+-----+-----+-----+
+  32K FP16  |   1 |   - |   - |   - |   - |   - |
+  32K FP8   |   2 |   1 |   - |   - |   - |   - |
+            +-----+-----+-----+-----+-----+-----+
+ 128K FP16  |   - |   - |   - |   - |   - |   - |
+ 128K FP8   |   - |   - |   - |   - |   - |   - |
+            +-----+-----+-----+-----+-----+-----+
+
+  " - " = does not fit without offload, preemption, or a second engine.
+  Measured values supersede this table once the benchmark runs.
+```
+
+---
+
+Figure C-2 — Prefix cache partitioning by cache_salt
+
+```
+PREFIX CACHE ISOLATION
+
+  request A   salt = "tenant-alpha"   system prompt + tools
+  request B   salt = "tenant-alpha"   same prefix
+
+       hash(first_block, "tenant-alpha")  =  H_alpha
+       A -> partition H_alpha   MISS  (populates)
+       B -> partition H_alpha   HIT   (reuses)
+
+  request C   salt = "tenant-beta"    same prefix TEXT
+  request D   salt = "tenant-beta"    same prefix
+
+       hash(first_block, "tenant-beta")   =  H_beta
+       C -> partition H_beta    MISS  (populates)
+       D -> partition H_beta    HIT   (reuses)
+
+  +----------------+   +----------------+
+  |  H_alpha       |   |  H_beta        |   <- separate partitions
+  |  blocks A1..A5 |   |  blocks C1..C5 |      no cross-tenant reuse
+  +----------------+   +----------------+
+
+  GATEWAY RULE:  reject any request with a missing or empty cache_salt.
+                 verify cache_salt_present in the structured log.
+```
+
+---
+
+Figure D-1 — Thermal airflow, chassis side view
+
+```
+SIDE VIEW  ·  front intake at left, rear exhaust at right
+
+  front                                                          rear
+  intake                                                       exhaust
+    ||                                                           ||
+    ||   +---------------------+     +---------------------+     ||
+    ||   |      GPU 0          |     |                     |     ||
+    ||-->|  575 W  ·  3-4 slot |---->|                     |---->||
+    ||   |  fans face front    |     |                     |     ||
+    ||   +---------------------+     |    open volume      |     ||
+    ||                               |                     |     ||
+    ||        >>> GAP >= 1 SLOT >>>  |    for rear         |     ||
+    ||                               |    exhaust fans     |     ||
+    ||   +---------------------+     |                     |     ||
+    ||-->|      GPU 1          |---->|                     |---->||
+    ||   |  575 W  ·  3-4 slot |     |                     |     ||
+    ||   |  fans face front    |     +---------------------+     ||
+    ||   +---------------------+                                 ||
+    ||                                                           ||
+    ||   FLOOR MUST BE VENTED — cards 10-15 mm off a solid       ||
+    ||   floor starve their intake fans regardless of case fans. ||
+```
+
+---
+
+Figure D-2 — Thermal acceptance envelope
+
+```
+GPU TEMPERATURE ENVELOPE  (dual load, 30 min sustained)
+
+   95 C  |=========================================|  silicon limit
+   90 C  |-----------------------------------------|  edge throttle (5090)
+   83 C  |========================== ACCEPTANCE ===|  <-- SI TEAM threshold
+   80 C  |*********** air-cooled measured **********|
+   60 C  |----- water-cooled measured -------------|
+   55 C  |----- water-cooled measured -------------|
+         +-----------------------------------------
+
+  Air-cooled dual 5090 measured: 80-83 C, boost sag 2,407 -> 2,200 MHz,
+  asymmetric throttling between cards, 48 dB.
+  Water-cooled: 52-55 C, boost recovered 3-5%, 29 dB.
+
+  Acceptance: < 83 C, throttle < 5%, ambient < 25 C.
+```
+
+---
+
+Figure E-1 — Power delivery, Mode A
+
+```
+MODE A  ·  single GPU  ·  120 V / 15 A circuit is sufficient
+
+  wall
+    |
+    v
+  +-------------+        +------------------+        +----------------+
+  |  1,200 W    |------->| 12V-2x6 NATIVE   |------->|  RTX 5090      |
+  |  ATX 3.1    |        | 600 W connector  |        | 575 W TDP      |
+  |  80+ Gold   |        | rating           |        | 901 W / <1 ms  |
+  +-------------+        +------------------+        +----------------+
+    |      |
+    |      +-----> CPU  280-350 W
+    |      +-----> RAM / NVMe / fans  100-150 W
+    |
+  system peak ~955-1,075 W  =  80-90% of nominal
+
+  ATX 3.1 excursion envelope of a 1,200 W unit:
+      200% for 100 us  =  2,400 W
+      180% for   1 ms  =  2,160 W
+  A single 5090 sub-millisecond spike (901 W) is well inside the envelope.
+```
+
+---
+
+Figure E-2 — Power delivery, Mode B
+
+```
+MODE B  ·  dual GPU power-limited to 450 W each
+
+  wall  ·  240 V / 20 A dedicated  (or 120 V / 20 A dedicated)
+    |
+    v
+  +-------------+      +-----------------------+      +----------------+
+  |  2,000 W    |----->| 12V-2x6 CIRCUIT  A    |----->|  RTX 5090  #0  |
+  |  ATX 3.1    |      | 450 W limit applied   |      |  450 W cap     |
+  |             |      +-----------------------+      +----------------+
+  |             |
+  |             |      +-----------------------+      +----------------+
+  |             |----->| 12V-2x6 CIRCUIT  B    |----->|  RTX 5090  #1  |
+  +-------------+      | 450 W limit applied   |      |  450 W cap     |
+                       +-----------------------+      +----------------+
+    |      |
+    |      +-----> CPU  280-350 W
+    |      +-----> RAM / NVMe / fans  100-150 W
+    |
+  system peak ~1,450-1,550 W  =  73-78% of nominal
+
+  NO Y-CABLE. Each 12V-2x6 must land on its own circuit.
+  A Y-cable defeats the entire reason for two circuits.
+```
+
+---
+
+Figure E-3 — Branch-circuit check for Mode B
+
+```
+BRANCH CIRCUIT CAPACITY  (continuous load = 80% of breaker)
+
+  120 V / 15 A   ->  120 * 15 * 0.80  =  1,440 W   INSUFFICIENT  (1,550 W peak)
+  120 V / 20 A   ->  120 * 20 * 0.80  =  1,920 W   MARGINAL
+  240 V / 20 A   ->  240 * 20 * 0.80  =  3,840 W   ADEQUATE
+  240 V / 30 A   ->  240 * 30 * 0.80  =  5,760 W   HEADROOM
+
+  UPS must be sized to the MEASURED peak, not the TDP sum.
+  A 1,500 VA unit does not cover 1,550 W.
+```
+
+---
+
+Figure F-1 — Software service layers
+
+```
++-----------------------------------------------------------------------------+
+| L6  OBSERVABILITY      Prometheus / Grafana / structured logs               |
++-----------------------------------------------------------------------------+
+| L5  RESULT REGISTRY    sources / model hash / params / fact|inference|hyp   |
++-----------------------------------------------------------------------------+
+| L4  API GATEWAY        providers / quotas / deadlines / cost / key vault    |
++-----------------------------------------------------------------------------+
+| L3  LOCAL INFERENCE    vLLM  or  SGLang       ONE ENGINE PER GPU           |
+|     GATEWAY            OpenAI-compatible      cache_salt enforced          |
+|                                               gpu_memory_utilization = .90 |
++-----------------------------------------------------------------------------+
+| L2  BOUNDED QUEUE      priorities / per-agent quotas / deadlines            |
+|     + SCHEDULER        backpressure            NO UNBOUNDED QUEUE          |
++-----------------------------------------------------------------------------+
+| L1  ORCHESTRATOR       task graph / agent dependencies / resume             |
+|                        durable state in PostgreSQL                          |
++-----------------------------------------------------------------------------+
+
+  L1 and L3 are SEPARATE schedulers. Replacing a GPU, a model, or an API
+  provider must not require rebuilding the orchestrator.
+```
+
+---
+
+Figure F-2 — Request lifecycle
+
+```
+ AGENT      ORCHESTRATOR    BOUNDED Q      GATEWAY        ENGINE       REGISTRY
+   |              |             |             |              |             |
+   |--submit----->|             |             |              |             |
+   |              |--admit----->|             |              |             |
+   |              |             |--dispatch-->|              |             |
+   |              |             |             |--prefill---->|             |
+   |              |             |             |<--TTFT-------|             |
+   |              |             |             |--decode----->|             |
+   |              |             |             |<--tokens-----|             |
+   |              |<--result----|<--complete--|              |             |
+   |<--result-----|             |             |              |             |
+   |              |             |             |--provenance--------------->|
+   |              |             |             |   model_hash, params,      |
+   |              |             |             |   ttft, tpot, fingerprint  |
+```
+
+---
+
+Figure F-3 — Local vs API routing decision
+
+```
+                   +---------------------------+
+   agent request ->|  LOCAL INFERENCE GATEWAY  |
+                   +------------+--------------+
+                                |
+              +-----------------+------------------+
+              |                                    |
+     fits KV budget AND                        does not fit, OR
+     latency SLO attainable                    queue saturated, OR
+              |                                    |
+              v                                    v
+    +-------------------+                 +-------------------+
+    |   LOCAL ENGINE    |                 |    API GATEWAY    |
+    |   vLLM / SGLang   |                 |    quota + keys   |
+    +---------+---------+                 +---------+---------+
+              |                                    |
+              +----------------+-------------------+
+                               |
+                               v
+                    +---------------------+
+                    |   RESULT REGISTRY   |
+                    |   provenance trail  |
+                    +---------------------+
+```
+
+---
+
+Figure F-4 — Backpressure and bounded queue
+
+```
+  arrivals (lambda)
+        |
+        v
+  +------------------------------+
+  |       BOUNDED QUEUE          |
+  |  capacity    = Q_max         |
+  |  per-agent   = token quota   |
+  |  per-task    = deadline      |
+  +--------------+---------------+
+                 |
+        +--------+---------+
+        |                  |
+    not full            full
+        |                  |
+        v                  v
+  +-----------+     +---------------------+
+  | admit to  |     | REJECT  429         |
+  | engine    |     | increment           |
+  | record    |     | queue_rejection_rate|
+  | L and W   |     +---------------------+
+  +-----------+
+
+  An unbounded queue saturates system RAM before it saturates the GPU.
+```
+
+---
+
+Figure G-1 — Model class decode comparison
+
+```
+DECODE THROUGHPUT  ·  single RTX 5090  ·  batch 1  ·  reference values
+
+  dense 32B  4-bit    |##########################################|  ~100 tok/s ceiling
+  dense 70B  4-bit    |###################                       |   ~35-40 tok/s real
+  MoE 120B   MXFP4    |######################                    |   ~47 tok/s measured
+  DGX Spark  70B FP8  |#                                          |   ~2.7-4 tok/s
+                      +----+----+----+----+----+----+----+----+---+
+                       0   12   25   37   50   62   75   87  100 tok/s
+
+  DGX Spark ceiling is arithmetic, not tuning:
+      273 GB/s  /  70 GB read per token  =  ~3.9 tok/s maximum
+  MoE advantage is active-parameter decoding:
+      117B total  /  5.1B active  ->  ~3-4 GB expert reads per token
+```
+
+---
+
+Figure H-1 — Storage topology and data residency
+
+```
+  +---------------------+      +---------------------+      +-------------------+
+  |  M.2_1  PCIe 5.0 x4 |      |  M.2_2  PCIe 4.0 x4 |      |   10 GbE  NAS     |
+  |  ZFS MIRROR         |      |  DATA VOLUME        |      |   snapshots +     |
+  |  2 x 4 TB NVMe      |      |  4 TB NVMe          |      |   versioning      |
+  |  DRAM cache REQ'D   |      |                     |      |                   |
+  +----------+----------+      +----------+----------+      +---------+---------+
+             |                            |                           ^
+             |  system                    |  corpus                   |
+             |  model weights             |  journals                 |
+             |  PostgreSQL                |  checkpoints              |
+             |  daily snapshot            |  execution logs           |
+             +----------------------------+---------------------------+
+                                          |
+                              MONTHLY RESTORE TEST  (mandatory)
+                              A backup never restored is not a backup.
+```
+
+---
+
+Figure I-1 — Observability pipeline
+
+```
+ +-----------+    +-----------+    +-------------+    +-------------+
+ |  GATEWAY  |    |  ENGINE   |    |   NVML      |    |   NODE      |
+ |  TTFT     |    |  KV pool  |    |   temp      |    |   RAM       |
+ |  TPOT     |    |  preempt  |    |   power     |    |   ZFS       |
+ |  tokens   |    |  cache    |    |   throttle  |    |   AER       |
+ |  cost     |    |  hit rate |    |   clocks    |    |   RAID      |
+ +-----+-----+    +-----+-----+    +------+------+    +------+------+
+       |                |                 |                  |
+       +--------+-------+-----------------+------------------+
+                |
+                v
+        +-------+--------+
+        |   PROMETHEUS   |   scrape interval: 1 s during benchmark
+        +-------+--------+                    15 s steady state
+                |
+        +-------+---------+
+        |                 |
+        v                 v
+  +-----------+     +-------------+
+  |  GRAFANA  |     |   ALERTS    |
+  | dashboards|     |  p95 TTFT   |
+  | per-agent |     |  p95 TPOT   |
+  | per-task  |     |  preempt    |
+  +-----------+     |  thermal    |
+                    |  AER        |
+                    +-------------+
+```
+
+---
+
+Figure J-1 — Benchmark execution sequence
+
+```
+ STAGE 0   RENT GPU CAPACITY  (no purchase before measurement)
+    |
+    v
+ [1] PLATFORM BURN-IN            72 h  --- FAIL --> STOP, diagnose platform
+    |   suspend/resume x20, memtest, AER, ZFS scrub, thermal soak
+    v
+ [2] SINGLE-GPU BASELINE          8 h  --- FAIL --> reduce context or KV
+    |   32B dense, 32K, batch 1-4
+    v
+ [3] KV QUALITY   FP16 vs FP8     4 h  --- FAIL --> critic engine stays BF16
+    |   4K and 32K needle tests on sm_120, SI TEAM tasks
+    v
+ [4] ENGINE   vLLM vs SGLang      8 h  --- FAIL --> apply Figure J-2 rule
+    |   20 agents, 40/30/20/10 mix
+    v
+ [5] MoE TRACK   GPT-OSS-120B     8 h  --- FAIL --> MoE is batch-only
+    |   decode >= 30 tok/s at batch 1
+    v
+ [6] POWER CAP   575 W vs 450 W   4 h  --- FAIL --> reject dual-5090 Mode B
+    |   loss <= 15% at 450 W
+    v
+ [7] DAY IN THE LIFE              8 h  --- FAIL --> architecture fails orch.
+    |   task completion, queue wait, human intervention
+    v
+ [8] TCO   local vs API           1 h  --- FAIL --> stay on API
+    |
+    v
+ PURCHASE DECISION
+```
+
+---
+
+Figure J-2 — Engine selection decision tree
+
+```
+  Run vLLM and SGLang on the SAME workload, 20 agents, 70B+ class model
+                              |
+                              v
+          +---------------------------------------+
+          |   Measured TTFT p95 improvement       |
+          |   of SGLang over vLLM                 |
+          +---+---------------+-------------------+
+              |               |                   |
+            > 20%          10-20%          < 10% or success worse
+              |               |                   |
+              v               v                   v
+       +-------------+  +-------------+  +-----------------+
+       |   SGLANG    |  |    vLLM     |  |      vLLM       |
+       |             |  |             |  |                 |
+       | isolate     |  | operational |  | model support   |
+       | tenants by  |  | simplicity  |  | is the deciding |
+       | engine inst.|  | wins        |  | constraint      |
+       +-------------+  +-------------+  +-----------------+
+
+  Threshold is calibrated at 70B+ scale, not on an 8B proxy.
+```
+
+---
+
+Figure J-3 — Tier selection decision tree
+
+```
+                        START
+                          |
+                          v
+             +--------------------------+
+             |  Rent 5090 capacity      |
+             |  run stages 1-8          |
+             +------------+-------------+
+                          |
+        +-----------------v------------------+
+        |  Tier V  (2-4x used 3090) meets    |
+        |  p95 TTFT <= 2 s and TPOT <= 100ms?|
+        +----+---------------------------+---+
+         YES |                           | NO
+             v                           v
+    +-----------------+     +----------------------------+
+    |   BUY TIER V    |     |  Tier R (1x 5090) meets    |
+    |   capacity/$    |     |  the same thresholds?      |
+    +-----------------+     +-----+----------------------+
+                             YES  |              | NO
+                                  v              v
+                       +-----------------+  +---------------------+
+                       |   BUY TIER R    |  |  Evaluate Tier C    |
+                       |   1 GPU         |  |  PRO 6000 Max-Q     |
+                       |   128 GB RAM    |  |  DGX Spark (batch)  |
+                       |   expand after  |  |  Strix Halo 128 GB  |
+                       |   measurement   |  |  dual 5090 @ 450 W  |
+                       +-----------------+  +---------------------+
+```
+
+---
+
+Figure K-1 — Physical build sequence
+
+```
+  STEP 1   Chassis + PSU + motherboard on bench, outside the case
+             |
+  STEP 2   CPU, cooler, 8x16 GB RDIMM (all eight channels)
+             |
+  STEP 3   GFX_12V1/12V2 auxiliary PCIe power  (do not skip)
+             |
+  STEP 4   Boot to BIOS, verify 8 channels, RDIMM ECC, PCIe link widths
+             |
+  STEP 5   ZFS mirror install, OS, drivers, container runtime, image pinning
+             |
+  STEP 6   BURN-IN 72 h      <-- gate: fails here, nothing else proceeds
+             |
+  STEP 7   Install GPU 0 in Slot 7, re-run thermal soak
+             |
+  STEP 8   Benchmark stages 2-8 on rented-equivalent configuration
+             |
+  STEP 9   Purchase decision, then RAM expansion and GPU 1 only if measured
+```
+
+---
+
+Figure K-2 — Decision record flow
+
+```
+  each design decision  -->  binding evidence  -->  reversal condition
+          |                        |                       |
+          v                        v                       v
+   +--------------+        +---------------+       +---------------+
+   | what was     |        | vendor doc,   |       | measured      |
+   | decided      |        | closed form,  |       | threshold     |
+   |              |        | or benchmark  |       | that flips it |
+   +------+-------+        +-------+-------+       +-------+-------+
+          |                        |                       |
+          +------------------------+-----------------------+
+                                   |
+                                   v
+                       +-------------------------+
+                       |   DECISION RECORD       |
+                       |   audit trail for every |
+                       |   purchase-order line   |
+                       +-------------------------+
+
+  A purchase order that does not cite a decision-record row is not
+  justified by this blueprint.
+```
