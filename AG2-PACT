@@ -1,0 +1,845 @@
+AG2-PACT v0.3
+
+Perturbation-Aware Cell-State Testing of Conditional Genomic Foundation Models
+
+A preregisterable research programme — verification-corrected draft
+
+Author: Ouadi Maakoul and SI TEAM
+Version: 0.3 — November 2026
+Status: G1.1–G1.5 frozen subject to the implementation notes below. No evaluation-set predictions inspected.
+
+---
+
+Abstract
+
+AlphaGenome 2 is a conditional genomic foundation model released on 11 November 2026. It takes a target biological condition — a tissue, cell type, or cell state — as input at every stage of its architecture, rather than predicting thousands of tracks in parallel as its predecessor did. It is trained on more than 107 million individual cell profiles across 68 tissues from human and mouse, supports cross-modality imputation from as little as one measured modality, and reports on the TenK10K immune-cell benchmark a causal-variant identification rate of 30 % (vs 16 % for AlphaGenome 1 fine-tuned on single-cell data) and correct direction of gene effect in 43 % of cases (vs 23 %).
+
+These are developer-reported results on developer-selected benchmarks. They do not establish that the model's predictions remain reliable under experimental perturbation, across cell-state mismatches, or at genomic distances where regulatory interactions are hardest to model.
+
+This proposal specifies AG2-PACT, an independent validation and evidence framework whose central falsifiable question is:
+
+Can cell-state-aware evidence provenance and distance-dependent reliability assessment improve the experimental validation efficiency of conditional genomic foundation-model predictions beyond raw sequence-to-function scores?
+
+The framework separates two non-equivalent evaluation problems. Track A evaluates regulatory predictions against experimentally compatible variant-effect estimands (eQTL, caQTL, sQTL, MPRA). Track B evaluates whether model-derived regulatory predictions anticipate experimental perturbation responses (CRISPRi, CRISPRa, TAP-seq, Perturb-seq). Because variant effects and perturbation effects are different biological quantities, Track B uses only a finite, pre-specified set of transformations or, where no transformation is defensible, restricts itself to prioritization analysis without quantitative calibration claims.
+
+Four hypotheses address distance-dependent magnitude miscalibration, cell-state conditioning, modality provenance, and experimental prioritization. The project is falsification-first: dataset independence, licensing, statistical power and model reproducibility are established before any evaluation-set prediction is inspected. Negative, inconclusive and equivalence results are reportable outcomes.
+
+---
+
+1. Introduction
+
+1.1 The conditional shift and the evaluation problem it creates
+
+AlphaGenome 1 predicted thousands of functional genomic tracks in parallel from a 1 Mb DNA sequence. The parallel approach spread model capacity thin and made it difficult to capture subtle differences between closely related cell types. AlphaGenome 2 replaces parallel prediction with conditional prediction: a single biological condition is supplied at every architectural stage, and the model predicts how the same stretch of DNA is read in that condition.
+
+This architectural shift creates three evaluation problems that aggregate benchmark performance cannot resolve.
+
+Problem 1 — Context is now an input, and inputs can be mismatched. A conditional model's prediction quality may depend on whether the supplied cell-state context is the right context. TenK10K performance (30 % causal variant identification) is reported on a benchmark the developers selected; whether matched cell-state conditioning improves performance on independent held-out evidence is an open empirical question.
+
+Problem 2 — Imputation is now a first-class capability, and imputed predictions may differ in reliability. AlphaGenome 2 separates a cell's biological state from its outputs, so if a scientist inputs only one measurement, the model predicts the missing experimental data. The API release notes confirm a filter_to_observed helper on TrackData and JunctionData — the operational primitive by which observed and imputed tracks can be distinguished. Whether imputed modality predictions are as reliable as observed-modality predictions is the subject of H3.
+
+Problem 3 — Perturbation is not variation. CRISPRi ablates or strongly suppresses a regulatory element; a variant modulates it. A variant may weaken an enhancer by 20 %, while CRISPRi may suppress it far more strongly, non-proportionally, and with context-dependent effects not represented in the variant score. Treating the difference between a variant score and a perturbation log-fold change as "calibration error" would be a category error dressed as a metric.
+
+1.2 What this proposal does not claim
+
+This proposal does not claim that AlphaGenome 2 is unreliable. It does not claim that its reported gains are incorrect. It does not claim that a structured evidence layer must improve on raw model scores. It claims only that these are testable questions, and it specifies the tests, the decision rules, and the conditions under which the framework's own contribution would be falsified.
+
+---
+
+2. Objectives
+
+O1 — Predictive validity. Evaluate direction, ranking and magnitude agreement between model predictions and experimentally compatible measurements, keeping the three properties mathematically separate.
+
+O2 — Contextual reliability. Test whether matched cell-state conditioning improves predictive validity on held-out evidence, against appropriate controls rather than against "no conditioning" as a straw baseline.
+
+O3 — Modality provenance. Determine whether observed-versus-imputed modality status predicts differences in model reliability, using the filter_to_observed primitive where it is operational and controlled modality ablation where the API supports it.
+
+O4 — Distance-dependent calibration. Test whether prediction errors exhibit a systematic relationship with genomic distance, and whether this relationship differs between AlphaGenome 1 and AlphaGenome 2, using equivalence testing rather than significance-only inference.
+
+O5 — Experimental utility. Determine whether a structured evidence score improves diversity-constrained experimental candidate prioritization compared with raw model scores, with a component ablation that can attribute or refuse to attribute utility to provenance.
+
+O6 — Reproducibility. Produce an independent, documented, reproducible evaluation framework subject to applicable API and dataset licensing.
+
+---
+
+3. Conceptual architecture
+
+Three analytical layers, kept mathematically separate and integrated only at Layer III. A layer that appears to work only because it is entangled with another layer is not a demonstrated contribution.
+
+3.1 Layer I — Predictive validity
+
+Let \hat{y}_{v,c,m} denote the model-predicted effect for variant v, cell state c, and modality m. Let y^{\text{exp}}_{v,c} denote the corresponding experimental measurement, where and only where the experimental estimand is compatible with the model output.
+
+Direction agreement.
+
+\mathrm{DA} = \frac{1}{N}\sum_{i=1}^{N} \mathbb{1}\!\left[\operatorname{sign}(\hat{y}_i)=\operatorname{sign}(y_i^{\text{exp}})\right].
+
+Ranking agreement.
+
+\rho_s = \operatorname{Spearman}(\hat{y},y^{\text{exp}}).
+
+Magnitude agreement.
+
+\mathrm{MAE} = \frac{1}{N}\sum_{i=1}^{N}|\hat{y}_i-y_i^{\text{exp}}|,
+\qquad
+\mathrm{RMSE} = \sqrt{\frac{1}{N}\sum_{i=1}^{N}(\hat{y}_i-y_i^{\text{exp}})^2}.
+
+Calibration — through-origin and with intercept.
+
+y^{\text{exp}} = \beta\hat{y}+\epsilon \qquad \text{(through origin, comparable to prior work)},
+
+y^{\text{exp}} = \alpha+\beta\hat{y}+\epsilon \qquad \text{(with intercept)}.
+
+The through-origin slope has the following interpretation, stated correctly:
+
+· \beta > 1: experimental effects are larger than predicted → underestimation.
+· \beta < 1: predicted effects are larger than experimental → overestimation.
+· \beta = 1: proportional agreement in the through-origin regression.
+
+The intercept model separates constant offset from proportional miscalibration. The slope alone does not classify a dataset as underpredicted. Under y^{\text{exp}}=\alpha+\beta\hat{y}+\epsilon, the prediction error is
+
+e = y^{\text{exp}}-\hat{y} = \alpha+(\beta-1)\hat{y}.
+
+For \beta>1 and \alpha<0, the fitted line crosses the identity line at
+
+\hat{y}^{*} = \frac{-\alpha}{\beta-1}.
+
+The direction of the error reverses at \hat{y}^{*}. Every calibration model therefore reports \hat{y}^{*} with a confidence interval, the fraction of observations on each side, and region-wise underprediction fractions. No dataset is described as "underpredicted" from \beta alone.
+
+Metric separation is mandatory. DA, \rho_s, and magnitude metrics measure different properties. DA does not establish magnitude accuracy. \rho_s does not establish proportional agreement. auROC is reported only where there is a pre-specified binary classification task, never as a proxy for direction accuracy.
+
+3.2 Layer II — Contextual reliability
+
+Layer II evaluates stability across cell-state contexts, modality availability, sampling and subsampling variation, genomic distance, and experimental datasets.
+
+Provenance — operationalized via filter_to_observed.
+
+The v2.0.0 API release notes confirm a filter_to_observed helper on TrackData and JunctionData. This is the operational primitive. It is not a per-prediction metadata field; it is a filtering function that restricts track data to observed (non-imputed) entries. The provenance audit (G1.4, §5 below) uses it as follows:
+
+1. Query with full observed inputs. Apply filter_to_observed. If it returns a strict subset of tracks, the complement is the imputed set — provenance is operationalizable.
+2. Query with partially observed inputs. Re-apply filter_to_observed. The difference in surviving track sets relative to the full-observation case is the empirical provenance estimate.
+3. Pass criterion: filter_to_observed produces a stable, non-empty observed subset across test loci and cell states.
+4. Fail criterion: it returns all tracks (no filtering capability), returns empty, or raises an error. In that case provenance is unverified, and H3 downgrades to observational IRG with user-side tracking only.
+
+Observational provenance gap.
+
+\mathrm{IRG}_{m,c} = \mathbb{E}[S\mid I_{m,c}=1] - \mathbb{E}[S\mid I_{m,c}=0],
+
+with adjustment for dataset, cell-state composition, measurement quality, sample size, and effect-size distribution. This is explicitly observational, not causal.
+
+Controlled Modality Ablation Effect (CMAE). Where the API supports withholding a modality and triggering the intended imputation pathway:
+
+\mathrm{CMAE}_{m,c} = \mathbb{E}_{v\sim\mathcal{V}_c}\!\left[S_{\text{obs}}(v,c,m)-S_{\text{mask}}(v,c,m)\right].
+
+CMAE is interpreted as the causal effect of withholding a model input on the model's output or reliability, under fixed inference conditions. It is not a claim that the biological modality causally improves prediction. Two mandatory validity checks:
+
+· C1 (valid imputation, not out-of-distribution collapse). Verify that masking activates the intended imputation path, and that the masked-output distribution does not collapse or lie outside the observed-input distribution. If C1 fails, CMAE is reported as not interpretable.
+· C2 (held-constant conditions). Variant set, cell state, pinned model version (v2.0.0), and scoring function are held fixed. Any deviation is logged as a separate condition.
+
+If C1 fails for a modality, the observational IRG is retained with full covariate adjustment, and CMAE is marked unavailable.
+
+3.3 Layer III — Experimental utility
+
+E(v) = w_1\,\mathrm{Stability}(v) + w_2\,\mathrm{Concordance}(v) + w_3\,\mathrm{Provenance}(v) - w_4\,\mathrm{DistanceUncertainty}(v).
+
+Component definitions, normalization procedures, stochastic-pass seeds, primary-modality assignments, and weights are frozen on development data only before evaluation-set predictions are inspected. Evaluation data are never used to construct or tune the score.
+
+Two utility endpoints, pre-specified.
+
+(i) Validation yield.
+
+\mathrm{HitRate}@k(S) = \frac{1}{k}\sum_{v\in \mathrm{TopK}(S)} \mathbb{1}[Y_v^{\text{exp}}\text{ meets the criterion}].
+
+Where the baseline hit rate is positive:
+
+\mathrm{ER}@k = \frac{\mathrm{HitRate}@k(E)}{\mathrm{HitRate}@k(S_{\text{raw}})},
+
+and the absolute difference is always reported:
+
+\Delta@k = \mathrm{HitRate}@k(E)-\mathrm{HitRate}@k(S_{\text{raw}})
+
+with a bootstrap confidence interval. If the baseline hit rate is zero, only \Delta@k is reported; the ratio is marked undefined, not assigned a convention.
+
+(ii) Biological utility. A pre-specified magnitude or relevance endpoint with fixed direction (e.g., mean |\log\text{FC}| among validated selections). Fixed before the ablation is run.
+
+Diversity constraint. All selection strategies — raw score, evidence score, random — use identical constraints: at most 2 variants per gene, and at most 3 per 100 kb window. Both constrained and unconstrained results are reported.
+
+---
+
+4. Two independent tracks
+
+4.1 Track A — Regulatory prediction validation
+
+Track A evaluates model outputs against experimental variant-effect estimands: eQTL, caQTL, sQTL, MPRA. The central requirement is estimand compatibility between the model output and the experimental measurement. Track A is the direct setting for direction, ranking, magnitude and calibration.
+
+Dataset eligibility (G1.2). GTEx and TenK10K are classified C₃ (exposure during model development or benchmark evaluation) and excluded from confirmatory H1. AlphaGenome 2 is trained on bulk and single-cell data including GTEx and related resources, and TenK10K is the primary developer-reported benchmark. Using either for confirmatory out-of-distribution distance-calibration claims would violate independence. Both remain eligible for in-distribution performance checks only.
+
+4.2 Track B — Perturbation-response validation
+
+Track B investigates whether model-derived regulatory predictions anticipate experimental perturbation responses: CRISPRi enhancer ablation, CRISPRa, TAP-seq, and Perturb-seq where biological conditions are compatible.
+
+The non-equivalence is explicit. A variant-effect prediction and an enhancer-ablation response are not equivalent quantities. Track B uses a finite, pre-specified set of candidate transformations, selected on development data only:
+
+1. identity (naive baseline, expected to fail but necessary as a reference);
+2. monotonic rank transformation;
+3. linear transformation fitted on development data;
+4. biologically motivated sigmoid saturation;
+5. no transformation — prioritization only, with quantitative calibration explicitly disclaimed.
+
+If none of transformations 1–4 achieves defensible out-of-sample performance (pre-specified: out-of-sample R^2 < 0.1 or calibration slope outside [0.5, 2]), Track B is restricted to prioritization. The fallback is pre-specified to prevent post-hoc transformation shopping.
+
+Track B evidence base (G1.2, corrected).
+
+Dataset System Readout Cell-state scope Contamination Eligibility
+Fulco et al. 2019 CRISPRi-FlowFISH, K562 >3,500 potential enhancer–gene connections for 30 genes K562 only C₀/C₁ Track B prioritization
+Gasperini et al. 2019 Genome-wide CRISPRi, K562, 254,974 single-cell transcriptomes 5,920 candidate enhancers; 664 (470 high-confidence) cis enhancer–gene pairs K562 only C₀/C₁ Track B prioritization
+Schraivogel et al. 2020 TAP-seq (targeted Perturb-seq), K562 1,778 enhancers within 2.5 % of the human genome K562 only — no cross-cell-state generalization C₀ Track B prioritization; locus and assay generalization only
+
+Norman Perturb-seq is a CRISPRa dataset in K562 with transcription-factor and gene perturbations, not an enhancer-ablation benchmark. It is retained only as supplementary evidence for cell-state sensitivity and generalization, where biological conditions can be matched. It does not count as independent validation of enhancer-perturbation response.
+
+Schraivogel correction. The v0.2 matrix labeled Schraivogel "Matched / Near-matched." Verification confirms it is K562 only, targeting enhancers on chromosomes 8 and 11. It contributes to locus generalization and assay generalization (TAP-seq vs FlowFISH vs Perturb-seq), not to cell-state generalization. This correction is now applied.
+
+---
+
+5. API reproducibility and provenance audit (G1.4, corrected)
+
+5.1 Provenance operationalization
+
+The v2.0.0 release notes confirm:
+
+· AlphaGenome 2 model API (alphagenome.models.v2), supporting reference-condition and single-cell expression-conditioned predictions, variant and interval scoring, cell embeddings, and input gradients;
+· Enhancer-to-gene scoring and calling utilities (alphagenome.interpretation.enhancer_scoring);
+· filter_to_observed helper on TrackData and JunctionData.
+
+There is no documented per-prediction is_imputed, provenance_source, or confidence_weight field in the release notes. The provenance audit therefore targets filter_to_observed, not hypothetical metadata fields.
+
+5.2 Audit protocol
+
+Phase 1 — filter_to_observed capability test. On a standardized suite of 500 loci across three representative conditions (K562, GM12878, primary CD4+ T cells):
+
+1. Full-observation query → apply filter_to_observed → record surviving track set.
+2. Partial-observation query (e.g., chromatin accessibility only) → re-apply filter_to_observed → record surviving track set.
+3. The difference in surviving sets is the empirical imputed set.
+
+Pass: stable, non-empty observed subset across loci and conditions. Fail: no filtering, empty return, or error → provenance unverified, H3 downgraded to observational.
+
+Phase 2 — Controlled masking and validity gates C1/C2. For each modality m \in \{\text{RNA-seq, ATAC-seq, ChIP-seq}\}:
+
+1. Compute S_{\text{obs}}(v,c,m) with all modalities provided.
+2. Compute S_{\text{mask}}(v,c,m) with modality m withheld via the API's designated masking parameters.
+3. C1: \mathrm{JSD}(P_{\text{obs}}\parallel P_{\text{mask}}) \le \tau_{\mathrm{JSD}} = 0.25; no NaN/infinite outputs; masked-output distribution not collapsed or outside observed-input distribution.
+4. C2: zero variance in non-targeted metadata fields across paired calls; pinned client version ag2-client==2.0.0 logged in every request header.
+
+Decision tree.
+
+Finding Impact Action
+filter_to_observed works; C1/C2 pass IRG and CMAE both enabled Proceed to G1.5
+filter_to_observed works; C1 fails for some modalities CMAE restricted to robust modalities; failed modalities IRG-only Update SAP flags
+Provenance unverified or masking unsupported H3 observational only; CMAE unavailable Disclaim causal model-input ablation
+
+---
+
+6. Evidence-score specification and leakage controls (G1.5, corrected)
+
+6.1 Component definitions
+
+Stability. Let \hat{y}_{v,c}^{(k)} denote the predicted effect across K=20 stochastic forward passes or perturbed input windows:
+
+\mathrm{Stability}(v) = 1 - \frac{\sigma(\hat{y}_{v,c}^{(1)},\dots,\hat{y}_{v,c}^{(K)})}{|\mu(\hat{y}_{v,c})|+\epsilon},
+
+with \epsilon = 10^{-4}, clipped to [0,1].
+
+Concordance. Directional agreement across predicted modalities:
+
+\mathrm{Concordance}(v) = \frac{1}{|M|-1}\sum_{m\in M}\mathbb{1}\left[\operatorname{sign}(\hat{y}_{v,c,m})=\operatorname{sign}(\hat{y}_{v,c,\text{primary}})\right].
+
+Provenance. Ordinal weight from filter_to_observed status:
+
+\mathrm{Provenance}(v)=
+\begin{cases}
+1.0 & \text{directly observed}\\
+0.5 & \text{user-supplied / unverified}\\
+0.0 & \text{model-imputed}
+\end{cases}
+
+Distance uncertainty.
+
+\mathrm{DistanceUncertainty}(v) = \log\!\left(1+\frac{d_v}{d_0}\right),
+
+with d_0=10 kb, min–max normalized on development data to [0,1].
+
+6.2 Leakage controls — four freezing requirements
+
+L1 — Stochastic pass parameters frozen. The RNG seed, number of passes K=20, and any input perturbation kernel are written to config/evidence_weights_v2.json. If the passes are generated with a seed chosen after seeing evaluation-set stability distributions, the Stability score is tuned to the evaluation set. Freeze before inspection.
+
+L2 — Primary modality map frozen. "\hat{y}_{v,c,\text{primary}}" is undefined in v0.2. The frozen map is:
+
+Estimand Primary modality
+eQTL RNA-seq
+caQTL ATAC/DNase
+sQTL RNA-seq
+enhancer perturbation RNA-seq
+
+No per-variant selection of primary modality.
+
+L3 — Development/evaluation k separation. Weight optimization uses k_{\text{dev}} \in \{50, 200\}; evaluation uses k_{\text{eval}} \in \{100, 500\}. No overlap. If weights are optimized at k=100 and evaluated at k=100, ER@k is partially in-sample.
+
+L4 — Normalization constants frozen. Development-set means \mu_i^{\text{dev}} and standard deviations \sigma_i^{\text{dev}} for each component are written to the config file alongside the weights.
+
+6.3 Frozen configuration file (excerpt)
+
+```json
+{
+  "stability": {"K": 20, "rng_seed": "<frozen>", "perturbation_kernel": "<frozen or null>"},
+  "concordance": {"primary_modality_map": {"eQTL": "RNA-seq", "caQTL": "ATAC", "sQTL": "RNA-seq", "enhancer_perturbation": "RNA-seq"}},
+  "weight_optimization": {"k_dev": [50, 200], "k_eval": [100, 500]},
+  "h4_equivalence_margin": [0.90, 1.10],
+  "distance": {"d0_kb": 10}
+}
+```
+
+---
+
+7. Hypotheses and pre-specified decision rules
+
+H1 — Distance-dependent magnitude miscalibration
+
+Define e_{v,c}=y^{\text{exp}}_{v,c}-\hat{y}_{v,c}. The mixed model:
+
+e_{v,c}=\alpha+\gamma_1\tilde{y}_{v,c}+\gamma_2\tilde{d}_v+\gamma_3\tilde{y}_{v,c}\tilde{d}_v+u_c+\epsilon_{v,c},
+
+with standardized predictors \tilde{y} and \tilde{d}=\log(1+d_v); standardization constants published. \gamma_3 is the primary parameter: it tests whether magnitude error depends on distance.
+
+AG1 vs AG2 comparison.
+
+\Delta\gamma_3 = \gamma_3^{\mathrm{AG2}}-\gamma_3^{\mathrm{AG1}},
+
+with a clustered bootstrap confidence interval. A difference in statistical significance between separate models is not evidence of a difference between models.
+
+Decision structure.
+
+Outcome Conditions
+Support H1 (a) \gamma_3 significant at pre-specified \alpha; and (b) \(
+Reject H1 (equivalence) Equivalence test rejects \gamma_3 \notin [-\delta^{\mathrm{eq}},+\delta^{\mathrm{eq}}] at \alpha (CI fully inside the equivalence interval), and \(
+Inconclusive Neither of the above; reported as inconclusive, not forced into a binary
+
+Small-cluster inference. Gene-clustered and locus-clustered standard errors are sensitivity analyses. If the number of independent clusters G<40, wild cluster bootstrap p-values replace asymptotic p-values as the primary test. Monte Carlo evidence shows the "rule of 42" is not reliable for unbalanced clusters, so the cluster-size distribution and minimum cluster size are reported explicitly, not just the count.
+
+Distance definitions. TSS distance primary; enhancer-distance and gene-body-distance pre-specified sensitivity analyses. Definition-dependence is reported as a result, not resolved by choosing the favourable definition.
+
+H2 — Cell-state conditioning
+
+Matched cell-state conditioning improves predictive validity beyond bulk or biologically mismatched contexts. Primary metrics: DA, \rho_s, MAE, reported separately. Comparison against appropriate matched controls, not "no conditioning." Supported only if improvements exceed pre-specified MDEs from G1.3.
+
+H3 — Modality provenance
+
+Observed-versus-imputed provenance predicts differences in experimental reliability. Primary analysis observational (IRG) unless filter_to_observed is operational and C1/C2 pass, in which case CMAE provides a controlled model-input ablation. No causal biological interpretation is inferred from either result.
+
+H4 — Evidence-based prioritization
+
+Primary endpoint: diversity-constrained validation yield at pre-specified k. Secondary endpoint: biological utility. Decision structure now includes equivalence (correcting the v0.2 superiority-only test):
+
+Outcome Condition
+Support H4 \mathrm{ER}@k lower CI bound >1.18
+Reject H4 (equivalence) \mathrm{ER}@k CI fully inside [0.90, 1.10]
+Inconclusive CI excludes 1.0 but includes the MDE region, or crosses the equivalence boundary
+
+Without this, a non-significant H4 result would be reported as "falsified" when it may simply be underpowered — the failure mode the falsification-first commitment was designed to prevent.
+
+Component ablation — frozen.
+
+Model Tests
+Raw AG2 Baseline
+Raw AG2 + stability Marginal value of stability
+Raw AG2 + concordance Marginal value of concordance
+Raw AG2 + provenance Marginal value of provenance
+Raw AG2 + distance uncertainty Marginal value of distance
+Full E(v) Combined
+Full E(v) without provenance Incremental value of provenance given the rest
+Full E(v) without stability Incremental value of stability given the rest
+Full E(v) without concordance Incremental value of concordance given the rest
+Full E(v) without distance Incremental value of distance given the rest
+
+Decision rule. If removing provenance leaves ER@k (or \Delta@k) statistically and scientifically unchanged, provenance is not claimed as a demonstrated source of utility, even if the full score beats baseline. Interactions are explicitly permitted.
+
+---
+
+8. Statistical analysis plan (G1.3, frozen)
+
+MDEs at \alpha=0.05 two-tailed, power 1-\beta=0.80:
+
+· H1: |\gamma_3^{\mathrm{MDE}}| \ge 0.12 standard deviations of error per log-distance unit.
+· H2: \Delta\mathrm{DA} \ge 0.035; \Delta\mathrm{MAE} \ge 0.08\sigma_{y^{\text{exp}}}.
+· H4: \mathrm{ER}@k \ge 1.18 under diversity constraints.
+
+Equivalence margin (TOST) for H1: \delta^{\mathrm{eq}} = \pm 0.10, based on the biological noise floor of CRISPRi-FlowFISH and eQTL effect estimation. Equivalence declared iff the 90\% CI for \Delta\gamma_3 falls entirely within [-\delta^{\mathrm{eq}},+\delta^{\mathrm{eq}}].
+
+Multiplicity. Primary hypotheses at \alpha=0.05; secondary subgroup analyses (distance quartiles, cell lineage, provenance status) via Benjamini–Hochberg at q\le 0.05.
+
+Missing data. Complete-case logging; no imputation of experimental values.
+
+Preregistration (G1.3b). OSF or equivalent, immutable timestamp, version bound to v0.3-frozen, submitted before evaluation-set inference.
+
+---
+
+9. Dataset independence and contamination control (G1.2, corrected)
+
+Dataset System / readout Estimand & track Cell-state scope Contamination Confirmatory eligibility
+GTEx v8/v10 Multi-tissue eQTL/sQTL Variant effect — Track A Bulk averages C₃ (training source for AG models) In-distribution only; excluded from confirmatory H1
+TenK10K Single-cell eQTL, PBMC subtypes Variant effect — Track A scRNA-seq lineages C₃ (primary AG2 benchmark) In-distribution only; excluded from confirmatory H1
+Fulco 2019 CRISPRi-FlowFISH, K562 Enhancer suppression — Track B K562 only C₀/C₁ Track B prioritization
+Gasperini 2019 CRISPRi, K562, 254,974 cells Enhancer suppression — Track B K562 only C₀/C₁ Track B prioritization
+Schraivogel 2020 TAP-seq, K562 Enhancer suppression — Track B K562 only — no cross-state generalization C₀ Track B prioritization; locus & assay generalization only
+ENCODE MPRA Reporter assays Synthetic variant activity — Track A Cell lines C₂/C₃ Requires locus-level audit (G1.2b)
+Norman Perturb-seq CRISPRa, K562 TF/gene perturbation K562 C₀/C₁ Supplementary only — not enhancer-ablation validation
+
+Contamination categories. C₀ (no overlap, supporting evidence), C₁ (potential locus overlap), C₂ (direct dataset/measurement overlap), C₃ (exposure during development, selection, or benchmark evaluation). Lack of documentation is independence unverified, not proof of a clean evaluation. A dataset with C₂ or C₃ is demoted to in-distribution and excluded from confirmatory H1.
+
+Four generalization dimensions: data independence, locus generalization, cell-state generalization, assay generalization — reported separately.
+
+---
+
+10. Limitations
+
+1. API internals. filter_to_observed may not expose a usable observed/imputed partition; masking may be unsupported. H3 then remains observational and CMAE is marked unavailable.
+2. Training-data disclosure. Incomplete disclosure of AG2's training corpus or fold structure prevents definitive independence claims; those datasets are independence-unverified and excluded from confirmatory H1.
+3. Cell-state coverage. All three Track B enhancer datasets are K562 only. The framework cannot test cross-cell-state perturbation generalization with the current evidence base; that is a stated scope limitation, not an engineering gap.
+4. Variant–perturbation non-equivalence. No biologically defensible quantitative transformation may exist; Track B then reports prioritization only.
+5. Retrospective bias. Retrospective prioritization is vulnerable to dataset-selection and publication bias; prospective validation is the stronger design, and its absence is stated explicitly.
+6. Licensing. API terms and dataset licenses may restrict redistribution or downstream model training. The framework is an analysis and validation layer, not a model trained on API outputs.
+
+---
+
+11. Execution plan
+
+Stage Deliverable Status
+G0 Concept and adversarial review Closed
+G1.1 Mathematical definitions and estimands Frozen
+G1.2 Dataset compatibility, licensing, contamination audit Frozen with Schraivogel correction
+G1.3 SAP and power analysis Frozen
+G1.3b Preregistration (OSF) Next — before evaluation-set inference
+G1.4 API provenance / masking audit Protocol frozen; execution next
+G1.5 Evidence-score specification and ablation plan Frozen subject to config file
+G1.6 Python prototype After G1.3b–G1.4
+
+No API wrapper or substantial implementation begins before G1.1–G1.5 are frozen and G1.3b is submitted.
+
+---
+
+12. Falsification principle
+
+AG2-PACT is not designed to demonstrate that its evidence layer must improve AlphaGenome 2. It is designed to test whether it does.
+
+Three outcomes are possible:
+
+· Positive: reproducible improvement beyond raw model scores, with identifiable component contributions.
+· Negative or equivalent: no improvement at scientifically meaningful effect sizes, or equivalence to baseline within the pre-specified margin.
+· Inconclusive: dataset, power, API or independence limitations prevent a defensible conclusion.
+
+All three are scientifically reportable. A framework that cannot demonstrate that its own contribution is unnecessary is not an adequate validation framework. The preregistration (G1.3b) and the component ablation (H4) are the concrete mechanisms by which the project binds itself to the possibility of a null result.
+
+---
+
+13. Conclusion
+
+AG2-PACT proposes an independent framework for evaluating the reliability and experimental utility of conditional genomic foundation models. Its premise is that predictive accuracy, biological context, modality provenance, genomic distance, and experimental prioritization are related but distinct dimensions, and that a conditional model's aggregate benchmark performance does not establish reliability under perturbation or in unseen cellular contexts.
+
+The research separates regulatory variant-effect validation (Track A) from perturbation-response evaluation (Track B), operationalizes provenance through the filter_to_observed API primitive, tests distance-dependent calibration with equivalence-based inference and small-cluster-robust uncertainty, and evaluates whether structured evidence improves experimental selection through a pre-specified component ablation that can refuse to attribute utility to provenance.
+
+The immediate priority is not implementation. It is establishing whether a sufficiently independent, biologically compatible, statistically adequate, and legally usable evidence base exists — and G1.3b preregistration is the gateway.
+
+Measure the evidence base first; build the instrument second.
+
+---
+
+Status: Conceptual framework and preregisterable research programme. No experimental results or empirical validation claims asserted. G1.3b (OSF preregistration) is the next concrete deliverable, followed by G1.4 API audit execution. 🌹
+
+AG2-PACT — Session Appendices
+
+Document: Analytical appendices to v0.3
+Scope: Full-session synthesis of proposals, corrections, frozen decisions, and epistemic principles
+Purpose: Permanent record of the research programme’s intellectual trajectory, so that no argument, correction, or commitment is lost across future revisions.
+
+---
+
+Appendix A — Session Chronology (Decision Log)
+
+The programme evolved across eight substantive exchanges, each producing a versioned artifact or a frozen decision. The chronology below records who proposed what, what was corrected, and what was frozen.
+
+# Exchange Input Output Status
+0 Initial paste Full Nature AlphaGenome (v1) paper Structured summary of v1 architecture, benchmarks, limitations Reference only
+1 French proposal AG2-PACT concept: 4 modules (Cell-State Auditor, Evidence Graph, Perturbation Validator, Reliability Planner); G0–G5 plan G0 adversarial audit: verified AG2 facts (107M profiles, 68 tissues, TenK10K 30 %/16 %, 43 %/23 %); verified Murphy–Koo (r = 0.67 Fulco, r = 0.45 Gasperini); v0.1 with H1–H4 G0 closed
+2 Critical review 5 corrections: (i) calibration slope reversed; (ii) Spearman ≠ magnitude; (iii) DA ≠ auROC; (iv) IRG needs controls; (v) CRISPRi ≠ variant effect (Track A/B); (vi) Norman demoted v0.1.1: CMAE introduced; ŷ* crossing point; H1 decision structure; two H4 endpoints; component ablation; G1.3b preregistration; contamination columns G1.1 near-frozen
+3 Refinement 5 further clarifications: CMAE naming (not causal IRG); mixed-regime qualification; power interaction not just significance; H4 utility endpoints; provenance direct ablation; equivalence testing; dataset evidence matrix v0.1.1 accepted with implementation notes 1–5; H1 row completed; contamination audit added to G1.2 G1.1 frozen
+4 First PhD draft Full v0.1 proposal (13 sections) — Draft submitted
+5 Verification pass Source verification: 107M profiles / 68 tissues / TenK10K figures confirmed; Fulco >3,000 / 30 genes; Gasperini 5,920 / 664 / 254,974 cells; Norman is CRISPRa K562 v0.2 with: corrected calibration interpretation; ŷ* crossing; Track A/B enforcement; wild cluster bootstrap (Webb 6-point, G < 40); TOST equivalence; component ablation G1.1 frozen
+6 G1.2–G1.5 execution Dataset matrix; SAP with WCB and MDE; API audit protocol; evidence score spec 4 corrections: (i) filter_to_observed is the API primitive, not metadata fields; (ii) Schraivogel is TAP-seq K562 only; (iii) 4 leakage controls in E(v); (iv) H4 equivalence clause G1.2–G1.5 revised
+7 “Next version” Request for consolidated next version v0.3 — full corrected document with all corrections applied Preregisterable draft
+8 Current Request for session appendices This document Meta-analytical record
+
+---
+
+Appendix B — Complete Proposal Inventory
+
+Every substantive proposal made during the session, with its originator, current status, and where it lives in v0.3.
+
+B.1 Architectural proposals
+
+ID Proposal Originator Status in v0.3 Location
+P-01 Three-layer architecture (Predictive / Contextual / Utility) User (msg 2), refined msg 6 Adopted §3
+P-02 Track A / Track B separation User (msg 2) Adopted §4
+P-03 Finite candidate transformation set (identity, rank, linear, sigmoid, none) Assistant (v0.1.1) Adopted §4.2
+P-04 Contamination categories C₀–C₃ Assistant (msg 5) Adopted §9
+P-05 Four generalization dimensions (data / locus / cell-state / assay) User (msg 6), refined Adopted §9
+
+B.2 Mathematical proposals
+
+ID Proposal Originator Status Location
+M-01 Three metrics separated: DA, ρ_s, magnitude (MAE/RMSE) User (msg 2) Adopted §3.1
+M-02 Calibration with intercept (α, β) User (msg 2) Adopted §3.1
+M-03 Crossing point ŷ* = −α / (β − 1) User (msg 2) Adopted §3.1
+M-04 Mixed error model with γ₃ interaction User (msg 2) Adopted §7
+M-05 Δγ₃ = γ₃^AG2 − γ₃^AG1 with clustered bootstrap CI User (msg 6) Adopted §7
+M-06 CMAE (Controlled Modality Ablation Effect) Assistant (v0.1.1) Adopted §3.2
+M-07 Validity gates C1 (no OOD collapse) and C2 (held-constant) Assistant (v0.1.1) Adopted §3.2, §5.2
+M-08 IRG observational fallback Assistant (v0.1.1) Adopted §3.2
+M-09 H1 three-part decision (support / equivalence / inconclusive) User (msg 6) Adopted §7
+M-10 H4 equivalence clause Assistant (msg 11) Adopted §7
+M-11 Primary modality map Assistant (msg 11) Adopted §6.2
+M-12 Dev/eval k separation (k_dev ≠ k_eval) Assistant (msg 11) Adopted §6.2
+M-13 Stochastic-pass seed freezing Assistant (msg 11) Adopted §6.2
+
+B.3 Statistical proposals
+
+ID Proposal Originator Status Location
+S-01 Wild cluster bootstrap with Webb 6-point weights for G < 40 User (msg 8) Adopted §7, §8
+S-02 Report cluster-size distribution, not just count Assistant (msg 11) Adopted §7
+S-03 MDE table at α = 0.05, power 0.80 User (msg 8) Adopted §8
+S-04 TOST equivalence margin δ^eq = ±0.10 for H1 User (msg 8) Adopted §8
+S-05 BH FDR control for secondary subgroups User (msg 8) Adopted §8
+S-06 Complete-case logging, no imputation of y^exp User (msg 8) Adopted §8
+S-07 Pre-registration via OSF (G1.3b) Assistant (v0.1.1) Adopted §8, §11
+
+B.4 Utility proposals
+
+ID Proposal Originator Status Location
+U-01 Two H4 endpoints (validation yield + biological utility) User (msg 6) Adopted §3.3
+U-02 ER@k and Δ@k with zero-baseline handling Assistant (v0.1.1) Adopted §3.3
+U-03 Diversity constraint (≤2/gene, ≤3/100 kb) Assistant (v0.1.1) Adopted §3.3
+U-04 10-row component ablation (add and leave-out) Assistant (v0.1.1), refined msg 11 Adopted §7
+U-05 Provenance direct-ablation test User (msg 6) Adopted §7
+
+B.5 Programme / process proposals
+
+ID Proposal Originator Status Location
+R-01 G0 adversarial audit before any code Both Completed Appendix A
+R-02 G1.2 dataset audit before G1.3 User (msg 6) Completed §9
+R-03 G1.3b preregistration before evaluation-set inference Assistant (v0.1.1) Pending — next gate §11
+R-04 No code until G1.1–G1.5 frozen User (msg 6) Enforced §11
+R-05 filter_to_observed targeted, not metadata fields Assistant (msg 11) Completed §5.1
+R-06 Falsification-first commitment (can report null) Both Adopted §12
+
+---
+
+Appendix C — Critical Corrections Log
+
+Every correction made during the session, with the error, the correction, the originator, and the downstream consequence. This is the most important appendix: it records what we got wrong and why the wrong version was dangerous.
+
+C.1 Factual corrections
+
+ID Error Correction Originator Consequence if uncorrected
+F-01 Calibration slope interpretation reversed (β > 1 called “overestimation”) β > 1 → underestimation in through-origin regression User (msg 2) H1 would have been unfalsifiable in the direction of interest; the entire distance-calibration programme would have inverted its conclusion
+F-02 Spearman ρ used as if it measured magnitude ρ_s measures rank; magnitude requires MAE / RMSE / β User (msg 2) A model with ρ_s = 0.95 could predict effects 5× too small and be declared accurate
+F-03 DA conflated with auROC DA = sign agreement; auROC = discrimination; report separately User (msg 2) H2’s “direction accuracy” claim would have been measured by a metric that does not measure direction
+F-04 Norman Perturb-seq treated as enhancer-ablation benchmark Norman is CRISPRa K562, TF/gene perturbations; demoted to supplementary User (msg 2) Track B would have mixed two non-equivalent perturbation types
+F-05 Schraivogel labeled “matched / near-matched” cell-state Schraivogel is TAP-seq, K562 only, no cross-state generalization Assistant (msg 11) H2 cross-cell-state claim would have been improperly supported
+F-06 API provenance audit targeted hypothetical metadata fields (is_imputed, provenance_source) Actual primitive is filter_to_observed on TrackData / JunctionData Assistant (msg 11) G1.4 would have failed against a non-existent API; provenance analysis would have been impossible
+
+C.2 Methodological corrections
+
+ID Error Correction Originator Consequence if uncorrected
+M-01 CRISPRi perturbation compared directly to variant score as calibration error Track A / Track B separation; transformation set pre-specified User (msg 2) Category error — the entire Track B result would have been uninterpretable
+M-02 IRG called “causal” without qualification Renamed CMAE; explicitly a claim about model input, not biology User (msg 6) Over-claim of biological causality from a model intervention
+M-03 β alone used to classify underprediction Report crossing point ŷ*, region-wise underprediction fractions User (msg 2, msg 6) Mixed-regime datasets misclassified as uniformly underpredicted
+M-04 H1 powered only for significance Three-part decision (support / equivalence / inconclusive) + TOST User (msg 6) Non-significant results would be reported as “falsified” when underpowered
+M-05 H4 superiority-only test Add equivalence clause [0.90, 1.10] Assistant (msg 11) Small-but-real effect would be misreported as null
+M-06 Cluster-robust inference assumed valid for any G Wild cluster bootstrap for G < 40; report cluster distribution User (msg 8) Downwardly biased SEs in small-cluster datasets
+M-07 E(v) leakage: seed, primary modality, k, normalization unfrozen Four leakage controls L1–L4 Assistant (msg 11) ER@k partially in-sample; stability score tuned to evaluation set
+
+C.3 Scope corrections
+
+ID Error Correction Originator Consequence if uncorrected
+S-01 Original 4-module plan risked building on assumed deficiencies Falsification-first, adversarial G0 audit Both Programme would have become engineering, not science
+S-02 GTEx / TenK10K initially considered Track A confirmatory C₃ classification; excluded from confirmatory H1 Assistant (msg 5) Zero-shot claim would have been contaminated by training data
+S-03 Norman retained as Track B independent validation Supplementary only User (msg 2) Mixing perturbation types across tracks
+S-04 “No conditioning” used as H2 straw baseline Appropriate matched controls required User (msg 6) H2 would have supported a trivial comparison
+
+---
+
+Appendix D — Mathematical Definition Evolution
+
+For each central quantity, the definition at each version of the document. This appendix exists so that no reader mistakes a later definition for an earlier one.
+
+D.1 Calibration slope β
+
+Version Definition Interpretation Error
+v0.1 β = Σŷ·y^exp / Σŷ² β < 1 → underestimation; β > 1 → overestimation ❌ Reversed
+v0.1.1 (msg 5) Through-origin β + intercept model (α, β) β > 1 → underestimation; β < 1 → overestimation ✅ Corrected
+v0.2 / v0.3 Same; plus crossing point ŷ* = −α/(β − 1) reported with CI No dataset classified from β alone ✅ Complete
+
+D.2 Direction accuracy
+
+Version Definition Issue
+v0.1 DA reported alongside auROC as if interchangeable Conflation
+v0.1.1 DA = fraction sign agreement; auROC only for binary tasks Separated
+v0.3 Same; metric separation declared mandatory ✅ Frozen
+
+D.3 IRG → CMAE
+
+Version Definition Status
+v0.1 IRG = E[S \| I=1] − E[S \| I=0] Observational only
+v0.1.1 Added CMAE = E[S_obs − S_mask] with C1 (no OOD collapse) and C2 (held-constant) Controlled model-input ablation
+v0.3 CMAE retained; filter_to_observed is the operational primitive; causal claim scoped to model input ✅ Frozen
+
+D.4 H1 decision rule
+
+Version Rule Issue
+v0.1 “γ₃ not significant → H1 rejected” Significance-only; no equivalence
+v0.1.1 Three-part: support / reject / inconclusive Correct structure
+v0.2 Added equivalence test (TOST, δ^eq = ±0.10) ✅ Complete
+v0.3 Same, with cluster-size distribution and Webb 6-point WCB ✅ Frozen
+
+D.5 Utility metric U@k → ER@k / Δ@k
+
+Version Definition Issue
+v0.1 U@k = (1/k) Σ topK Y^exp; ER@k = U@k(E)/U@k(S_raw) Ratio undefined if denominator zero; cancellation if Y signed
+v0.1.1 HitRate@k with pre-specified validation criterion; ER@k and Δ@k both reported; diversity constraint ✅ Corrected
+v0.3 Same + H4 equivalence clause [0.90, 1.10] ✅ Frozen
+
+D.6 Evidence score E(v)
+
+Version Definition Leakage controls
+v0.1 E(v) = w₁Stab + w₂Conc + w₃Prov − w₄Dist None
+v0.1.1 Weights frozen on dev data; 10-row ablation Partial
+v0.3 Same + L1 seed, L2 primary-modality map, L3 k_dev/k_eval separation, L4 normalization constants ✅ All four frozen
+
+---
+
+Appendix E — Hypothesis Evolution (H1–H4)
+
+E.1 H1 — Distance-dependent magnitude miscalibration
+
+Version Statement Falsification
+v0.1 “AG2 retains distance-dependent miscalibration relative to AG1” γ₃ not significantly different from 0 (incomplete row)
+v0.1.1 Same + standardized predictors + sign expectation + MDE threshold Three-part: support / equivalence / inconclusive
+v0.2 Same + Δγ₃ comparison with clustered bootstrap CI + wild cluster bootstrap Same; equivalence margin δ^eq = ±0.10
+v0.3 Same + cluster-size distribution + region-wise distal underprediction fraction Frozen
+
+E.2 H2 — Cell-state conditioning
+
+Version Statement Comparison baseline
+v0.1 Matched conditioning improves predictive validity “No conditioning” (straw)
+v0.1.1 Same; requires appropriate matched controls Matched controls
+v0.3 Same; direction and magnitude reported separately; supported only if both exceed MDE Frozen
+
+E.3 H3 — Modality provenance
+
+Version Statement Method
+v0.1 Observed vs. imputed predicts reliability IRG (observational)
+v0.1.1 Same + CMAE where masking valid IRG + CMAE
+v0.2 Same + filter_to_observed operationalization IRG + CMAE via filter primitive
+v0.3 Same + provenance unverified fallback declared Frozen
+
+E.4 H4 — Evidence-based prioritization
+
+Version Endpoint Decision
+v0.1 ER@k > 1 Superiority-only
+v0.1.1 Two endpoints (validation yield + biological utility); diversity constraint; component ablation Superiority + ablation
+v0.2 Same + absolute Δ@k + zero-baseline handling Superiority + equivalence
+v0.3 Same + equivalence margin [0.90, 1.10] Frozen
+
+---
+
+Appendix F — Dataset Classification Log
+
+F.1 GTEx
+
+· Verified: bulk multi-tissue eQTL / sQTL
+· Contamination: C₃ — listed among AlphaGenome’s training sources (ENCODE, FANTOM5, GTEx)
+· Track: A
+· Confirmatory eligibility: in-distribution only; excluded from confirmatory H1
+· Reason: out-of-distribution generalization cannot be claimed if the data were in the training corpus
+
+F.2 TenK10K
+
+· Verified: single-cell eQTL in PBMC subtypes
+· Contamination: C₃ — the primary AG2 developer benchmark (30 % / 16 %; 43 % / 23 % figures)
+· Track: A
+· Confirmatory eligibility: in-distribution only; excluded from confirmatory H1
+· Reason: using the developer benchmark to test developer claims is circular
+
+F.3 Fulco et al. 2019
+
+· Verified: CRISPRi-FlowFISH, K562, >3,000 potential enhancer–gene connections for 30 genes; GEO GSE118843
+· Contamination: C₀ / C₁ (locus overlap possible; dataset independent)
+· Track: B
+· Cell-state: K562 only
+· Eligibility: Track B prioritization
+
+F.4 Gasperini et al. 2019
+
+· Verified: genome-wide CRISPRi, K562, 254,974 single-cell transcriptomes, 5,920 candidate enhancers, 664 high-confidence (470) cis enhancer–gene pairs; GEO GSE120861
+· Contamination: C₀ / C₁
+· Track: B
+· Cell-state: K562 only
+· Eligibility: Track B prioritization
+
+F.5 Schraivogel et al. 2020
+
+· Verified: TAP-seq, K562, 1,778 enhancers within 2.5 % of the human genome
+· Contamination: C₀
+· Track: B
+· Cell-state: K562 only — no cross-cell-state generalization
+· Eligibility: Track B prioritization; locus and assay generalization only
+· Correction applied in v0.3 (previously mislabeled “near-matched”)
+
+F.6 ENCODE MPRA
+
+· Contamination: C₂ / C₃ (high probability of training inclusion)
+· Track: A
+· Eligibility: requires locus-level audit (G1.2b)
+
+F.7 Norman Perturb-seq
+
+· Verified: CRISPRa, K562, TF/gene perturbations (~100k cells, 200+ perturbations)
+· Contamination: C₀ / C₁
+· Track: supplementary only
+· Eligibility: contextual sensitivity and generalization; not enhancer-ablation validation
+
+---
+
+Appendix G — Frozen Decisions Registry
+
+These decisions are locked in v0.3 and may only be changed by a versioned amendment with documented justification.
+
+ID Decision Frozen in
+FR-01 Track A / Track B separation is non-negotiable v0.1.1
+FR-02 DA, ρ_s, magnitude metrics reported separately, never conflated v0.1.1
+FR-03 β > 1 means underestimation (through-origin) v0.1.1
+FR-04 Crossing point ŷ* always reported with CI v0.1.1
+FR-05 IRG is observational; CMAE is a model-input claim only v0.1.1
+FR-06 C1 / C2 validity gates precede any CMAE reporting v0.1.1
+FR-07 H1 decision is three-part (support / equivalence / inconclusive) v0.1.1
+FR-08 Equivalence margin δ^eq = ±0.10 for H1 v0.2
+FR-09 Wild cluster bootstrap when G < 40 v0.2
+FR-10 Pre-registration via OSF before evaluation-set inference v0.1.1
+FR-11 GTEx and TenK10K excluded from confirmatory H1 v0.2
+FR-12 Norman Perturb-seq is supplementary only v0.2
+FR-13 Schraivogel is K562-only, no cross-state generalization v0.3
+FR-14 filter_to_observed is the provenance primitive v0.3
+FR-15 Four leakage controls L1–L4 frozen in config file v0.3
+FR-16 H4 has equivalence clause [0.90, 1.10] v0.3
+FR-17 Falsification-first: framework must be able to show its own contribution unnecessary v0.1.1
+
+---
+
+Appendix H — Epistemic Principles Distilled
+
+These are the principles that emerged from the session and now govern the programme. They are not decoration; each was earned by a specific correction (cross-referenced to Appendix C).
+
+H.1 On measurement
+
+P-1. A metric measures what it measures, not what we want it to measure. ρ_s measures rank, not magnitude (F-02). DA measures sign, not discrimination (F-03). β measures proportional calibration, not absolute error (M-03). Conflating them is not a simplification; it is a category error.
+
+P-2. A slope alone does not classify a dataset. Under y^{\text{exp}} = \alpha + \beta\hat{y}, the sign of the error depends on \hat{y}. Report the crossing point, the fraction on each side, and the region-wise error (M-03).
+
+P-3. No non-significant result is proof of no effect. Equivalence must be tested, not inferred from absence of significance (M-04, M-05).
+
+H.2 On experimental design
+
+P-4. Perturbation ≠ variation. A CRISPRi ablation and a DNA variant are different biological quantities. Treating the difference as calibration error is a category error dressed as a metric (M-01).
+
+P-5. A transformation must be pre-specified, finite, and falsifiable. Otherwise the “transformation” is a post-hoc fit to the evaluation set (P-03).
+
+P-6. Dataset selection is a scientific eligibility decision, not a convenience. A public dataset is not automatically licensed, independent, or out-of-distribution (F-04, S-02).
+
+H.3 On statistics
+
+P-7. Small-cluster inference requires small-cluster methods. Asymptotic cluster-robust SEs are invalid for G < 40; the “rule of 42” is unreliable for unbalanced clusters (M-06).
+
+P-8. A difference in significance is not a significant difference. Comparing AG1 and AG2 requires Δγ₃ with clustered bootstrap CI, not two separate p-values (M-05).
+
+P-9. Leakage is silent. If the stochastic seed, primary modality, k, or normalization constants are chosen after seeing evaluation data, the metric is partially in-sample and no correction can recover it (M-07).
+
+H.4 On scientific honesty
+
+P-10. The framework must be able to demonstrate its own irrelevance. A framework that can only confirm its utility is a persuasion device, not a scientific instrument (R-06, FR-17).
+
+P-11. Negative, equivalent, and inconclusive results are all reportable. The three-outcome structure of H1 and H4 exists precisely so that no result is forced into a false binary (M-04, M-05).
+
+P-12. Pre-registration is the cheapest defense against post-hoc drift. It converts “a framework we built” into “a hypothesis we tested” (S-07, FR-10).
+
+P-13. Causal language must be scoped to the intervention actually performed. CMAE is a claim about model input, not about biology (M-02).
+
+H.5 On research programme discipline
+
+P-14. Measure the evidence base first; build the instrument second. No code until G1.1–G1.5 are frozen (R-04).
+
+P-15. Verification against primary sources is not optional. Six factual errors (F-01 to F-06) were caught by source verification. Without it, the programme would have been built on a reversed slope, a mislabeled dataset, and a non-existent API field.
+
+P-16. Every correction must be logged, not overwritten. The intellectual trajectory is part of the scientific record (this appendix).
+
+---
+
+Appendix I — Open Questions and Unresolved Items
+
+These are items that remain open as of v0.3. They are listed so that future versions cannot quietly resolve them without an explicit decision.
+
+ID Open question Blocks Resolution path
+OQ-01 Does filter_to_observed actually return a strict subset, or a null filter? H3, G1.4 Execute G1.4 Phase 1 audit
+OQ-02 Does the API support controlled masking? CMAE, H3 Execute G1.4 Phase 2
+OQ-03 Is AG2’s training corpus fully disclosed enough to verify C₀ for Fulco/Gasperini/Schraivogel? H1, H4 G1.2b locus audit
+OQ-04 Does the local k_dev ∈ {50, 200} / k_eval ∈ {100, 500} separation preserve adequate power? H4 G1.3 power simulation
+OQ-05 Can Fulco, Gasperini, and Schraivogel be harmonized to a single perturbation estimand? Track B G1.2 dataset harmonization
+OQ-06 Is a fourth enhancer-focused dataset available in a non-K562 cell state? H2, cross-state generalization G1.2 additional search
+OQ-07 Does the evidence score survive prospective validation (not just retrospective)? H4 robustness Post-v0.3 study design
+OQ-08 What is the appropriate diversity constraint threshold if 100 kb windows overlap TADs? H4 TAD-aware sensitivity analysis
+OQ-09 Should the AG1 vs AG2 comparison use the same evaluation fold or independent folds? H1 G1.3 statistical decision
+OQ-10 Is the biological utility endpoint (mean \|log FC\|) directionally meaningful for enhancer ablation? H4 Biological review
+
+---
+
+Appendix J — Document Version Map
+
+Version Date Key additions Frozen at
+v0.1 Session msg 3 Initial G0 audit; 4 hypotheses; 3-layer sketch; Track A/B first mentioned No
+v0.1.1 Session msg 5 Calibration corrected; CMAE; ŷ*; H1 three-part; two H4 endpoints; component ablation; G1.3b G1.1
+v0.2 Session msg 9 Source verification; wild cluster bootstrap; TOST; contamination columns; ŷ* formalized G1.1, G1.2 (partial)
+v0.3 Session msg 13 filter_to_observed; Schraivogel correction; L1–L4 leakage controls; H4 equivalence; config file G1.1, G1.2, G1.3, G1.5
+Appendices Current Session synthesis; proposal inventory; correction log; decision registry; epistemic principles; open questions Meta-record
+
+---
+
+Appendix K — Summary of the Programme’s Central Commitment
+
+Across all corrections, one principle remained constant and was sharpened rather than revised:
+
+AG2-PACT is not designed to demonstrate that its evidence layer must improve AlphaGenome 2. It is designed to test whether it does — and to report, without distortion, the outcome either way.
+
+Every structural decision in v0.3 is downstream of this commitment:
+
+· the three-part H1 decision (support / equivalence / inconclusive) exists so that no result is forced into a false binary;
+· the H4 equivalence clause exists so that a small-but-real effect is not misreported as null;
+· the 10-row component ablation exists so that provenance can be denied credit if it does not earn it;
+· the pre-registration gate exists so that the evidence score cannot be tuned to the evaluation set;
+· the filter_to_observed fallback exists so that a missing API primitive cannot be replaced by a plausible-sounding proxy;
+· the Track A / Track B separation exists so that a category error cannot be dressed as a calibration metric;
+· the contamination audit exists so that a zero-shot claim is not contaminated by training data.
+
+The programme’s central falsifiable question, restated once more for the record:
+
+Can cell-state-aware evidence provenance and distance-dependent reliability assessment improve the experimental validation efficiency of conditional genomic foundation-model predictions beyond raw sequence-to-function scores?
+
+If the answer is yes, the contribution is the evidence layer. If the answer is no, the contribution is the demonstration that the layer is unnecessary — which is equally scientific, and which the framework is explicitly designed to be able to report.
+
+Next concrete deliverable: G1.3b (OSF preregistration), followed by G1.4 execution (API provenance audit). 🌹
