@@ -1,0 +1,1356 @@
+Identity-to-Topology Binding under Compromised Host Observation: 
+
+A Formal Framework for Platform-Scoped Positional Attestation
+
+ouadi Maakoul and SI TEAM 
+
+Abstract
+
+Cryptographic attestation establishes that a key belongs to a component and that the component's firmware matches a reference manifest. It does not establish where the component is. This dissertation develops a formal framework for determining which positional claims the attestation stack can express, which it can derive under stated assumptions, and which it cannot attain without anchoring that the verifier must supply.
+
+The framework separates three position spaces — logical role P_1, bus-level topological reachability P_2, and physical slot P_3 — and orders attestation claims in a strict ladder L_0 \prec L_1 \prec L_2 \prec L_3 \prec L_4, in which SPDM establishes L_0 and L_1, TDISP establishes L_2, and claims over P_2 and P_3 require a positional mechanism whose existence and semantics are platform-dependent. It separates two adversary capabilities that the literature routinely conflates — a reporting-integrity adversary \mathbb{A}, a relay adversary \mathbb{B}_{\mathrm{rel}}, and a channel-integrity adversary \mathbb{B}_{\mathrm{int}} grounded in the specification-level weaknesses of PCIe IDE disclosed in December 2025 — and shows that \mathbb{B}_{\mathrm{rel}} and \mathbb{B}_{\mathrm{int}} are incomparable, so that no scalar measure of attack resistance is well defined. It replaces the path-disjointness heuristic for evidential independence with a dominator-based criterion, defines effective evidential support as a min-cut over adversary-admissible dominating sets, and compares candidate methods under a trust-assumption preorder that admits incomparability as a legitimate verdict rather than forcing a ranking.
+
+The principal results are stated with their exact status. A host-mediated impossibility theorem holds under an explicit indistinguishability premise that host-mediation alone does not supply; where device-unique identity is checked against enrollment, the impossibility takes a different form, and the residual attacks are positional rather than identitary. The escape families that recover soundness in the residual stratum are a partition of the considered space, not a proof of exhaustiveness: distance and timing bounds are excluded intra-chassis on resolution grounds, and enrollment anchoring is a terminal event rather than an online observation. A stratum in which the channel-integrity predicate fails yields indeterminacy and forces abstention, not a demonstrated soundness failure.
+
+The framework is falsification-oriented. Its most likely honest outcome, applied to a specific platform, is that the stratum closes — either because the available mechanisms already suffice, or because no mechanism can suffice without an assumption the verifier will not make. Both are admissible results.
+
+---
+
+Introduction
+
+1. The Problem
+
+A verifier that receives an attestation report from a hardware accelerator learns something precise and something incomplete. It learns that a key is live, that the key is bound to a device certificate, and that the device's firmware measurements match a reference manifest. It does not learn where the device is. The report carries no term whose referent is a slot, a port, or a backplane position. The verifier is told that some genuine device answered; it is not told which position the answering device occupies.
+
+This is not an oversight in any particular protocol. It follows from what attestation evidence denotes. A signature is a relation between a key and a message. A position is a relation between a component and a physical structure. No cryptographic operation transforms the first into the second. Whenever a verifier asserts a positional claim on the basis of attestation evidence, it is composing that evidence with an additional premise — an enrollment record, a board-layout document, a firmware-provisioned port identity, or a physical inspection — and the security of the composed claim is bounded by the security of the additional premise.
+
+The problem becomes acute when the entity that reports position is itself untrusted. In a confidential-computing deployment, the host operating system and the hypervisor are outside the trusted computing base by construction. The host controls the enumeration path, the driver stack, the topology manifest, and the transport of every observation the verifier receives. If the host reports that the device at slot s is component c, the verifier has no independent means to check the report unless some observation in its view escapes host mediation. The question this dissertation addresses is what such an escape would require, and whether any escape is available on a given platform.
+
+2. Why Existing Framings Do Not Resolve It
+
+Three framings in the existing literature approach the problem without resolving it.
+
+Attestation architectures describe the flow of evidence from attesters to verifiers. They specify roles, composite patterns, and the treatment of untrusted mediators, but they do not specify a verifier and they do not contain a positional term. An architecture that describes how evidence is collected and composed is not an architecture that describes how evidence is attached to a position. The composition of evidence and the authentication of position are different problems, and the former does not entail the latter.
+
+Platform attestation specifications describe discovery, measurement verification, certificate validation, and acceptance or remediation. They establish that a device is trustworthy in the sense that its firmware matches an expected manifest, and they may include an optional manifest of expected configuration. They do not, in their normative text, define a positional claim with a defined signer, scope, and freshness semantics. A manifest of expected configuration asserts what the operator intended; it does not assert what the platform currently realizes, and the difference between the two is exactly the gap that a compromised host can exploit.
+
+Link-protection mechanisms establish a protected channel between a device interface and a trusted domain. They provide confidentiality and integrity over the link, and they manage trusted attachment and detach. They are frequently described, in both technical and marketing literature, as establishing a binding between a device and a root port. This description attributes to the mechanism a property it does not have. A protected channel between a device interface and a trusted domain is a relationship between an interface and a domain; it is not a relationship between a card and a slot. The two are related by a board-level map that no cryptographic primitive in the stack authenticates, and treating the first as if it entailed the second is the central conceptual error this dissertation corrects.
+
+The correction matters because it changes what an experiment should measure. A verifier that observes a protected link has learned that a trusted-domain relationship exists. Whether the device at the other end of that link is in slot 0 or slot 1 is a separate question, answerable only by an independently trusted map from port to slot. An experiment that scores the mechanism as solving the positional problem conflates the two and inflates the apparent contribution.
+
+3. The Formal Apparatus
+
+The framework introduced here is built from four components.
+
+A position taxonomy. Three position spaces are distinguished: logical role P_1, bus-level topological reachability P_2, and physical slot P_3. The maps \lambda : P_1 \to P_2 and \sigma : P_2 \to P_3 are not authenticated by any primitive in the attestation stack. \lambda is an operator convention; \sigma is a board-layout fact. The taxonomy is not a refinement of a single notion of position; the three spaces support different claims, require different evidence, and fail under different adversaries.
+
+A claim ladder. Attestation claims are ordered L_0 \prec L_1 \prec L_2 \prec L_3 \prec L_4, where L_0 asserts the liveness of a key, L_1 asserts that the key belongs to a component with a given firmware lineage, L_2 asserts participation in a protected trusted-domain relationship, L_3 asserts bus-level reachability through a named interface, and L_4 asserts physical seating in a named slot. The ladder is forced by what the evidence terms denote. It is not a design choice, and it is not a measure of cryptographic strength: a mechanism at L_2 may use stronger primitives than a mechanism at L_3 while establishing a weaker positional claim.
+
+An adversary lattice. Three capability sets are distinguished. \mathbb{A} is a reporting-integrity adversary that controls any observation whose provenance passes through host software. \mathbb{B}_{\mathrm{rel}} is a relay adversary that routes a session to a genuine component at a different position. \mathbb{B}_{\mathrm{int}} is a channel-integrity adversary that influences the protected link itself, grounded in the specification-level weaknesses of PCIe IDE disclosed in December 2025. The ordering is \mathbb{A} \prec \mathbb{B}_{\mathrm{rel}} and \mathbb{A} \prec \mathbb{B}_{\mathrm{int}}, while \mathbb{B}_{\mathrm{rel}} and \mathbb{B}_{\mathrm{int}} are incomparable. Relay corrupts the referential integrity of the session; channel-integrity corruption preserves reference while breaking contextual integrity. A defense against one may leave the other untouched.
+
+A provenance-based notion of evidential independence. Observation functions carry provenance, and two claims are \kappa-independent when no single element of \kappa dominates both in the provenance graph. Path-disjointness is necessary but not sufficient. The effective support of a claim set is the minimum size of an adversary-admissible dominating set, a min-cut quantity that measures how many independent elements of \kappa must be activated to invalidate the claims. A verifier that adds an observation function whose provenance shares a dominator with the existing functions has not added evidence.
+
+4. Principal Results and Their Status
+
+The framework yields results of three kinds, and their status differs.
+
+A conditional impossibility. Where every observation is host-mediated and the components under comparison are indistinguishable in the verifier's view, no verifier is sound for L_3 or L_4 against a relay adversary. The result is stated conditionally because the indistinguishability premise is not a consequence of host-mediation. Host-mediation means that the adversary controls transport; it does not mean the adversary can forge signatures. In the relayed world, the relayed-to component signs with its own key, and the views differ at the identity level whenever the verifier checks device certificates against enrollment. The premise must therefore be stated explicitly, and the experiment must specify whether it holds.
+
+An identity-distinguished case. Where the verifier checks device-unique identity and the components are distinct, a relay to a different device produces a detectable mismatch. This does not establish positional soundness. Two residual attacks remain: relay of the same device across ports, and falsification of the port label by the compromised host. In both cases the identity check passes and the positional component of the claim is host-supplied. The consequence for the experimental design is that the physical same-chassis swap exercises a different case depending on whether device-unique identity is in or out of the verifier's view, and the two cases are not the same test.
+
+A partition of the escape space. Soundness in the residual stratum is recoverable through an independent observation, a hardware-rooted nonce-bound channel binding, or a position-sensitive measurement. These three families partition the space the framework considers; the partition is not a proof of exhaustiveness. Two further families are excluded by separate argument. Distance and timing bounds are a genuine escape in the remote-relay setting, but intra-chassis delay differences are on the order of nanoseconds while documented distance-bounding mechanisms operate at resolutions several orders of magnitude coarser, so the family is excluded on resolution grounds rather than by oversight. Enrollment anchoring — baseboard strapping, field-replaceable-unit records, physical inspection — is a one-time terminal event, not an online observation, and it is the terminus of the anchoring chain rather than an escape from it.
+
+A weaker conclusion than soundness failure. Where the channel-integrity predicate fails, the verifier's observation of the link-protection state is consistent with at least two link histories, one satisfying and one violating the positional invariant, and the verifier cannot distinguish them from the observation alone. The correct response is abstention. This is indeterminacy, not a demonstrated soundness failure. A soundness failure would require constructing two histories with the same link-protection state and showing that they are indistinguishable to the verifier's predicate; the specification-level vulnerability descriptions do not supply that construction. The weaker claim is sufficient, because indeterminacy forces abstention under pre-registered rules, and it is the honest claim.
+
+5. Scope and Commitments
+
+The framework is audit-oriented. It does not propose an enforcement mechanism, and it does not present positional binding as a step toward disablement, throttling, or geofencing. Proving that a component is at a position is an audit claim; acting on that proof is an enforcement claim with a different threat model and a different abuse model. The distinction is maintained throughout.
+
+The framework does not claim that positional binding is achievable for a single chip at geographic scale. Slot binding is not country, datacenter, or rack binding; delay-based geolocation is a different problem with different primitives and different failure modes. The scope is limited to position within a platform.
+
+The framework is falsification-oriented in a specific sense. Each structural claim is paired with an observation that would contradict it. The impossibility result is refuted by a host-mediated verifier that is demonstrated sound on a physical swap of indistinguishable components. The scope result is refuted by a normative specification that defines a link-protection state as a function of a slot identifier authenticated by a hardware root. The independence criterion is refuted by a verifier with minimal effective support that detects a swap in a run where its dominator is activated. The trust preorder is refuted as an adequacy criterion by a candidate declared incomparable that is demonstrated to dominate a baseline under a strictly stronger adversary class without additional assumptions. Each of these is a concrete experimental or documentary refutation, not a rhetorical concession.
+
+The framework admits three outcomes, and treats all three as admissible. The stratum may close because existing mechanisms suffice; this is a successful audit, not a failed project, and it is published with the hardening matrix, the physical swap log, and the assumption ledger. A narrow implementation or enforcement gap may be identified and attributed to a named cause; the contribution is then an engineering configuration with explicit platform limits. A measurable verification gap may be demonstrated, with a candidate whose assumption vector is admissible relative to the strongest baseline in the same stratum and whose effective support is strictly greater on the adversarial subset; only in this case is a protocol contribution claimed.
+
+The most likely honest outcome, applied to any specific platform, is that the stratum closes. The available mechanisms are stronger than a casual reading of the threat model suggests, and the conceptual gap that remains is narrower than the problem statement implies. The value of the framework lies not in producing a new primitive but in making precise what existing hardware can and cannot prove, and in ensuring that whatever is claimed is claimed at the level of the ladder at which it is actually established.
+
+6. Organization
+
+The development proceeds from the formal setting, through the adversary lattice and the baseline interpretation, to the structural limits of link protection, the provenance-based independence criterion, the trust-assumption preorder, the impossibility and escape results, and the decision-theoretic evaluation. The formal results are stated with their proofs and with an explicit note on the strength of each claim. The appendices record the evidentiary basis of each substantive proposition, the formulations excluded because they claim more than the evidence supports, the items that must remain unknown, and the methodological choices that are decisions rather than findings.
+
+1. Problem Statement and Scope
+
+The problem addressed here is not whether a hardware component can be cryptographically identified. SPDM authenticates a responder key and the measurements bound to it, and its formal analysis establishes authentication of the responder and of its measurements against a network adversary. The problem is whether the identity so established can be attached to a position within a platform, when the entity that reports position is itself untrusted.
+
+The distinction is structural, not terminological. An authenticated key is a cryptographic object; a position is a physical relation. No transcript in the attestation stack contains a term whose referent is a motherboard slot. The theoretical task is to state which positional claims are expressible in the available evidence, which are derivable under stated assumptions, and which are unattainable without anchoring that the verifier must supply. The framework is falsification-oriented: it admits as a first-class outcome the possibility that existing mechanisms already suffice, or that no mechanism can suffice without an assumption the verifier is unwilling to make.
+
+A caution governs the entire development. The framework distinguishes throughout between capability claims (what an adversary can do under stated conditions) and possibility claims (what a verifier can establish when the adversary does not act). It distinguishes a soundness failure (the verifier accepts a false positional claim with non-negligible probability) from indeterminacy (the verifier cannot exclude a world in which the claim is false). These distinctions are load-bearing: several results below are weaker than a casual reading of earlier drafts might suggest, and the weaker formulation is the correct one.
+
+2. Formal Setting
+
+2.1 Platforms, components, positions
+
+A platform is a tuple
+X = \langle \mathcal{G}, \mathcal{S}, \mathcal{B}, \Phi, \Delta, \mathcal{R}, \pi \rangle
+
+
+with $\mathcal{G}$ accelerators, $\mathcal{S}$ switch elements, $\mathcal{B}$ the baseboard, $\Phi$ firmware configuration, $\Delta$ the driver and attestation-SDK stack, $\mathcal{R}$ a set of reference integrity manifests, and $\pi$ a deployment policy. A component $c \in \mathcal{C} = \mathcal{G} \cup \mathcal{S} \cup \mathcal{B}$ is any element whose identity can be attested.
+
+Three position spaces must be distinguished, because conflating them is the source of most imprecision in the literature. Let $\mathcal{P} = P_1 \cup P_2 \cup P_3$.
+
+· $P_1$ is logical position: a role label in an operator manifest, e.g. $\texttt{env.gpu.0}$. A claim over $P_1$ asserts assignment, not physics.
+· $P_2$ is topological position: the bus-level reachability interface, i.e. the Root Port or switch egress through which $c$ is reached. A claim over $P_2$ asserts that $c$ is reached through interface $i$.
+· $P_3$ is physical position: the connector or slot on the baseboard.
+
+The relations between these spaces are given by maps
+\sigma : P_2 \to P_3, \qquad \lambda : P_1 \to P_2,
+
+
+neither of which is authenticated by any cryptographic primitive in the stack. $\sigma$ is a board-layout fact, established at manufacturing and readable only through documentation or inspection; $\lambda$ is an operator convention. The central structural observation of this framework is that attestation evidence bears on $\mathcal{C}$ and at best on $P_2$; claims over $P_3$ inherit whatever trust is placed in $\sigma$.
+
+2.2 Observation and view
+
+A verifier is a pair $V = \langle O, \alpha \rangle$, where $O = \{o_1, \ldots, o_n\}$ is a set of observation functions and $\alpha$ is an acceptance predicate. Each $o_j$ maps platform state to an element of an observation codomain $\Omega_j$, and the verifier's view is
+\mathsf{View}_V(X) = \big(o_1(X), \ldots, o_n(X)\big) \in \prod_j \Omega_j.
+
+
+Each observation function carries a provenance: the chain of components, firmware, transports and trust anchors through which $o_j(X)$ was produced. Provenance, not syntactic path, determines independence; this is formalized in §7.
+
+2.3 Binding predicate and soundness
+
+Let $\beta : \mathcal{C} \rightharpoonup \mathcal{P}$ be the ground-truth binding, partially defined because not every component has every kind of position. A positional claim is a pair $(c, p)$ with intended reading $\beta(c) = p$. The verifier's output is $\hat{y}(c, p) \in \{0, 1, \bot\}$, with $\bot$ denoting abstention.
+
+Definition 1 (Positional soundness). Let $\kappa$ be an adversary capability set. The verifier $V$ is $\kappa$-sound for position type $P_k$ with error $\varepsilon$ if for every adversary $\mathcal{A} \in \kappa$ and every world in which $\beta(c) \neq p$,
+\Pr\big[\hat{y}(c, p) = 1\big] \le \varepsilon.
+
+Definition 2 (Positional completeness). $V$ is $\kappa$-complete for $P_k$ with rate $\delta$ if, whenever $\beta(c) = p$ and $\mathcal{A} \in \kappa$ is inactive, $\Pr[\hat{y}(c, p) = 1] \ge 1 - \delta$.
+
+The framework is concerned almost exclusively with soundness, because the residual question is whether soundness is attainable, not whether it is convenient.
+
+2.4 The claim ladder
+
+Attestation claims form a strict hierarchy of increasing strength,
+L_0 \prec L_1 \prec L_2 \prec L_3 \prec L_4,
+
+Level Claim Established by
+$L_0$ A key exists and is live SPDM challenge–response
+$L_1$ The key belongs to $c$ with firmware lineage $\ell$ SPDM + DICE/concise evidence + reference manifests
+$L_2$ $c$ participates in a protected trusted-domain relationship TDISP TDI–TVM binding
+$L_3$ $c$ is reachable through interface $i$ (a $P_2$ claim) Channel- or bus-level positional mechanism
+$L_4$ $c$ is seated in slot $s$ (a $P_3$ claim) $L_3$ composed with $\sigma$
+
+The ladder is not a design choice; it is forced by what the evidence terms denote. SPDM identity keys are recommended unique per device, and the NVIDIA device identity is a device-unique ECC-384 key pair whose certificate is signed by a device-unique credential. The consequence is immediate and is used throughout: SPDM evidence distinguishes components at $L_1$ even when the transport is adversary-mediated. It does not distinguish positions at $L_3$ or $L_4$, because no term in the evidence denotes a position.
+
+3. The Adversary Capability Lattice
+
+3.1 Capabilities
+
+Definition 3 (Adversary A). $\mathcal{A} \in \mathbb{A}$ can modify, suppress, reorder, or fabricate any observation whose provenance passes through host software. For every $o_j$ with host-mediated provenance, $\mathcal{A}$ may replace $o_j(X)$ by any element of $\Omega_j$.
+
+Definition 4 (Adversary B-relay). $\mathcal{A} \in \mathbb{B}_{\mathrm{rel}}$ can route an attestation conversation to a genuine component $c'$ at position $p' \neq p$ while the verifier believes it addresses $c$ at $p$. The routed-to component is genuine and correctly provisioned; only position differs.
+
+Definition 5 (Adversary B-integrity). $\mathcal{A} \in \mathbb{B}_{\mathrm{int}}$ can influence the protected link itself. This capability is grounded in the specification-level weaknesses of PCIe IDE disclosed in December 2025: reordering of protected traffic without detection (CVE-2025-9612), acceptance of incorrect data through completion-timeout and tag reuse (CVE-2025-9613), and consumption of stale data after incomplete flush or re-keying during rebinding (CVE-2025-9614). Because IDE operates at the link layer, such conditions may not be detectable by the operating system or the application.
+
+3.2 Ordering
+
+Write $\kappa_1 \preceq \kappa_2$ when every capability in $\kappa_1$ is available to $\kappa_2$. Then
+\mathbb{A} \prec \mathbb{B}_{\mathrm{rel}}, \qquad \mathbb{A} \prec \mathbb{B}_{\mathrm{int}},
+
+
+while $\mathbb{B}_{\mathrm{rel}}$ and $\mathbb{B}_{\mathrm{int}}$ are mutually incomparable. Relay corrupts the referential integrity of the session; channel-integrity corruption preserves reference while breaking contextual integrity. A defense against one may leave the other untouched. This incomparability is structural, and it implies that no scalar "attack resistance" is well defined.
+
+Proposition 1 (Monotone cost of soundness). If $V$ is $\kappa_2$-sound then $V$ is $\kappa_1$-sound for $\kappa_1 \preceq \kappa_2$. The converse fails in general.
+
+Proof. The quantified set of adversaries in Definition 1 is larger for $\kappa_2$. Failure of the converse follows from the incomparability of $\mathbb{B}_{\mathrm{rel}}$ and $\mathbb{B}_{\mathrm{int}}$: a verifier that validates a hardware-rooted, nonce-bound channel identifier — in the sense of escape condition 2 in §9.3 — is $\mathbb{B}_{\mathrm{rel}}$-sound for the endpoint claim, but remains vulnerable to $\mathbb{B}_{\mathrm{int}}$ if link ordering is not enforced. The two soundness properties are therefore independent. $\square$
+
+Remark 1. The counterexample must use a hardware-rooted, nonce-bound channel identifier, not merely a validated one. A relay adversary can forward a transcript bearing an unbound identifier, or replay a previously observed one; binding to endpoint and nonce is what defeats forwarding. The property that makes the counterexample work is exactly the property that $M_1$-C is required to establish (§10.4), so the counterexample and the candidate requirements are consistent.
+
+4. The Baseline Lattice and Its Correct Interpretation
+
+Baselines are elements of $\mathcal{B} = \{B_0, \ldots, B_5\}$, each characterized by a pair $(\mathsf{claim}_i, \mathsf{ass}_i)$ where $\mathsf{claim}_i$ is a level on the ladder and $\mathsf{ass}_i$ is an assumption vector (§8).
+
+Baseline Level Correct interpretation
+$B_0$ host inventory none Negative control; $\mathbb{A}$-controlled
+$B_1$ SPDM/RATS $L_0, L_1$ Responder key and measurements; no path term
+$B_2$ OCP platform attestation $L_0, L_1$ Discovery, measurement; no positional term
+$B_{3a}$ PPCIE as documented $L_1$ + topology check Entries of the topology check not publicly specified; Hopper HGX 8-way with CPU TEE in the canonical example; verifier version must be recorded
+$B_{3b}$ PPCIE with PDI required $L_3$ conditional To be tested, not presumed: PDI semantics are not publicly specified
+$B_4$ TDISP/IDE $L_2$ + conditional $L_3$ TDI-to-TVM with link protection; slot attribution only via $\sigma$
+$B_5$ unprivileged topology certificate $L_1'$ + coarse location Tenant-side fingerprint and hardware class; not a slot binding
+
+Three corrections are load-bearing.
+
+Correction 1 ($B_{3a}$ is not driver-enumerated by documentation). Public documentation describes an enumeration phase and a subsequent topology check against an expected configuration, but does not specify the provenance of the check's inputs. Treating the provenance as unknown and testing it in scenario $S_2$ is the honest disposition.
+
+Correction 2 ($B_{3b}$ is not a defined positional signal). The claim schema consulted does not exhibit a publicly specified positional claim with defined signer, scope and freshness semantics. An optional claim cannot carry a mandatory guarantee; an unspecified claim cannot carry any guarantee. $B_{3b}$ therefore belongs in the column "to be tested"; its $L_3$ status is an experimental question, not a premise.
+
+Correction 3 ($B_5$ is not a slot baseline). The unprivileged certificate commits per-SM timing structure, hardware class and coarse network location. It does not commit a PCIe slot, and it does not establish firmware integrity. It is a comparator for continuity and class, not for $P_3$.
+
+Remark 2 (OCP version anchor). The platform-attestation baseline corresponds to OCP Attestation of System Components v1.1 (June 2023). That specification describes a platform verifier which communicates with attesters to determine trustworthiness, collects measurements, verifies signatures and certificate chains, and accepts or remediates. It does not, in the sections examined, state normatively that bridges relay without verifying the attester; that observation appears in secondary analyses of the specification's trust model. Claims about the bridge-relay gap must cite either a specific normative section or the secondary literature, not the specification title alone.
+
+5. Structural Limits: What TDISP Establishes
+
+5.1 The scope of the TDI–TVM relation
+
+Let $\tau$ denote a TDI, $\nu$ a trusted VM, and $\ell$ the protected link between them. TDISP provides a guarantee over the triple $(\tau, \nu, \ell)$: trusted attachment, link confidentiality and integrity, and management of trusted detach. Write the guarantee as
+\mathsf{TDISP} : (\tau, \nu, \ell) \mapsto \{\text{attached}, \text{locked}, \ldots\}.
+
+
+The domain of this map contains no term ranging over $\mathcal{P}$.
+
+Proposition 2 (TDISP scope). TDISP establishes $L_2$. It establishes $L_3$ if and only if an independently trusted map from Root Port to TDI is available and validated. It establishes $L_4$ if and only if, in addition, $\sigma$ is trusted.
+
+Proof. The state returned by $\mathsf{TDISP}$ is a function of $(\tau, \nu, \ell)$ alone. A claim over $P_2$ requires a term denoting a port; the port-to-TDI map $m : P_2 \to \{\tau\}$ is not in the domain and must be supplied externally, together with a trust argument. A claim over $P_3$ requires $\sigma$ in addition. The device interface report returned to the verifier describes the TDI's configuration, its MMIO resource list, and a nonce generated on transition to the locked state; it contains no field denoting the Root Port or the bus-device-function. Where a BDF appears in a device-signed artifact, the BDF is assigned by host enumeration (Root Complex or firmware) rather than by the device's hardware root; trusting such a field is trusting host enumeration, which is exactly Adversary A. The proposition therefore holds, and the proof is normative rather than merely definitional. $\square$
+
+Corollary 1 (Composition bound, logical form). For a verifier that composes an $L_3$ claim with a slot map $\sigma$, if either the $L_3$ claim or $\sigma$ fails, the composed $L_4$ claim fails. Hence the composed error is at least the error of the weaker link.
+
+Remark 3. The corollary is a logical claim about necessary conditions. It does not assert a probabilistic equality, and the equality clause that appeared in earlier drafts required an independence model that is not justified by the evidence. In general $\varepsilon_{P_3} \ge \max(\varepsilon_{L_3}, \varepsilon_\sigma)$, with no claim about when the bound is tight.
+
+5.2 The regress of anchoring
+
+Every positional claim terminates in an anchoring event: enrollment, baseboard strapping, firmware-provisioned port identity, or physical inspection. This is a consequence of the fact that no cryptographic primitive denotes a physical relation.
+
+Definition 6 (Anchoring chain). An anchoring chain for claim $(c, p)$ is a sequence $a_0 \to a_1 \to \cdots \to a_n$ where $a_0$ is the evidence term, $a_n$ is an anchoring event, and each $a_i \to a_{i+1}$ is an authenticated derivation.
+
+The derivation relation must be well-founded, i.e. it admits no infinite descending chain in any admissible world. Cyclic derivations are excluded by definition, not by an implicit assumption of acyclicity in the platform graph.
+
+Proposition 3 (Termination). Let $\kappa$ be an adversary class, and suppose that every terminal event not trusted by the verifier is assumable by some adversary in $\kappa$. Then every $\kappa$-sound positional claim possesses a finite anchoring chain whose terminal event is trusted by the verifier.
+
+Proof. Suppose no such chain exists. Then the derivation either contains a cycle, contradicting well-foundedness, or terminates in an event that the verifier does not trust. In the second case, by the premise, some adversary in $\kappa$ can substitute that event, contradicting Definition 1 for $\varepsilon < 1$. $\square$
+
+Remark 4. The premise that untrusted terminals are assumable by $\kappa$ is substantive and must be stated. Without it the proposition is close to a tautology ("a sound claim terminates in trust"), which is true but uninformative. With the premise, the proposition locates the security parameter of a positional mechanism not in its cryptographic strength but in the length and trustworthiness of its anchoring chain.
+
+6. Channel Integrity: The IDE Mitigation Space
+
+The specification-level IDE weaknesses force a refinement of any baseline relying on link protection. Three properties of the mitigation space must be stated precisely, because they differ across the three CVEs and because earlier drafts conflated them.
+
+6.1 The mitigation vector
+
+Let
+\mathbf{m}(\ell) = \big(m_{9612}(\ell),\; m_{9613}(\ell),\; m_{9614}(\ell)\big)
+
+
+be a per-link vector with the following semantics.
+
+· $m_{9612}(\ell) \in \{\mathsf{E}, \mathsf{A}, \mathsf{U}\}$ is a pair property of the link: $\mathsf{E}$ iff both the host processor and the connected device support IDE Escort (the specification mechanism introduced for detection of forbidden reordering) and the mechanism is enabled for the IDE stream; $\mathsf{A}$ iff both support it but it is not enabled; $\mathsf{U}$ otherwise. It is not a per-component attribute.
+· $m_{9613}(\ell) \in \{\mathsf{E}, \mathsf{A}, \mathsf{U}\}$ is currently $\mathsf{U}$ on every shipping platform known to the author. The TDISP specification does not define a policy for handling completion-timeout redirection, and no deployable mitigation exists; the vendor advisories describe ongoing specification work and future processors "may adopt mitigations." The value becomes $\mathsf{E}$ only when the revised specification is published, adopted, and validated on the specific link. Treating $\mathsf{E}$ as a currently reachable state would be a category error.
+· $m_{9614}(\ell) \in \{\mathsf{E}, \mathsf{A}, \mathsf{U}\}$ is a per-component implementation property: $\mathsf{E}$ iff the endpoint's implementation performs the flush or re-key required at rebinding, validated for that firmware version; $\mathsf{A}$ iff the implementation is capable but the behavior is not validated; $\mathsf{U}$ otherwise.
+
+The vector is therefore not a single three-valued attribute but a heterogeneous record in which one coordinate is a pair property, one is a future state, and one is an implementation property.
+
+6.2 Channel-integrity predicate
+
+Define the channel-integrity predicate for an observation interval $[t_0, t_1]$:
+\mathcal{I}(\ell, [t_0, t_1]) \;=\; \mathcal{I}_{\mathrm{ord}} \wedge \mathcal{I}_{\mathrm{tag}} \wedge \mathcal{I}_{\mathrm{flush}},
+
+
+respectively ordering enforcement, absence of tag aliasing after completion timeout, and correct flush or re-keying at rebinding. Then
+\mathcal{I}(\ell, \cdot) \;\Longleftarrow\; m_{9612}(\ell) = \mathsf{E} \;\wedge\; m_{9613}(\ell) = \mathsf{E} \;\wedge\; m_{9614}(\ell) = \mathsf{E},
+
+
+and the implication is not reversible. Enforcement of one conjunct does not imply the others.
+
+6.3 The switch-path factor
+
+Let $\rho(\ell) \in \{0, 1\}$ indicate the presence of a programmable PCIe switch in the link path. Then
+\mathcal{I}^{*}(\ell) \;=\; \mathcal{I}(\ell) \wedge \big(\neg\rho(\ell) \,\vee\, \mathsf{validated\_mitigation}_{\mathrm{switch}}(\ell)\big).
+
+
+On current vendor guidance, $\rho(\ell) = 1$ is effectively disqualifying for the secure stratum: vendors recommend that programmable switches not be used in affected TDX Connect and IDE deployments, and note that avoiding them "does not fully mitigate" the completion-timeout class and "may not prevent" interposer attacks. The disjunct $\mathsf{validated\_mitigation}_{\mathrm{switch}}(\ell)$ is therefore nearly empty in practice. It is retained in the formula for completeness, but the stratum decision procedure treats $\rho = 1$ as placing the link in the residual stratum unless a validated mitigation is documented for that specific switch.
+
+6.4 Stratification of $B_4$
+
+Proposition 4 (Stratum indeterminacy). If $\mathcal{I}^{*}(\ell)$ fails during the observation interval, the verifier's observation of the TDISP state is consistent with at least two link histories, one in which the positional invariant holds and one in which it does not, and the verifier cannot distinguish them from the observation alone. The correct response is abstention, not a Boolean decision.
+
+Proof. Suppose $\mathcal{I}^{*}(\ell)$ fails. Then at least one of $\mathcal{I}_{\mathrm{ord}}$, $\mathcal{I}_{\mathrm{tag}}$, $\mathcal{I}_{\mathrm{flush}}$ fails, or $\rho(\ell) = 1$ without validated mitigation. In each case, by the description of the corresponding capability in §3.1, the adversary can cause the receiver to accept reordered or stale data under the same IDE stream and the same TDISP state. The verifier's TDISP-state observation is a function of the state, not of the link history, so both histories are consistent with it. Which of the two violates the positional invariant depends on which data the positional claim depends on; the verifier cannot resolve this from the TDISP state alone. Abstention is therefore the only sound response. $\square$
+
+Remark 5. The proposition is deliberately weaker than a soundness statement. It establishes indeterminacy, not a demonstrated soundness failure for the positional claim. A soundness failure would require constructing two link histories with the same TDISP state, one satisfying and one violating the positional invariant, and showing that they are indistinguishable to the verifier's predicate. That construction is not supplied by the CVE descriptions alone: the IDE flaws affect data consumed on the link, while the TDISP state is a distinct object. The weaker claim is sufficient for the protocol, because indeterminacy forces abstention under pre-registered rules, and it is the honest claim.
+
+7. Observation Provenance and Common-Cause Independence
+
+The requirement that two evidence sources sharing an observation path count as one is necessary but not sufficient. Two sources with formally distinct paths may share a failure domain, and it is the failure domain, not the syntactic path, that determines whether an adversary can invalidate both.
+
+7.1 Provenance graph
+
+Definition 7 (Provenance graph). The provenance graph of a verifier is a directed acyclic graph
+G = (V, E), \quad V = V_{\mathrm{claim}} \cup V_{\mathrm{obs}} \cup V_{\mathrm{root}} \cup V_{\mathrm{chan}} \cup V_{\mathrm{enr}},
+
+
+where $V_{\mathrm{claim}}$ are claims, $V_{\mathrm{obs}}$ observers, $V_{\mathrm{root}}$ trust roots, $V_{\mathrm{chan}}$ channels and intermediate devices, and $V_{\mathrm{enr}}$ enrollment events. An edge $(u, v)$ denotes that the claim or observation $v$ is derived from $u$. Every claim node must be traceable to the observer that collected it, the component and firmware that produced it, the transport and intermediate devices, the anchor that authenticates it, the enrollment event that fixed its meaning, and the adversary capabilities that could falsify or replay it.
+
+The graph separates online observation from enrollment anchoring, because the trust analysis of the two differs: an enrollment event is trusted once, at enrollment time; an online observer must be trusted continuously. The distinction is not cosmetic. A method that increases the number of online observers without extending the anchoring chain has not increased its positional assurance, because the terminal event on which those observers depend remains the same.
+
+7.2 Independence as absence of a common dominator
+
+Definition 8 ($\kappa$-independence). Two claims $c_1, c_2 \in V_{\mathrm{claim}}$ are $\kappa$-independent if there is no single element $u \in \kappa$ whose activation can invalidate both. In graph terms, $c_1$ and $c_2$ are $\kappa$-independent if the set of elements of $\kappa$ that dominate $c_1$ in $G$ and the corresponding set for $c_2$ are disjoint, where domination is taken after restricting to nodes whose compromise is within $\kappa$.
+
+Proposition 5 (Independence is not path-disjointness). Path-disjointness in $G$ is necessary but not sufficient for $\kappa$-independence.
+
+Proof. Two paths may be edge-disjoint yet share a dominator: host enumeration and BMC inventory may both depend on the same PCIe switch; two signed claims may both depend on the same device key or the same enrollment event. In each case the dominator is a common ancestor, so a single element of $\kappa$ invalidates both claims, and $\kappa$-independence fails while path-disjointness holds. $\square$
+
+7.3 Effective evidential support
+
+Let $S \subseteq V_{\mathrm{claim}}$ be the set of claims supporting a positional conclusion. The effective support is
+\mathrm{Supp}_\kappa(S) = \min_{D \in \mathcal{D}_\kappa(S)} |D|,
+
+
+where $\mathcal{D}_\kappa(S)$ is the family of $\kappa$-admissible dominating sets of $S$. This is a min-cut quantity: it measures how many independent elements of $\kappa$ must be activated to invalidate all claims in $S$. A verifier with $\mathrm{Supp}_\kappa(S) = 1$ has no evidential redundancy against $\kappa$, regardless of how many observation functions it invokes.
+
+The consequence for candidate methods is direct. A method that adds a fourth observation function whose provenance shares a dominator with the existing three has not increased $\mathrm{Supp}_\kappa$ and has not added evidence. The credit rule of §8 is a consequence of this quantity, not an independent stipulation.
+
+8. The Trust-Assumption Partial Order
+
+8.1 Assumption vectors
+
+For a method $i$ define
+\mathcal{A}_i = \big(A_i^{\mathrm{hw}},\; A_i^{\mathrm{fw}},\; A_i^{\mathrm{obs}},\; A_i^{\mathrm{ch}},\; A_i^{\mathrm{enr}},\; A_i^{\mathrm{phys}}\big),
+
+
+recording respectively hardware-root, firmware, observer, channel and transport, enrollment, and physical assumptions. Each component is an element of a lattice $\mathcal{L}_k$ ordered by strength, for a fixed adversary class $\kappa$.
+
+The lattices are not developed in full generality here, because their specific orderings are platform-dependent. Three orderings are used in the sequel and can be stated concretely.
+
+· Host observer. $A^{\mathrm{obs}} = \mathrm{host}$ is weaker than $A^{\mathrm{obs}} = \mathrm{BMC}$ in the sense that every element of $\kappa$ dominated by the host is dominated by the BMC, and possibly more. Formally, $\mathrm{host} \le_{\mathcal{L}_{\mathrm{obs}}} \mathrm{BMC}$.
+· BMC observer. $A^{\mathrm{obs}} = \mathrm{BMC}$ is weaker than $A^{\mathrm{obs}} = \mathrm{hardware\ root}$ when the BMC is not itself a hardware root: $\mathrm{BMC} \le_{\mathcal{L}_{\mathrm{obs}}} \mathrm{root}$. Whether the BMC is a root depends on the platform and must be recorded, not assumed.
+· Channel binding. An unbound channel identifier is weaker than a nonce-bound, hardware-rooted channel identifier in the sense that the relay adversary can forward or replay the former but not the latter.
+
+8.2 Admissibility preorder
+
+Definition 9. For methods $i, j$ and adversary class $\kappa$, write $i \preceq_\kappa j$ and say $i$ is admissible relative to $j$ if for every component $k$, $A_i^{k} \le_{\mathcal{L}_k} A_j^{k}$, and additionally $\mathrm{Supp}_\kappa(S_i) \ge \mathrm{Supp}_\kappa(S_j)$.
+
+Proposition 6. $\preceq_\kappa$ is a preorder. It is not total.
+
+Proof. Reflexivity and transitivity follow from the corresponding properties of each $\mathcal{L}_k$ and from monotonicity of the minimum. Non-totality is exhibited by any pair that moves trust from one domain to another: a method replacing a host observer by a BMC observer has $A^{\mathrm{obs}}$ incomparable when the BMC is neither stronger nor weaker than the host for the relevant $\kappa$, and is therefore neither $\preceq_\kappa$ nor $\succeq_\kappa$ to the baseline. $\square$
+
+The consequence is that incomparability must be reportable. A candidate that moves trust from host to BMC has not improved the method; it has changed the assumption, and the correct verdict is neither "improvement" nor "regression" but "incomparable under $\kappa$". Declaring such a candidate superior is the canonical experimental error this framework is designed to exclude.
+
+9. Impossibility and Escape Conditions
+
+9.1 The residual stratum
+
+Define the stratum indicator
+\Sigma(X, V) = \big(\text{TDISP-state},\; \mathbf{m}(\ell),\; \rho(\ell),\; \text{PDI-state},\; \mathrm{prov}(O)\big),
+
+
+where $\mathrm{prov}(O)$ records whether every observation in $O$ is host-mediated. The residual stratum is
+\Sigma_{\mathrm{res}} = \big\{\text{TDISP unavailable or } \mathbf{m}(\ell) \neq (\mathsf{E}, \mathsf{E}, \mathsf{E})\big\} \cap \big\{\text{PDI absent or unenforced}\big\} \cap \big\{\mathrm{prov}(O) \text{ host-mediated}\big\}.
+
+The mitigation vector is a first-class coordinate of $\Sigma$, not a refinement external to it. This placement makes the decision procedure of §13 mechanical: once $\mathbf{m}(\ell)$, $\rho(\ell)$ and the TDISP state are fixed for a platform, the stratum is determined.
+
+9.2 Indistinguishability-based impossibility
+
+Theorem 1 (Host-mediated impossibility, indistinguishability form). Let $V$ be a verifier all of whose observation functions are host-mediated, and let $\kappa \succeq \mathbb{B}_{\mathrm{rel}}$. Let $c, c'$ be components such that for every $o_j \in O$, the distributions of $o_j$ in the honest world $W_0$ (with $\beta(c) = p$) and the relayed world $W_1$ (with $\beta(c') = p' \neq p$ and the session relayed to $p$) are identical. Then $V$ is not $\kappa$-sound for $L_3$ or $L_4$ with error $\varepsilon < 1$.
+
+Proof. Since views are identically distributed and $\alpha$ is a function of the view, $\Pr[\alpha(\mathsf{View}_V) = 1 \mid W_0] = \Pr[\alpha(\mathsf{View}_V) = 1 \mid W_1]$. Completeness in $W_0$ requires the left side to be at least $1 - \delta$; hence the right side is at least $1 - \delta$. Since $\beta(c) \neq p$ in $W_1$, soundness requires the right side to be at most $\varepsilon$, so $\varepsilon \ge 1 - \delta$. $\square$
+
+Remark 6 (The indistinguishability premise is not a consequence of host-mediation). Host-mediation means that the adversary controls transport, not that it can forge signatures. In the relayed world, $c'$ signs with $c'$'s key, not $c$'s. The views therefore differ at the identity level whenever the verifier's observation codomain includes the device certificate and the verifier checks it against an enrollment record. The premise is an additional condition on the pair $(c, c')$ and on the verifier's predicate, not a by-product of host control. The next proposition addresses the case in which the premise fails.
+
+9.3 Identity-distinguished relay
+
+Proposition 7 (Identity-distinguished relay). Suppose the verifier checks device-unique identity against an enrollment record, and $c, c'$ have distinct device certificates. A relay to $c'$ then produces an identity mismatch the verifier can detect: the verifier does not accept $(c, p)$ on the basis of $c'$'s evidence. However, this does not establish positional soundness. Two residual attacks remain: (a) relay of $c$ itself to a different port, and (b) falsification of the port label by the compromised host. In both cases the positional component of the claim is host-supplied and is not protected by the identity check.
+
+Proof. Case (a): the verifier sees $c$'s evidence arriving through a port whose label the host reports. Identity is correct; port label is adversary-controlled. Case (b): the host reports the port label independently of the evidence, and the adversary substitutes it. In both cases the identity check passes and the positional component is compromised by Adversary A. The identity check therefore defeats relay to a different device but not relay of the same device across ports, nor falsification of port labels. $\square$
+
+Remark 7 (Consequence for $S_{3c}$). The physical same-chassis swap is the operative scenario against identity-distinguished relays. If the verifier checks device-unique serials, the two GPUs are distinguishable by identity, and the swap does not produce an indistinguishability-based failure. The failure must be shown positionally: the verifier correctly says "this is GPU #2" but has no evidence that GPU #2 is in slot 0 versus slot 1. The experiment must therefore specify whether device-unique identity is in or out of the verifier's view in $S_{3c}$. If it is in, the experiment tests $L_3$ soundness under identity-distinguished conditions, which is the realistic case. If it is out, the experiment tests the weaker indistinguishability case, which Theorem 1 covers. Both are informative; they are not the same test.
+
+9.4 Escape conditions as a partition
+
+Theorem 2 (Escape families, partition form). Let $V$ be a verifier and $\kappa \succeq \mathbb{B}_{\mathrm{rel}}$. If $V$ is $\kappa$-sound for $L_3$ in $\Sigma_{\mathrm{res}}$ under the identity-distinguished condition of Proposition 7, then at least one of the following holds.
+
+1. (Independent observation) $V$ contains an observation function $o$ whose provenance is not dominated by any element of $\kappa$ acting on the observation path, and whose anchoring chain terminates in a trusted event.
+2. (Channel binding) $V$ verifies a signature over a channel identifier produced by a hardware root that is itself position-anchored, and the signature binds the endpoint, the channel, and the challenge nonce.
+3. (Position-sensitive measurement) $V$ verifies a measurement whose distribution differs across positions with non-negligible advantage for every adversary in $\kappa$.
+
+Proof sketch. By Proposition 7, identity alone does not resolve position. Some observation must therefore carry positional information. If it is an online observation not dominated by $\kappa$, this is condition 1. If it is a channel identifier, it must be authenticated and bound to endpoint and nonce, since otherwise the adversary may forward or replay it across positions; this is condition 2. If it is a measurement, its distribution must separate positions; this is condition 3. These are the three ways in which a positional claim can be supported by evidence available in the stack, but the enumeration is a partition of the considered families, not a proof of exhaustiveness over all conceivable observation types. $\square$
+
+Remark 8 (What the theorem does not claim). The theorem does not claim that conditions 1–3 exhaust every conceivable escape. It partitions the observation types the protocol considers. Two further families exist and are excluded by separate argument.
+
+Exclusion 1 (Distance and timing bounds). A round-trip-time or latency bound is a genuine escape family in the remote-relay setting, where propagation delays across the network are measurable with sufficient resolution. In the intra-chassis setting, the relevant delay differences are on the order of the propagation time across a backplane, i.e. nanoseconds, while distance-bounding mechanisms documented for hardware attestation operate at resolutions of order $10^{-4}$ seconds. The resolution is therefore several orders of magnitude above the signal. Intra-chassis timing bounds are excluded on resolution grounds, not because the family is uninteresting. Remote-relay timing bounds remain in scope and belong to a separate analysis not developed here.
+
+Exclusion 2 (Enrollment anchoring). Enrollment, baseboard strapping, FRU records, and physical inspection are not online observation functions. They are one-time anchoring events whose trust is established at enrollment time and not re-established per observation. They are the terminal events of Proposition 3, not escapes of Theorem 2. A verifier whose only positional assurance comes from enrollment is at $L_3$ only if the enrollment event is trusted and the online observation is authenticated against it; otherwise it is at $L_1$ with an operator convention attached.
+
+10. Consequences for the Candidate Space
+
+Theorem 2 partitions the candidate space as follows.
+
+$M_1$-H (hardened verifier). Adds no online observation beyond those already available. It cannot escape Theorem 1 or Proposition 7 and is an engineering contribution at $L_0$–$L_2$, not a positional mechanism. Its value lies in fail-closed policy — rejecting user-supplied evidence, requiring OCSP, rejecting stale reference manifests, and abstaining on missing positional claim and on unknown channel-integrity status. This is a genuine contribution to operational assurance, but it is not a positional primitive.
+
+$M_1$-C (channel-bound evidence). An escape of type 2. Its soundness is bounded by the authenticity of the channel identifier and by the anchoring of the hardware root that produces it. A channel identifier supplied by the host is not an escape; it relocates the original problem into a new field. The minimum specification must state, for any concrete proposal: who mints the identifier; which hardware root authenticates it; what exactly is signed (endpoint, Root Port, link, or path); how the challenge nonce is bound; whether a relay can reproduce the transcript at another position; and what prevents an intermediate switch or compromised controller from substituting the path. Until these questions have concrete answers, $M_1$-C is a research direction, not an implementable candidate.
+
+$M_1$-P (independent observer). An escape of type 1. Its soundness is bounded by the anchoring chain of the observer. Because OCP already specifies a platform verifier with sideband interrogation, $M_1$-P cannot claim novelty at the level of architecture; it can only claim a positional property that OCP does not supply, evaluated under the same ledger. Evaluation must include BMC compromise as a scenario, not an out-of-scope assumption.
+
+$B_5$ (unprivileged topology certificate). An escape of type 3, bounded by the separation of measurement distributions across positions. Its stated target is fingerprint, hardware class and coarse location rather than slot; it supports a continuity claim — that the workload executes on an accelerator with the enrolled fingerprint — not a $P_3$ claim. It is a comparator for the continuity endpoint, not for the positional endpoint.
+
+11. Decision-Theoretic Evaluation
+
+11.1 Paired correctness and the primary endpoint
+
+For each case $k$, let $y_k$ be ground truth from the physical log and $\hat{y}_{i,k}$ the output of method $i$. Define $Z_{i,k} = \mathbf{1}\{\hat{y}_{i,k} = y_k\}$. For comparator $j$ and candidate $i$, the discordance counts are
+b = \sum_k \mathbf{1}\{Z_{j,k} = 1, Z_{i,k} = 0\}, \quad
+c = \sum_k \mathbf{1}\{Z_{j,k} = 0, Z_{i,k} = 1\}, \quad
+n_d = b + c.
+
+
+Under $H_0$ of equal accuracy, $b \sim \mathrm{Binomial}(n_d, \tfrac12)$. Use the exact test when $n_d < 25$ and the continuity-corrected asymptotic statistic
+\chi^2 = \frac{(|b - c| - 1)^2}{b + c}
+
+
+otherwise. Reporting two independent proportions is inadmissible: the same cases are evaluated by both methods, and the samples are not independent.
+
+11.2 Selective risk and its precondition
+
+If a method abstains, it is a selective classifier. Let $s_k \in \mathbb{R}$ be its confidence score and $\tau$ a threshold with abstention when $s_k < \tau$. Then
+\operatorname{cov}(\tau) = \frac{1}{n}\sum_k \mathbf{1}\{s_k \ge \tau\}, \qquad
+r(\tau) = \frac{\sum_k \mathbf{1}\{s_k \ge \tau\}\,\mathbf{1}\{\hat{y}_k \neq y_k\}}{\sum_k \mathbf{1}\{s_k \ge \tau\}},
+
+
+and the area under the risk–coverage curve is $\mathrm{AURC} = \int_0^1 r(\tau)\, d\operatorname{cov}(\tau)$.
+
+Remark 9 (Precondition for AURC). AURC is defined only when a meaningful score exists. A method that emits correct, incorrect, or abstain has no score, and constructing a pseudo-probability to enable AURC is a category error. In that case the primary endpoint is paired correctness at a pre-registered coverage, and AURC is not computed. The primary endpoint for the experiment is paired correctness on $S_{3c} \cup S_4$ within the relevant stratum; coverage, selective risk at a pre-registered coverage, and AURC are secondary endpoints, the last only where a score exists.
+
+11.3 Two endpoints
+
+The framework distinguishes two capabilities that a single accuracy figure would conflate:
+Z^{\mathrm{pos}}_{i,k} = \mathbf{1}\{\text{the verifier attributes } c \text{ to its current position}\},
+
+
+Z^{\mathrm{cont}}_{i,k} = \mathbf{1}\{\text{the verifier detects that } c \text{ has moved since enrollment}\}.
+
+
+A method may achieve the first and fail the second, or the reverse. The physical swap instrument is the instrument for the first; the enrollment-then-swap sequence is the instrument for the second. Both must be reported. A fingerprint method may achieve continuity and fail position; an enrollment-based binding may achieve position at enrollment and fail continuity after a silent reconfiguration.
+
+11.4 Ground truth as a separate instrument
+
+The physical log establishes ground truth in a controlled laboratory setting. It does not establish that a deployed verifier can authenticate the mapping. Four procedural requirements follow. First, blinding: the person evaluating verifier outputs must not know the swap configuration. Second, randomization: device-to-slot assignment is randomized, including sham swaps in which devices are removed and reinstalled in their original positions. Third, independent recording: device-specific identifiers are recorded before and after each swap with timestamped photographs and a signed laboratory log. Fourth, separation of trials: repeated physical swaps are distinguished from repeated software measurements of the same configuration when estimating variance. Twenty to forty pilot cases may establish feasibility, but the confirmatory sample size must be computed from the pilot-estimated baseline selective risk on the adversarial subset, the minimum practically important difference justified by the operational cost of a false binding claim, and the pilot-estimated discordance rate.
+
+12. Falsification Conditions
+
+Each structural claim of the framework is falsifiable by an observation that would contradict it.
+
+F1. Proposition 2 is refuted if a normative specification defines a TDISP state as a function of a slot identifier with an authenticated slot map, or if a device interface report contains a port-denoting field authenticated by the device's hardware root rather than by host enumeration. No such specification is in the surveyed record; the current report describes the TDI's configuration, MMIO resources, and a transition nonce, not a Root Port.
+
+F2. Theorem 1 is refuted if a verifier with only host-mediated observations is demonstrated $\mathbb{B}_{\mathrm{rel}}$-sound, in the sense of Definition 1, on a physical swap in which the swapped components are indistinguishable in the verifier's view. The physical swap is the instrument; a software-only substitution is not, because it does not exercise the provenance of the observation path.
+
+F3. Proposition 4 is refuted if a platform with $\mathcal{I}^{*}(\ell)$ failing is demonstrated to support a sound positional decision, in the sense that the verifier's acceptance is not consistent with any link history violating the positional invariant. The refutation requires constructing the two histories and showing distinguishability; the current CVE descriptions do not supply that construction.
+
+F4. Proposition 5 is refuted if a verifier with $\mathrm{Supp}_\kappa(S) = 1$ detects a swap in a run where the dominator is activated. The qualification is essential: $\mathrm{Supp}_\kappa(S) = 1$ means one element of $\kappa$ can invalidate all claims, not that it does in any given run. A verifier may detect a swap despite a dominator capable of concealing it, because the adversary did not activate the dominator. F4 must require activation, otherwise it confuses capability with exercise.
+
+F5. The preorder of Definition 9 is refuted as an adequacy criterion if a candidate declared incomparable is demonstrated to dominate a baseline under a strictly stronger adversary class without additional assumptions. The refutation requires exhibiting the dominance relation and showing that the assumption vectors satisfy $\preceq_\kappa$ in the stronger class, which no incomparable pair should admit.
+
+13. The Stratum Decision Procedure
+
+The framework yields a decision procedure that terminates in an admissible claim or in a documented negative result.
+
+Step 1 — Fix the platform and the verifier. Instantiate $X$ and $V$. Enumerate $O$. Construct the provenance graph $G$.
+
+Step 2 — Compute the stratum indicator. Determine $\text{TDISP-state}$, $\mathbf{m}(\ell)$, $\rho(\ell)$, $\text{PDI-state}$, and $\mathrm{prov}(O)$. Record unknown values as unknown; do not promote them. In particular, $m_{9613}(\ell) = \mathsf{U}$ unless the revised specification has shipped and has been validated on the specific link; $m_{9612}(\ell)$ is a pair property and must be established for both endpoints; $\rho(\ell) = 1$ places the link in the residual stratum unless a validated switch mitigation is documented.
+
+Step 3 — Locate the ladder ceiling. Determine the highest $L_k$ that the available evidence terms can express. If no term denotes a position, the ceiling is $L_2$, and no positional claim is admissible on that platform, independently of how the candidate is constructed.
+
+Step 4 — Compute effective support. Compute $\mathrm{Supp}_\kappa(S)$ for each $\kappa \in \{\mathbb{A}, \mathbb{B}_{\mathrm{rel}}, \mathbb{B}_{\mathrm{int}}\}$.
+
+Step 5 — Test the escape conditions. Determine which of the three conditions of Theorem 2 holds, or whether one of the two excluded families applies. If none holds, the residual stratum is closed for that platform and the outcome is a negative result.
+
+Step 6 — Compare under the preorder. For any candidate, test $\preceq_\kappa$ against the strongest baseline in the same stratum. If incomparable, report incomparable.
+
+Step 7 — Decide. The admissible outcomes are: the mechanism suffices in the tested stratum; a named implementation or enforcement gap exists and is attributable to a named cause; or a measurable verification gap exists with a candidate whose assumption vector is admissible under $\preceq_\kappa$ for the relevant adversary. The three outcomes correspond to the taxonomy below.
+
+Outcome A. Existing mechanisms suffice in the tested stratum. The audit is a successful negative result: the stratum is closed, the hardening matrix, the physical swap log and the assumption ledger are published, and no contribution is claimed.
+
+Outcome B. A narrow implementation or enforcement gap exists, attributable to a named cause — TDISP unavailable, $\mathbf{m}(\ell)$ incomplete, $\rho(\ell) = 1$ without validated switch mitigation, PDI unenforced, observation path host-mediated, key-management path host-visible. The contribution is an engineering configuration with explicit platform limits.
+
+Outcome C. A measurable verification gap exists: a candidate demonstrates reproducible improvement over the strongest baseline in the same stratum, with an assumption vector admissible under $\preceq_\kappa$ and effective support strictly greater than the baseline's on the adversarial subset. Only in this case is a protocol contribution claimed, and if firmware changes are required the claim is a specification proposal rather than a deployed verification.
+
+14. Conclusion
+
+The framework yields a thesis in four parts.
+
+First, the binding problem is a claim-ladder problem, not a primitive problem. The evidence available in the attestation stack supports $L_0$ and $L_1$ unconditionally, $L_2$ under TDISP with recorded configuration, $L_3$ only through a positional mechanism whose existence and semantics must be established per platform, and $L_4$ only by composing $L_3$ with a board-level map whose trust is independent of every cryptographic primitive in the stack. The error to be avoided is the attribution of $L_4$ to a mechanism that establishes $L_2$.
+
+Second, the impossibility result requires an indistinguishability premise, and the identity-distinguished case has a different structure. Where every observation is host-mediated and the swapped components are indistinguishable in the verifier's view, no verifier is sound for $L_3$ against a relay adversary. Where device-unique identity is checked and the components are distinct, a relay to a different device is detected; the residual attacks are relay of the same device across ports and falsification of port labels, both of which are positional rather than identitary. The experiment must specify which case it exercises, because the two are not the same test.
+
+Third, the residual space is characterized by a partition of escape families, not an exhaustive enumeration. Soundness is recoverable through an independent observation, a hardware-rooted nonce-bound channel binding, or a position-sensitive measurement, each carrying an anchoring chain whose terminal event must be trusted. Distance and timing bounds are a genuine escape family in the remote-relay setting but are excluded intra-chassis on resolution grounds; enrollment anchoring is a terminal event, not an online observation. The regress terminates in enrollment, strapping, or inspection; there is no cryptographic escape from it.
+
+Fourth, comparison is a partial order, and incomparability is a result. A candidate is credited only when its assumption vector is no stronger than the baseline's in every component and its effective support is no smaller. When trust moves between domains, the correct verdict is incomparability, not improvement. The most likely honest outcome of applying this framework to a given platform is the closure of the stratum — either because the available mechanisms already suffice, or because no mechanism can suffice without an assumption the verifier will not make. Both are publishable results of the theory.
+
+A final caution, consistent with the framework's own discipline. Several results above are weaker than the statements they replace. Theorem 1 requires an indistinguishability premise that is not a consequence of host-mediation. Proposition 4 establishes indeterminacy, not a demonstrated soundness failure for the positional claim. Theorem 2 is a partition of the considered families, not a proof of exhaustiveness. Proposition 3 requires a premise that untrusted terminals are assumable by the adversary class. These weakenings are not concessions to the adversary; they are corrections to proofs that had established possibility where they claimed capability, and indeterminacy where they claimed failure. The framework's value lies not in producing a new primitive but in making precise what existing hardware can and cannot prove, and in ensuring that whatever is claimed is claimed at the level of the ladder at which it is actually established.
+
+
+Appendices
+
+These appendices record the technical content of the framework in modular form. They are organized so that each appendix can be consulted independently: Appendix A for the complete ledger of validated propositions, Appendices B–D for the evidentiary basis of each substantive claim, Appendix E for the formal results and their exact status, Appendix F for the items that must remain unknown, Appendix G for the methodological choices that are decisions rather than findings, and Appendix H for the reading discipline the framework requires.
+
+---
+
+Appendix A — Consolidated Ledger of Validated Propositions and Technical Corrections
+
+A.1 The TDISP Baseline
+
+A.1.1. TDISP establishes an L_2 claim, not an L_4 claim. The guarantee is over the triple (\tau, \nu, \ell) where \tau is a TEE Device Interface, \nu a trusted VM, and \ell the protected link. The domain of the guarantee contains no term ranging over the position space \mathcal{P}.
+
+Evidentiary basis. The TDISP architecture defines its primary focus as establishing trust between a TVM and a TDISP-capable device, securing the PCIe path, and attaching or detaching a TDI to or from a TVM. The TDI is an assignable device interface, for instance a virtual function. The DEVICE_INTERFACE_REPORT provides “a trusted report of the TDI configurations, the list of MMIO resources associated with the TDI, and the order in which they must be mapped into the TVM address space”, together with a nonce generated on transition to \texttt{CONFIG\_LOCKED}. It contains no field denoting the Root Port or the bus-device-function. Where a BDF appears in a device-signed artifact, the BDF is assigned by host enumeration, not by the device's hardware root.
+
+Formal statement. Proposition 2 (§5.1 of the chapter) holds normatively, not merely definitionally.
+
+A.1.2. B_4 must be stratified into B_{4\text{-}P} (mitigations applied and validated) and B_{4\text{-}U} (unpatched or unknown). B_{4\text{-}U} is a positive control, not a secure comparator.
+
+Evidentiary basis. The PCI-SIG vulnerability note PCISIGVRT0001 (2025-12-09) states that all three vulnerabilities “potentially expose systems implementing IDE and TDISP, to an adversary that can breach isolation between trusted execution environments”. Because the conditions are specification-level and the mitigations are heterogeneous, a platform cannot be classified as secure merely because a patch is reported as applied.
+
+A.2 The IDE Mitigation Space
+
+A.2.1. The mitigation vector is heterogeneous: m_{9612} is a pair property of the link, m_{9613} is currently \mathsf{U} on all known shipping platforms, and m_{9614} is a per-component implementation property.
+
+Evidentiary basis — m_{9612}. Intel states that IDE Escort “can only be enabled when the host processor and its partner device both support the feature”. The PCI-SIG Draft ECN “IDE TLP Reordering Enhancements” (2026-03-19) introduces IDE Escort as “an optional security enhancement mechanism intended to improve detection of forbidden IDE TLP reordering” and defines “additional IDE ordering enforcement rules required by IDE Escort”. It is therefore a property of the pair, not of a single component.
+
+Evidentiary basis — m_{9613}. Intel states that “the current TDISP specification does not define a policy to securely handle this scenario”, that “CTR can affect all compliant platforms, including Intel products”, and that “future Intel processors may adopt mitigations recommended by the revised TDISP specification”. No deployable mitigation exists on any shipping platform; m_{9613} = \mathsf{U} is the correct value everywhere.
+
+Evidentiary basis — m_{9614}. The Delayed Posted Redirection vulnerability arises “when a security module fails to flush or re-key an IDE stream before rebinding a PCIe device to a new Trusted Domain Interface”. Mitigation is an implementation-level flush or re-key discipline at rebinding, validated per firmware version.
+
+A.2.2. \rho(\ell) = 1 (programmable switch in the link path) is effectively disqualifying on current vendor guidance.
+
+Evidentiary basis. Intel recommends that “programmable PCIe switches should not be used in Intel TDX Connect and IDE deployments that involve affected processors” for all three vulnerabilities. The disjunct \mathsf{validated\_mitigation}_{\mathrm{switch}}(\ell) in the formula of §6.3 is therefore nearly empty in practice.
+
+A.2.3. The channel-integrity predicate \mathcal{I}(\ell, [t_0, t_1]) = \mathcal{I}_{\mathrm{ord}} \wedge \mathcal{I}_{\mathrm{tag}} \wedge \mathcal{I}_{\mathrm{flush}} is necessary but not sufficient for positional soundness. Its failure yields indeterminacy, not a demonstrated soundness failure.
+
+Evidentiary basis. The IDE flaws affect data consumed on the link — MMIO reads, DMA writes, and posted writes — while the TDISP state is a distinct object. Proposition 4 (§6.4) establishes that if \mathcal{I}^{*}(\ell) fails, the verifier's TDISP-state observation is consistent with at least two link histories, one satisfying and one violating the positional invariant. It does not establish that the verifier accepts a false positional claim. Abstention is the sound response.
+
+A.3 The PPCIE Baseline
+
+A.3.1. The PPCIE verifier version must be recorded. Python 1.x is deprecated; C++ 2.x is current.
+
+Evidentiary basis. NVIDIA's migration guide states that “the Python Attestation SDK is deprecated as of March 15, 2026”, with “end of support: September 15, 2026”, and directs users of nv-ppcie-verifier v1.x to migrate to nv-ppcie-verifier v2.x (ppcie-verifier-sdk-cpp), which uses nvattest internally instead of the Python SDK.
+
+A.3.2. PPCIE topology check inputs are not specified in public documentation; “driver-enumerated” is an unproven claim. The provenance of the check's inputs must be treated as unknown and tested in scenario S_2.
+
+A.3.3. The PDI claim's semantics — signer, scope, freshness — are not in the public claim schema. B_{3b} is “to be tested”, not “presumed positional”.
+
+A.4 The Unprivileged Topology Certificate
+
+A.4.1. B_5 is a fingerprint and coarse-location comparator, not a slot baseline. It supports Z^{\mathrm{cont}} (continuity) but not Z^{\mathrm{pos}} (positional attribution).
+
+Evidentiary basis. The arXiv:2606.24934 scope statement targets per-SM timing fingerprint, hardware class, and coarse network location, not physical slot occupation.
+
+A.5 Device Identity
+
+A.5.1. NVIDIA device attestation uses device-unique ECC-384 (ECDSA P-384) keys, with a certificate chain anchored in an NVIDIA CA.
+
+Evidentiary basis. NVIDIA documentation lists SHA-384 and ECC_NIST_P384 as the algorithms for SPDM-based device attestation on BlueField-3 and ConnectX-7. The consequence is structural: two GPUs with identical firmware and reference manifests produce distinguishable signatures at the identity level.
+
+A.5.2. The identity-distinguished relay case has a different structure from the indistinguishability case. Where device-unique identity is checked against enrollment, a relay to a different device produces a detectable identity mismatch. The residual attacks are relay of the same device across ports and falsification of port labels by the compromised host.
+
+Formal statement. Proposition 7 (§9.3 of the chapter).
+
+A.6 The Impossibility Result
+
+A.6.1. Theorem 1 requires an indistinguishability premise: the honest and relayed worlds must induce identical distributions on \mathsf{View}_V. Host-mediation alone does not imply this premise, because the relayed-to component signs with its own key.
+
+A.6.2. Without the premise, Theorem 1 is false for any verifier that checks device identity against enrollment. The correct formulation is the conditional form in §9.2.
+
+A.7 The Escape-Family Partition
+
+A.7.1. Theorem 2 is a partition of the considered families, not a proof of exhaustiveness.
+
+A.7.2. Distance and timing bounds are excluded intra-chassis on resolution grounds. The relevant delay differences are on the order of nanoseconds (backplane propagation), while documented distance-bounding mechanisms for hardware attestation operate at resolutions of order 10^{-4} seconds.
+
+A.7.3. Enrollment anchoring is a terminal event of Proposition 3, not an online observation of Theorem 2. The provenance graph must separate V_{\mathrm{enr}} from V_{\mathrm{obs}}.
+
+A.8 The Residual-Stratum Impossibility
+
+A.8.1. The dstack security model acknowledges the residual gap directly: “dstack also cannot rule out a live relay/cuckoo attack to a genuine remote GPU: current Hopper/Blackwell deployments do not provide a CPU-TEE-verifiable TEE-I/O/TDISP device binding”. A GPU attestation result “establishes that a genuine CC-enabled GPU is reachable and responsive now, not that the device is bound to this TD”.
+
+This is deployed-system evidence that the residual stratum is real and configuration-dependent. It establishes relevance, not novelty.
+
+---
+
+Appendix B — Evidentiary Basis for Each Correction
+
+B.1 On the TDISP Interface Report
+
+The DEVICE_INTERFACE_REPORT provides a trusted report of the TDI configurations, the list of MMIO resources associated with the TDI, and the order in which they must be mapped into the TVM address space. A nonce is generated by the device on transition to \texttt{CONFIG\_LOCKED} and verified on transition to \texttt{RUN}, providing the property that all transitions through the TDISP state machine occur due to requests generated in the same SPDM secure session. No field in the report denotes the Root Port or the BDF.
+
+B.2 On the IDE Specification Vulnerabilities
+
+The PCI-SIG vulnerability note describes three distinct specification-level weaknesses.
+
+CVE-2025-9612 (Forbidden IDE Reordering). A weakness in TLP ordering enforcement allows MITM attackers to reorder IDE-protected packets undetected, violating data integrity protections. Intel describes the mechanism: IDE Sync messages are sent rarely (at most 0.4\% of IDE traffic), and after an IDE Sync is sent, a malicious switch can reorder a subsequent NPR or Completion to precede the Sync, preventing immediate detection.
+
+CVE-2025-9613 (Completion Timeout Redirection). When an IDE-protected NPR times out, its tag may be released and reused by a subsequent request. A delayed completion of the original request arriving after the new request causes the receiver to consume stale or incorrect data, violating both integrity and confidentiality objectives.
+
+CVE-2025-9614 (Delayed Posted Redirection). A security module that fails to flush or re-key an IDE stream before rebinding a PCIe device to a new TDI can deliver stale posted writes from the previous context to the new one, violating confidentiality or security objectives.
+
+B.3 On the Absence of Public Proofs-of-Concept
+
+Vulnerability databases consulted during this work report no public proof-of-concept for CVE-2025-9612. This is consistent with the controlled conditions described by Intel and with the requirement in the specification-level mitigations for particular hardware combinations. The consequence for the protocol is that S_7-C (no reproduction possible, configuration and mitigation evidence documented) must be an admissible outcome, with the vulnerability marked as an unresolved security assumption.
+
+B.4 On the PPCIE Verifier Version
+
+The migration is explicit: nv-ppcie-verifier v1.x is the Python SDK-based verifier and is deprecated; nv-ppcie-verifier v2.x is the C++ implementation using nvattest. A baseline description that omits the version conflates two implementations with different dependency stacks and different support status.
+
+B.5 On the dstack Security Model
+
+The dstack model states that the boot event “does not prove that the same device is still attached”, that a malicious host may attempt PCI hot-remove or replacement, and that current Hopper/Blackwell deployments do not provide a CPU-TEE-verifiable TEE-I/O/TDISP device binding. A GPU report “establishes that a genuine CC-enabled GPU is reachable and responsive now, not that the device is bound to this TD”. This is the deployed-system acknowledgment that the residual stratum is not universally closed.
+
+---
+
+Appendix C — Inadmissible Formulations and Their Replacements
+
+The following formulations are excluded from the framework because they claim more than the evidence supports. Each is paired with the admissible replacement.
+
+Excluded formulation Reason for exclusion Admissible replacement
+“TDISP provides hardware-enforced device–Root-Port binding” Attributes an L_4 claim to a mechanism establishing L_2 “TDISP establishes a TDI-to-TVM relationship; slot attribution via \sigma”
+“If \mathcal{I} fails, soundness fails” Confuses link-data integrity with TDISP state; no link-history pair is constructed “If \mathcal{I}^{*} fails, the stratum is indeterminate”
+“The three escapes are exhaustive for the observation types in the stack” Not a proof of exhaustiveness; distance/timing bounds are a fourth family “The three escapes partition the considered families”
+“A verifier that validates channel identifiers is \mathbb{B}_{\mathrm{rel}}-sound” An unbound identifier is forwardable and replayable “A verifier that validates a hardware-rooted, nonce-bound channel identifier is \mathbb{B}_{\mathrm{rel}}-sound for the endpoint claim”
+“Equality when the two failure events are independent” Requires an independence model not supplied by the evidence “Composed error is at least the error of the weaker link”
+“A sound positional claim has a finite anchoring chain” (without premise) Tautological without the adversary-assumability premise Require the premise that untrusted terminals are assumable by \kappa
+“m_{9613} = \mathsf{E} is a possible state” No deployable mitigation exists on any shipping platform “m_{9613} = \mathsf{U} on all known shipping platforms”
+“The PPCIE topology check reads from the driver” Documentation does not specify provenance “Topology check against expected configuration; provenance to be tested”
+“B_5 is a positional comparator” Fingerprint does not establish slot occupation “B_5 is a fingerprint and coarse-location comparator”
+“F4 refutes if a verifier with \mathrm{Supp}_\kappa(S) = 1 detects a swap its dominator can conceal” Conflates capability with exercise “F4 refutes if detection occurs in a run where the dominator is activated”
+
+---
+
+Appendix D — The Adversary Capability Lattice and Its Consequences
+
+D.1 Capability Definitions
+
+Adversary A (reporting-integrity). For every observation o_j with host-mediated provenance, \mathcal{A} may replace o_j(X) by any element of \Omega_j. This is a capability over the transport of observations, not over the forgery of signatures.
+
+Adversary \mathbb{B}_{\mathrm{rel}} (relay). \mathcal{A} can route an attestation conversation to a genuine component c' at p' \neq p while the verifier believes it addresses c at p.
+
+Adversary \mathbb{B}_{\mathrm{int}} (channel-integrity). \mathcal{A} can influence the protected link: reorder protected TLPs undetected, cause tag aliasing after completion timeout, or cause stale data to be consumed after incomplete flush or re-keying.
+
+D.2 Ordering
+
+\mathbb{A} \prec \mathbb{B}_{\mathrm{rel}}, \qquad \mathbb{A} \prec \mathbb{B}_{\mathrm{int}},
+
+while \mathbb{B}_{\mathrm{rel}} and \mathbb{B}_{\mathrm{int}} are incomparable. Relay corrupts referential integrity; channel-integrity corruption preserves reference while breaking contextual integrity. No scalar “attack resistance” is well defined.
+
+D.3 Proposition 1 and the Corrected Counterexample
+
+Proposition 1 states that if V is \kappa_2-sound then V is \kappa_1-sound for \kappa_1 \preceq \kappa_2, and the converse fails.
+
+Corrected converse counterexample. A verifier that validates a hardware-rooted, nonce-bound channel identifier is \mathbb{B}_{\mathrm{rel}}-sound for the endpoint claim: the relay cannot forward or replay the transcript because the identifier is bound to the endpoint and to the challenge nonce. The same verifier remains vulnerable to \mathbb{B}_{\mathrm{int}} if link ordering is not enforced, because the adversary can reorder protected TLPs without triggering detection. The two soundness properties are independent.
+
+The qualification “hardware-rooted, nonce-bound” is essential. A relay can forward a transcript bearing an unbound identifier, or replay a previously observed one. Binding to endpoint and nonce is what defeats forwarding.
+
+---
+
+Appendix E — Formal Results and Their Exact Status
+
+E.1 Theorem 1 (Host-Mediated Impossibility, Indistinguishability Form)
+
+Statement. Let V be a verifier all of whose observation functions are host-mediated, and let \kappa \succeq \mathbb{B}_{\mathrm{rel}}. Let c, c' be components such that for every o_j \in O, the distributions of o_j in the honest world W_0 (with \beta(c) = p) and the relayed world W_1 (with \beta(c') = p' \neq p and the session relayed to p) are identical. Then V is not \kappa-sound for L_3 or L_4 with error \varepsilon < 1.
+
+Proof. Since views are identically distributed and \alpha is a function of the view, \Pr[\alpha(\mathsf{View}_V) = 1 \mid W_0] = \Pr[\alpha(\mathsf{View}_V) = 1 \mid W_1]. Completeness in W_0 requires the left side to be at least 1 - \delta; hence the right side is at least 1 - \delta. Since \beta(c) \neq p in W_1, soundness requires the right side to be at most \varepsilon, so \varepsilon \ge 1 - \delta. \square
+
+Status. Conditional result. The indistinguishability premise is not a consequence of host-mediation. It is an additional condition on the pair (c, c') and on the verifier's predicate. When the premise fails — as it does whenever the verifier checks device-unique identity against enrollment — the theorem does not apply, and the identity-distinguished case of Proposition 7 governs.
+
+E.2 Proposition 7 (Identity-Distinguished Relay)
+
+Statement. Suppose the verifier checks device-unique identity against an enrollment record, and c, c' have distinct device certificates. A relay to c' then produces an identity mismatch the verifier can detect. However, this does not establish positional soundness. Two residual attacks remain: (a) relay of c itself to a different port, and (b) falsification of the port label by the compromised host. In both cases the positional component of the claim is host-supplied and is not protected by the identity check.
+
+Status. Unconditional for verifiers that check device-unique identity, given the evidentiary basis in Appendix A.5.1. The consequence for S_{3c} is that the experiment must specify whether device-unique identity is in or out of the verifier's view. If in, the experiment tests L_3 soundness under identity-distinguished conditions. If out, it tests the weaker indistinguishability case. Both are informative; they are not the same test.
+
+E.3 Proposition 2 (TDISP Scope)
+
+Statement. TDISP establishes L_2. It establishes L_3 if and only if an independently trusted map from Root Port to TDI is available and validated. It establishes L_4 if and only if, in addition, \sigma is trusted.
+
+Status. Retained, with the normative basis in Appendix B.1. The DEVICE_INTERFACE_REPORT contains no port-denoting field; a BDF in a device-signed artifact is host-assigned.
+
+E.4 Proposition 3 (Anchoring Termination)
+
+Statement. Let \kappa be an adversary class, and suppose that every terminal event not trusted by the verifier is assumable by some adversary in \kappa. Then every \kappa-sound positional claim possesses a finite anchoring chain whose terminal event is trusted by the verifier.
+
+Status. Retained, with the premise stated explicitly. The derivation relation is required to be well-founded. Without the premise, the proposition is close to a tautology.
+
+E.5 Proposition 4 (Stratum Indeterminacy)
+
+Statement. If \mathcal{I}^{*}(\ell) fails during the observation interval, the verifier's observation of the TDISP state is consistent with at least two link histories, one in which the positional invariant holds and one in which it does not, and the verifier cannot distinguish them from the observation alone. The correct response is abstention.
+
+Status. Deliberately weaker than a soundness statement. It establishes indeterminacy, not a demonstrated soundness failure. A soundness failure would require constructing two link histories with the same TDISP state and showing indistinguishability to the verifier's predicate. The CVE descriptions alone do not supply that construction. The weaker claim is sufficient, because indeterminacy forces abstention under pre-registered rules.
+
+E.6 Theorem 2 (Escape Families, Partition Form)
+
+Statement. Let V be a verifier and \kappa \succeq \mathbb{B}_{\mathrm{rel}}. If V is \kappa-sound for L_3 in \Sigma_{\mathrm{res}} under the identity-distinguished condition of Proposition 7, then at least one of the following holds:
+
+1. (Independent observation) V contains an observation function o whose provenance is not dominated by any element of \kappa acting on the observation path, and whose anchoring chain terminates in a trusted event.
+2. (Channel binding) V verifies a signature over a channel identifier produced by a hardware root that is itself position-anchored, and the signature binds the endpoint, the channel, and the challenge nonce.
+3. (Position-sensitive measurement) V verifies a measurement whose distribution differs across positions with non-negligible advantage for every adversary in \kappa.
+
+Status. A partition of the considered families, not a proof of exhaustiveness. Two further families are excluded by separate argument: distance and timing bounds (excluded intra-chassis on resolution grounds) and enrollment anchoring (a terminal event, not an online observation).
+
+E.7 Proposition 5 (Independence Is Not Path-Disjointness)
+
+Statement. Path-disjointness in the provenance graph is necessary but not sufficient for \kappa-independence.
+
+Status. Retained. Two paths may be edge-disjoint yet share a dominator: host enumeration and BMC inventory may both depend on the same PCIe switch; two signed claims may both depend on the same device key or the same enrollment event.
+
+E.8 Proposition 6 (The Trust-Assumption Preorder)
+
+Statement. \preceq_\kappa is a preorder. It is not total.
+
+Status. Retained. Non-totality is exhibited by any pair that moves trust from one domain to another. A method that replaces a host observer by a BMC observer has A^{\mathrm{obs}} incomparable when the BMC is neither stronger nor weaker than the host for the relevant \kappa. The correct verdict is neither “improvement” nor “regression” but “incomparable”.
+
+E.9 Corollary 1 (Composition Bound, Logical Form)
+
+Statement. For a verifier that composes an L_3 claim with a slot map \sigma, if either the L_3 claim or \sigma fails, the composed L_4 claim fails. Hence \varepsilon_{P_3} \ge \max(\varepsilon_{L_3}, \varepsilon_\sigma), with no tightness claim.
+
+Status. A logical claim about necessary conditions, not a probabilistic equality. The equality clause in earlier formulations required an independence model not supplied by the evidence.
+
+---
+
+Appendix F — Items That Must Remain Unknown
+
+The framework requires the following to be recorded as unknown until primary-source confirmation is available. Promoting any of them to a definite value is a category error.
+
+1. PDI claim semantics. Signer, scope, and freshness are not in the public schema. B_{3b} is “to be tested”.
+2. TDISP availability on the tested GPU. Recorded per platform; not assumed.
+3. PPCIE v2.x PDI enforcement. Whether the C++ verifier enforces PDI presence and validation is not documented publicly.
+4. BMC trustworthiness on the tested platform. Recorded, not assumed. Whether the BMC is a hardware root is platform-dependent.
+5. m_{9613} on the tested link. Currently \mathsf{U} on all known shipping platforms. The value becomes \mathsf{E} only when the revised TDISP specification ships and is validated on the specific link.
+6. \rho(\ell) on the tested platform. Recorded. \rho = 1 places the link in the residual stratum unless a validated switch mitigation is documented for that specific switch.
+7. IDE Escort support on both endpoints. A pair property; recorded per link, not per component.
+8. TDISP normative text. Members-only; claims in this framework rely on secondary sources and must be confirmed against the normative text before any result is presented as depending on it.
+9. A concrete link-history pair for Proposition 4. Not constructed. Indeterminacy is the strongest claim available.
+10. DICE Concise Evidence Binding for SPDM. Listed but not read in full. Its content may affect the L_1 classification.
+
+---
+
+Appendix G — Methodological Choices That Are Not Empirical Claims
+
+The following are design decisions. They are correct as choices, but they must not be presented as findings.
+
+G.1 Provenance graph formalization. The separation of V_{\mathrm{claim}}, V_{\mathrm{obs}}, V_{\mathrm{root}}, V_{\mathrm{chan}}, V_{\mathrm{enr}} is a modeling choice. It does not assert that any particular platform's provenance structure has this form.
+
+G.2 Effective support as min-cut. \mathrm{Supp}_\kappa(S) = \min_D |D| is a quantitative choice. It measures evidential redundancy against \kappa; it does not claim to capture every aspect of independence.
+
+G.3 Trust-assumption preorder. \preceq_\kappa is a design choice for comparison. The specific lattices \mathcal{L}_k must be instantiated per platform.
+
+G.4 Paired McNemar design. The exact/asymptotic split at n_d = 25 is a standard statistical choice. Pilot data must establish whether the discordance rate is compatible.
+
+G.5 AURC as secondary endpoint. AURC is meaningful only when a score exists. The choice to make paired correctness primary reflects that many candidate methods will emit three-valued outputs without a score.
+
+G.6 Three-level S_7 validation. Admitting S_7-C (no reproduction possible) as a valid outcome is a methodological decision reflecting the absence of public PoCs for the IDE CVEs and the difficulty of constructing a controlled reproduction without an affected implementation.
+
+G.7 Ground-truth blinding and randomization. A protocol-integrity decision, not an empirical claim about what unblinded experiments would show.
+
+G.8 Separation of Z^{\mathrm{pos}} and Z^{\mathrm{cont}}. A methodological decision reflecting that position and continuity are conceptually distinct capabilities. It does not assert that any candidate will differentiate them in practice.
+
+---
+
+Appendix H — Reading Discipline
+
+Three habits of reading are required of anyone applying this framework.
+
+First, distinguish claim level from mechanism. A mechanism named B_4 does not establish an L_4 claim. A candidate named M_1-C does not establish a positional escape merely by being a channel-bound variant. Every claim must be read at the ladder level at which it is established, and no higher.
+
+Second, distinguish possibility from capability. “The adversary can present the same view if the components are indistinguishable” is a possibility conditional on indistinguishability. “The adversary can present the same view” is a capability claim requiring the premise. The framework uses the conditional form and states the premise explicitly, because the unconditioned form is false for verifiers that check device-unique identity.
+
+Third, distinguish indeterminacy from soundness failure. A stratum in which the verifier cannot exclude a violating history is a stratum in which the verifier must abstain. It is not, without an explicit construction, a stratum in which the verifier has been demonstrated to accept a false claim. The framework uses the weaker form because the weaker form is what the evidence supports, and because the weaker form is sufficient to force the correct operational response.
+
+The framework's most likely honest outcome, applied to any specific platform, is that the stratum closes — either because the available mechanisms already suffice, or because no mechanism can suffice without an assumption the verifier will not make. Both are success conditions of the audit. The appendices record the technical content that makes this outcome decidable.
+
+Key Diagrams
+
+Diagram 1 — The Three Position Spaces and Their Unauthenticated Maps
+
+```
+        LOGICAL              TOPOLOGICAL             PHYSICAL
+        POSITION             POSITION                POSITION
+
+   P1  env.gpu.0   ──λ──▶   P2  Root Port 4   ──σ──▶   P3  Slot 4
+       (role label)          (bus reachability)        (connector)
+
+       operator              firmware /                board
+       convention            enumeration               layout
+
+       ◀── unauthenticated ───────────────── unauthenticated ──▶
+
+   NO CRYPTOGRAPHIC PRIMITIVE IN THE ATTESTATION STACK
+   AUTHENTICATES λ OR σ
+```
+
+---
+
+Diagram 2 — The Claim Ladder
+
+```
+   L4  c is seated in slot s        ── requires L3 + σ
+       ▲
+       │  composed claim
+   L3  c is reachable via port i    ── requires positional mechanism
+       ▲
+       │  positional claim
+   L2  c participates in protected  ── TDISP: (τ, ν, ℓ)
+       │  TDI–TVM relationship
+       ▲
+   L1  key belongs to c with        ── SPDM + DICE + RIMs
+       │  firmware lineage ℓ
+       ▲
+   L0  key exists and is live       ── SPDM challenge–response
+
+   Ladder is forced by what evidence terms denote.
+   It is NOT a measure of cryptographic strength.
+```
+
+---
+
+Diagram 3 — The Adversary Capability Lattice
+
+```
+                        ┌─────────────────┐
+                        │  B_rel  ⊥  B_int│   INCOMPARABLE
+                        └────────┬────────┘
+                                 │
+              ┌──────────────────┴──────────────────┐
+              │                                     │
+     ┌────────▼────────┐                   ┌────────▼────────┐
+     │  B_rel          │                   │  B_int          │
+     │  (relay)        │                   │  (channel       │
+     │                 │                   │   integrity)    │
+     │  corrupts       │                   │  corrupts       │
+     │  REFERENCE      │                   │  CONTEXT        │
+     └────────┬────────┘                   └────────┬────────┘
+              │                                     │
+              └──────────────────┬──────────────────┘
+                                 │
+                        ┌────────▼────────┐
+                        │       A         │
+                        │  (reporting)    │
+                        └─────────────────┘
+
+   A  ≺  B_rel      A  ≺  B_int      B_rel ⊥ B_int
+   No scalar "attack resistance" is well defined.
+```
+
+---
+
+Diagram 4 — TDISP Scope: What It Does and Does Not Establish
+
+```
+   ┌──────────────────────┐         ┌──────────────────────┐
+   │   TRUSTED DOMAIN     │         │   DEVICE             │
+   │   (TVM)              │         │                      │
+   │                      │         │  ┌────────────────┐  │
+   │         ν            │◀── ℓ ──▶│  │  TDI  τ        │  │
+   │                      │         │  └────────────────┘  │
+   └──────────────────────┘         └──────────────────────┘
+              ▲                                  │
+              │                                  │
+              └────── TDISP guarantee ───────────┘
+                      over (τ, ν, ℓ)
+
+   ═══════════════════════════════════════════════════════════
+   OUTSIDE TDISP's DOMAIN:
+
+   port-to-TDI map  m : P2 → {τ}        ← host enumeration
+   slot map         σ : P2 → P3         ← board layout
+
+   DEVICE_INTERFACE_REPORT contains:
+     • TDI configuration
+     • MMIO resource list
+     • transition nonce (CONFIG_LOCKED → RUN)
+   It does NOT contain a port-denoting field.
+   A BDF in a device-signed artifact is host-assigned.
+```
+
+---
+
+Diagram 5 — Host-Mediated Impossibility (Theorem 1) vs. Identity-Distinguished Relay (Proposition 7)
+
+```
+   ── CASE 1: INDISTINGUISHABLE (Theorem 1 applies) ──────────────
+
+     Honest world W₀         Relayed world W₁
+     ┌──────────┐            ┌──────────┐
+     │ c at p   │            │ c' at p' │
+     └────┬─────┘            └────┬─────┘
+          │                       │
+          ▼                       ▼
+     ┌─────────────────────────────────┐
+     │   IDENTICAL DISTRIBUTIONS       │
+     │   on View_V  (premise)          │
+     └────────────────┬────────────────┘
+                      │
+                      ▼
+              ┌───────────────┐
+              │  SOUNDNESS    │
+              │  FAILS        │
+              │  ε ≥ 1 − δ    │
+              └───────────────┘
+
+   ── CASE 2: IDENTITY-DISTINGUISHED (Proposition 7) ─────────────
+
+     Honest world W₀         Relayed world W₁
+     ┌──────────┐            ┌──────────┐
+     │ c at p   │            │ c' at p' │
+     │ key K_c  │            │ key K_c' │   ← device-unique
+     └────┬─────┘            └────┬─────┘      ECC-384
+          │                       │
+          ▼                       ▼
+     ┌─────────────────────────────────┐
+     │   VIEWS DIFFER (K_c ≠ K_c')     │
+     └────────────────┬────────────────┘
+                      │
+                      ▼
+        ┌─────────────────────────────┐
+        │  IDENTITY MISMATCH DETECTED │
+        │  BUT: positional attacks    │
+        │  remain:                    │
+        │   (a) relay same device     │
+        │       across ports          │
+        │   (b) falsify port label    │
+        │       (port label is        │
+        │        host-supplied)       │
+        └─────────────────────────────┘
+```
+
+---
+
+Diagram 6 — Provenance Graph and Common Dominator
+
+```
+                      ┌─────────────┐
+                      │  PCIe       │   ◀── COMMON DOMINATOR
+                      │  Switch     │
+                      └──┬───────┬──┘
+                         │       │
+              ┌──────────┘       └──────────┐
+              ▼                             ▼
+     ┌─────────────────┐           ┌─────────────────┐
+     │ Host            │           │ BMC             │
+     │ enumeration     │           │ inventory       │
+     └────────┬────────┘           └────────┬────────┘
+              │                             │
+              ▼                             ▼
+     ┌─────────────────┐           ┌─────────────────┐
+     │ Claim 1:        │           │ Claim 2:        │
+     │ "c at port 4"   │           │ "c at port 4"   │
+     └─────────────────┘           └─────────────────┘
+
+   Path-disjoint?  YES  (different routes through G)
+   κ-independent?  NO   (both dominated by PCIe Switch)
+
+   ⇒ Supp_κ(S) = 1
+   ⇒ ZERO evidential redundancy
+   ⇒ Adding "observers" without breaking the dominator
+      adds NO evidence.
+```
+
+---
+
+Diagram 7 — IDE Mitigation Vector (Heterogeneous)
+
+```
+   ┌───────────────────────────────────────────────────────────┐
+   │  CHANNEL-INTEGRITY PREDICATE                              │
+   │                                                           │
+   │  I(ℓ) = I_ord  ∧  I_tag  ∧  I_flush                       │
+   └───────────────────────────────────────────────────────────┘
+              │          │          │
+              ▼          ▼          ▼
+   ┌──────────────┐ ┌──────────┐ ┌──────────────────┐
+   │ m_9612       │ │ m_9613   │ │ m_9614           │
+   │              │ │          │ │                  │
+   │ PAIR         │ │ FUTURE   │ │ PER-COMPONENT    │
+   │ property     │ │ state    │ │ property         │
+   │              │ │          │ │                  │
+   │ host +       │ │ currently│ │ flush / re-key   │
+   │ device must  │ │ U on ALL │ │ at rebinding,    │
+   │ BOTH support │ │ shipping │ │ validated per    │
+   │ IDE Escort   │ │ platforms│ │ firmware version │
+   │              │ │          │ │                  │
+   │ E iff both   │ │ E only   │ │ E iff validated  │
+   │ support and  │ │ after    │ │ for that         │
+   │ enabled      │ │ spec     │ │ firmware version │
+   │              │ │ revision │ │                  │
+   └──────────────┘ └──────────┘ └──────────────────┘
+
+   ⇒ Vector is NOT a single 3-valued attribute.
+   ⇒ m_9613 = E is a CATEGORY ERROR on current platforms.
+```
+
+---
+
+Diagram 8 — Switch Path Factor
+
+```
+   I*(ℓ) = I(ℓ)  ∧  ( ¬ρ(ℓ)  ∨  validated_mitigation_switch(ℓ) )
+                       │                    │
+                       │                    │
+                       ▼                    ▼
+                 ┌───────────┐        ┌────────────────────┐
+                 │ ρ = 0     │        │ ρ = 1              │
+                 │ no prog.  │        │ programmable       │
+                 │ switch    │        │ switch in path     │
+                 └───────────┘        └────────────────────┘
+                       │                    │
+                       ▼                    ▼
+                 ┌───────────┐        ┌────────────────────┐
+                 │ SOUND     │        │ RESIDUAL STRATUM   │
+                 │ STRATUM   │        │ unless specific    │
+                 │ (if I     │        │ switch mitigation  │
+                 │  holds)   │        │ is documented      │
+                 └───────────┘        └────────────────────┘
+
+   On current vendor guidance:
+   ρ = 1 is EFFECTIVELY DISQUALIFYING.
+   The disjunct is nearly empty in practice.
+```
+
+---
+
+Diagram 9 — The Residual Stratum Decision Procedure
+
+```
+   ┌─────────────────────────────────────────────────────────┐
+   │ STEP 1: Fix platform X and verifier V                   │
+   │         Enumerate O, build provenance graph G           │
+   └──────────────────────────┬──────────────────────────────┘
+                              ▼
+   ┌─────────────────────────────────────────────────────────┐
+   │ STEP 2: Compute stratum indicator Σ                     │
+   │         ( TDISP-state, m(ℓ), ρ(ℓ), PDI-state, prov(O) ) │
+   │         Unknown values → UNKNOWN (do not promote)       │
+   └──────────────────────────┬──────────────────────────────┘
+                              ▼
+   ┌─────────────────────────────────────────────────────────┐
+   │ STEP 3: Locate ladder ceiling                           │
+   │         Highest L_k expressible by evidence terms       │
+   │         If no term denotes position → ceiling = L2      │
+   │         → NO positional claim admissible                │
+   └──────────────────────────┬──────────────────────────────┘
+                              ▼
+   ┌─────────────────────────────────────────────────────────┐
+   │ STEP 4: Compute effective support Supp_κ(S)             │
+   │         for κ ∈ { A, B_rel, B_int }                     │
+   └──────────────────────────┬──────────────────────────────┘
+                              ▼
+   ┌─────────────────────────────────────────────────────────┐
+   │ STEP 5: Test escape conditions (Theorem 2)              │
+   │         If none hold → stratum CLOSED → negative result │
+   └──────────────────────────┬──────────────────────────────┘
+                              ▼
+   ┌─────────────────────────────────────────────────────────┐
+   │ STEP 6: Compare candidate under preorder ≼_κ            │
+   │         If incomparable → REPORT INCOMPARABLE           │
+   └──────────────────────────┬──────────────────────────────┘
+                              ▼
+   ┌─────────────────────────────────────────────────────────┐
+   │ STEP 7: Decide                                          │
+   │   A: Stratum closes (existing mechanisms suffice)       │
+   │   B: Named implementation/enforcement gap               │
+   │   C: Measurable verification gap (only then novel)      │
+   └─────────────────────────────────────────────────────────┘
+```
+
+---
+
+Diagram 10 — The Escape Families Partition
+
+```
+   ┌────────────────────────────────────────────────────────────┐
+   │         RESIDUAL STRATUM Σ_res                             │
+   │  (TDISP absent OR m ≠ (E,E,E);  PDI absent/unenforced;     │
+   │   all observations host-mediated)                          │
+   └──────────────────────────┬─────────────────────────────────┘
+                              │
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+   │  ESCAPE 1    │  │  ESCAPE 2    │  │  ESCAPE 3    │
+   │              │  │              │  │              │
+   │ INDEPENDENT  │  │ CHANNEL      │  │ POSITION-    │
+   │ OBSERVATION  │  │ BINDING      │  │ SENSITIVE    │
+   │              │  │              │  │ MEASUREMENT  │
+   │              │  │              │  │              │
+   │ observer     │  │ HW-rooted,   │  │ distribution │
+   │ not dominated│  │ nonce-bound  │  │ separates    │
+   │ by κ; chain  │  │ channel ID;  │  │ positions    │
+   │ ends in      │  │ endpoint +   │  │              │
+   │ trusted      │  │ channel +    │  │              │
+   │ anchor       │  │ nonce bound  │  │              │
+   │              │  │              │  │              │
+   │ → M1-P       │  │ → M1-C       │  │ → B5 (continuity)│
+   └──────────────┘  └──────────────┘  └──────────────┘
+
+   ════════════════════════════════════════════════════════════
+   EXCLUDED FAMILIES (by separate argument):
+
+   ┌─────────────────────┐   ┌──────────────────────────┐
+   │ DISTANCE / TIMING   │   │ ENROLLMENT ANCHORING     │
+   │                     │   │                          │
+   │ Excluded INTRA-     │   │ Terminal event of        │
+   │ chassis on          │   │ anchoring chain, NOT     │
+   │ RESOLUTION grounds: │   │ an online observation    │
+   │ ns signal vs        │   │                          │
+   │ 10⁻⁴ s resolution   │   │ Belongs to Prop. 3       │
+   │                     │   │ terminus, not Theorem 2  │
+   │ REMOTE relay:       │   │                          │
+   │ remains in scope    │   │                          │
+   └─────────────────────┘   └──────────────────────────┘
+
+   ⇒ Partition of CONSIDERED families
+   ⇒ NOT a proof of exhaustiveness
+```
+
+---
+
+Diagram 11 — Trust-Assumption Preorder and Incomparability
+
+```
+   ── COMPARABLE CASE ─────────────────────────────────────────
+
+   Baseline B_i           Candidate M_1
+   A = (hw_i, fw_i, ...)  A = (hw_1, fw_1, ...)
+         │                      │
+         ▼                      ▼
+   ┌───────────────────────────────────┐
+   │ ∀k: A_M1^k ≤_L_k A_Bi^k            │
+   │ AND Supp_κ(S_M1) ≥ Supp_κ(S_Bi)   │
+   └───────────────────┬───────────────┘
+                       ▼
+              ┌─────────────────┐
+              │ M_1 ≼_κ B_i     │
+              │ IMPROVEMENT     │
+              │ (credit given)  │
+              └─────────────────┘
+
+   ── INCOMPARABLE CASE ───────────────────────────────────────
+
+   Baseline B_i           Candidate M_1
+   A^obs = host           A^obs = BMC
+         │                      │
+         ▼                      ▼
+   ┌───────────────────────────────────┐
+   │ SOME component incomparable:      │
+   │   host  ⊥  BMC  in L_obs          │
+   │ Neither ≤ nor ≥ holds             │
+   └───────────────────┬───────────────┘
+                       ▼
+              ┌─────────────────┐
+              │ NEITHER ≼_κ     │
+              │ NOR ≽_κ         │
+              │                 │
+              │ VERDICT:        │
+              │ INCOMPARABLE    │
+              │                 │
+              │ NOT improvement │
+              │ NOT regression  │
+              │ TRUST MOVED     │
+              └─────────────────┘
+```
+
+---
+
+Diagram 12 — Two Endpoints: Position vs. Continuity
+
+```
+   ┌────────────────────────────────────────────────────────┐
+   │  Z^pos : the verifier attributes c to its CURRENT      │
+   │          position                                      │
+   │                                                        │
+   │  Z^cont: the verifier DETECTS that c has moved since   │
+   │          enrollment                                    │
+   └────────────────────────────────────────────────────────┘
+
+   ┌──────────────────┬──────────────────┬──────────────────┐
+   │                  │  Z^pos = 1       │  Z^pos = 0       │
+   ├──────────────────┼──────────────────┼──────────────────┤
+   │  Z^cont = 1      │  STRONG          │  MOVEMENT        │
+   │                  │  BINDING         │  DETECTED, but   │
+   │                  │                  │  position not    │
+   │                  │                  │  resolved        │
+   ├──────────────────┼──────────────────┼──────────────────┤
+   │  Z^cont = 0      │  POSITION        │  WEAK            │
+   │                  │  RESOLVED at     │  Neither         │
+   │                  │  enrollment,     │  position nor    │
+   │                  │  movement not    │  continuity      │
+   │                  │  detected        │                  │
+   └──────────────────┴──────────────────┴──────────────────┘
+
+   A fingerprint method (B5) can achieve Z^cont = 1
+   while failing Z^pos entirely.
+```
+
+---
+
+Diagram 13 — Anchoring Chain and Termination
+
+```
+   Claim (c, p)
+        │
+        ▼
+   ┌─────────────────┐
+   │ Evidence term   │  a_0
+   │ (SPDM report)   │
+   └────────┬────────┘
+            │ authenticated derivation
+            ▼
+   ┌─────────────────┐
+   │ Intermediate    │  a_1
+   │ (channel, port, │
+   │  firmware)      │
+   └────────┬────────┘
+            │ authenticated derivation
+            ▼
+   ┌─────────────────┐
+   │ Intermediate    │  a_2
+   └────────┬────────┘
+            │
+            ▼
+          ⋮
+            │
+            ▼
+   ┌─────────────────┐
+   │ ANCHORING EVENT │  a_n   ◀── TRUSTED TERMINUS
+   │                 │
+   │ enrollment /    │
+   │ strapping /     │
+   │ FRU record /    │
+   │ inspection      │
+   └─────────────────┘
+
+   Security parameter of positional mechanism
+   = LENGTH AND TRUSTWORTHINESS OF THIS CHAIN
+
+   Prop. 3 premise: every untrusted terminal
+   is assumable by some adversary in κ.
+   Without this premise, proposition is tautological.
+```
+
+---
+
+Diagram 14 — Baseline Stratification Table (Compact)
+
+```
+                    L0  L1  L2  L3  L4    POSITIONAL
+   ─────────────────────────────────────────────────
+   B0 host inv.     ·   ·   ·   ·   ·     NO
+   B1 SPDM/RATS     ●   ●   ·   ·   ·     NO
+   B2 OCP v1.1      ●   ●   ·   ·   ·     NO
+   B3a PPCIE doc    ·   ●   ·   ?   ·     TO TEST
+   B3b PPCIE+PDI    ·   ●   ·   ?   ·     TO TEST
+   B4-P TDISP/IDE   ·   ●   ●   ◐   ·     CONDITIONAL
+   B4-U TDISP/IDE   ·   ●   ●   ·   ·     POSITIVE
+                                            CONTROL
+   B5 unpriv. cert  ·   ●'  ·   ·   ·     CONTINUITY
+                                            ONLY
+
+   ●  = established
+   ◐  = conditional (needs Root-Port→TDI map)
+   ?  = experimental question, not presumed
+   ·  = not established
+```
+
+---
+
+Diagram 15 — IDE Escort as a Pair Property
+
+```
+   ┌─────────────────────┐         ┌─────────────────────┐
+   │   HOST PROCESSOR    │         │   PARTNER DEVICE    │
+   │                     │         │                     │
+   │   supports          │         │   supports          │
+   │   IDE Escort?       │         │   IDE Escort?       │
+   │                     │         │                     │
+   │   [ YES / NO ]      │         │   [ YES / NO ]      │
+   └──────────┬──────────┘         └──────────┬──────────┘
+              │                               │
+              └───────────────┬───────────────┘
+                              ▼
+                    ┌──────────────────┐
+                    │  BOTH YES AND    │
+                    │  ENABLED FOR     │
+                    │  THE STREAM?     │
+                    └────────┬─────────┘
+                             │
+              ┌──────────────┴──────────────┐
+              ▼                             ▼
+      ┌───────────────┐             ┌───────────────┐
+      │ m_9612 = E    │             │ m_9612 ≠ E    │
+      │ (Escort       │             │ (pair does    │
+      │  enforced)    │             │  not support  │
+      │               │             │  or disabled) │
+      └───────────────┘             └───────────────┘
+
+   ⇒ m_9612 is a PER-LINK property, not per-component.
+   ⇒ Cannot be attributed to a single endpoint.
+```
+
+---
+
+Diagram 16 — Falsification Conditions Mapping
+
+```
+   ┌──────────────────────────────────────────────────────────┐
+   │  F1  Refutes Prop. 2 (TDISP scope)                       │
+   │      Trigger: normative spec defines TDISP state as      │
+   │      function of slot ID authenticated by HW root        │
+   │      OR interface report contains port-denoting field    │
+   │      authenticated by device root                        │
+   ├──────────────────────────────────────────────────────────┤
+   │  F2  Refutes Theorem 1 (impossibility)                   │
+   │      Trigger: host-mediated verifier demonstrated        │
+   │      B_rel-sound on PHYSICAL swap of components          │
+   │      indistinguishable in its view                       │
+   ├──────────────────────────────────────────────────────────┤
+   │  F3  Refutes Prop. 4 (indeterminacy)                     │
+   │      Trigger: platform with I*(ℓ) failing supports       │
+   │      sound positional decision (requires constructing    │
+   │      two link histories + showing distinguishability)    │
+   ├──────────────────────────────────────────────────────────┤
+   │  F4  Refutes Prop. 5 (independence)                      │
+   │      Trigger: verifier with Supp_κ(S) = 1 detects a      │
+   │      swap IN A RUN WHERE THE DOMINATOR IS ACTIVATED      │
+   │      (not merely capable of concealing it)               │
+   ├──────────────────────────────────────────────────────────┤
+   │  F5  Refutes preorder adequacy                           │
+   │      Trigger: candidate declared INCOMPARABLE is         │
+   │      demonstrated to DOMINATE a baseline under a         │
+   │      STRICTLY STRONGER κ WITHOUT additional assumptions  │
+   └──────────────────────────────────────────────────────────┘
+```
+
+---
+
+Diagram 17 — The Three Admissible Outcomes
+
+```
+                   ┌─────────────────────┐
+                   │  STRATUM DECISION   │
+                   │  PROCEDURE (Diag 9) │
+                   └──────────┬──────────┘
+                              │
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+   │  OUTCOME A   │  │  OUTCOME B   │  │  OUTCOME C   │
+   │              │  │              │  │              │
+   │  STRATUM     │  │  NAMED       │  │  MEASURABLE  │
+   │  CLOSES      │  │  GAP         │  │  VERIFICATION│
+   │              │  │              │  │  GAP         │
+   │              │  │              │  │              │
+   │ Existing     │  │ Attributable │  │ Candidate    │
+   │ mechanisms   │  │ to named     │  │ improves on  │
+   │ suffice      │  │ cause:       │  │ strongest    │
+   │              │  │              │  │ baseline in  │
+   │ PUBLISH AS   │  │ TDISP absent │  │ SAME stratum │
+   │ NEGATIVE     │  │ m incomplete │  │              │
+   │ RESULT       │  │ ρ = 1        │  │ AND          │
+   │              │  │ PDI absent   │  │              │
+   │ NOT A        │  │ host path    │  │ ≼_κ holds    │
+   │ FAILURE      │  │              │  │ AND          │
+   │              │  │              │  │ Supp_κ       │
+   │              │  │ ENGINEERING  │  │ strictly     │
+   │              │  │ CONTRIBUTION │  │ greater      │
+   │              │  │              │  │              │
+   │              │  │              │  │ ONLY HERE IS │
+   │              │  │              │  │ NOVELTY      │
+   │              │  │              │  │ CLAIMED      │
+   └──────────────┘  └──────────────┘  └──────────────┘
+
+   Most likely honest outcome: A or B.
+   C requires beating the strongest baseline IN THE SAME STRATUM.
+```
