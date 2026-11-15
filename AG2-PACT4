@@ -1,0 +1,1446 @@
+AG2-PACT: 
+
+A Falsification-First Framework for Evaluating Cell-State-Aware Evidence Provenance and Distance-Dependent Reliability in Conditional Genomic Foundation Models
+
+ouadi Maakoul and SI TEAM 
+
+Abstract
+
+Conditional genomic foundation models such as AlphaGenome 2 (AG2) produce variant-effect and regulatory predictions at scale, yet the reliability of those predictions is neither uniform across genomic distance nor transparent with respect to the provenance of the underlying measurements. This dissertation develops and formally specifies AG2-PACT, a falsification-first evaluation framework designed to test whether cell-state-aware evidence provenance and distance-dependent reliability assessment improve the experimental validation efficiency of conditional genomic foundation-model predictions beyond raw sequence-to-function scores. The framework separates two categorically distinct inference tracks, isolates calibration from rank and magnitude as three non-interchangeable measurement constructs, models provenance as a three-level variable grounded in the API's documented imputation semantics, and adopts a three-part decision rule in which equivalence and inconclusive outcomes are first-class results. Statistical inference is conducted with wild cluster bootstrap procedures appropriate to small and imbalanced cluster structures, with equivalence margins derived from an explicit cost model rather than asserted. Reproducibility is protected by a fixed canary set and full request logging against a hosted, non-version-pinned model. The dissertation specifies a composite falsification condition under which the framework's own value is refuted. The central commitment is that the programme must be able to demonstrate its own irrelevance; a framework that can only confirm its utility is a persuasion device, not a scientific instrument.
+
+---
+
+1. Introduction and Problem Statement
+
+1.1 The evaluation gap
+
+Genomic foundation models are increasingly deployed as oracles for variant interpretation, enhancer–gene linking, and regulatory design. Their outputs are consumed by experimentalists who must decide which hypotheses to test. The practical question is therefore not whether a model correlates with held-out measurements, but whether model-derived evidence improves the experimental validation efficiency of a downstream prioritisation decision.
+
+This distinction is not cosmetic. A model may achieve high rank correlation while systematically compressing effect magnitudes. It may predict direction correctly on average while reversing direction in distal regulatory regions. It may achieve strong discrimination on a binary task while failing to calibrate probability. Each of these failures has different consequences for a validation pipeline, and each requires a different corrective instrument.
+
+1.2 The two deficiencies
+
+AG2-PACT is motivated by two hypothesised deficiencies in current conditional genomic foundation models.
+
+Deficiency 1 — Distance-dependent magnitude miscalibration. The model may systematically underpredict the magnitude of effects mediated by distal regulatory elements, with the shortfall growing as a function of enhancer–transcription-start-site distance. This is a calibration deficiency, not a rank deficiency: the model may rank distal elements correctly while compressing their magnitudes.
+
+Deficiency 2 — Provenance-insensitive reliability. The model may assign comparable confidence to predictions grounded in directly observed measurements and to predictions grounded in imputed or exploratory channels. If so, a downstream consumer cannot distinguish evidence from hypothesis.
+
+1.3 The central falsifiable question
+
+The dissertation addresses one question, stated once for the record:
+
+Can cell-state-aware evidence provenance and distance-dependent reliability assessment improve the experimental validation efficiency of conditional genomic foundation-model predictions beyond raw sequence-to-function scores?
+
+If the answer is affirmative, the contribution is the evidence layer. If the answer is negative, the contribution is the demonstration that the layer is unnecessary. Both outcomes are scientific. The framework is designed so that neither outcome can be distorted into the other.
+
+1.4 Scope and epistemic stance
+
+The programme is falsification-first. It commits in advance to reporting null, equivalent, and inconclusive results. It commits to a three-part decision structure in which the absence of statistical significance is never reported as evidence of absence. It commits to a composite falsification condition under which the framework's own contribution is refuted. These commitments are not rhetorical; they are encoded in the decision rules of Sections 4 and 8.
+
+---
+
+2. Theoretical Framework
+
+2.1 Three-layer architecture
+
+The framework is organised into three layers.
+
+Layer 1 — Predictive layer. The base model, denoted f_\theta, maps a genomic input x and a conditioning state c to a prediction \hat{y} = f_\theta(x, c).
+
+Layer 2 — Contextual layer. A context function g maps the input, the conditioning state, and the provenance metadata of the underlying tracks to a reliability estimate r = g(x, c, \pi), where \pi denotes the provenance configuration.
+
+Layer 3 — Utility layer. A decision function h maps the predictive output and the reliability estimate to a prioritisation score u = h(\hat{y}, r), which is evaluated against an experimental validation criterion.
+
+The dissertation tests whether Layer 2 and Layer 3 add value beyond Layer 1 alone. This is the framework's own falsification target.
+
+2.2 Track separation
+
+Two categorically distinct inference tracks are maintained and never pooled.
+
+Track A — Variant-effect inference. The input is a DNA variant; the output is a predicted molecular consequence. Track A datasets are evaluated for in-distribution calibration only; datasets that appear in the model's training corpus are excluded from confirmatory inference.
+
+Track B — Perturbation inference. The input is a controlled experimental intervention (CRISPRi, CRISPRa, TAP-seq); the output is a measured transcriptional consequence. Track B datasets are evaluated for prioritisation utility.
+
+The separation is non-negotiable. A CRISPRi ablation and a DNA variant are different biological estimands. Treating the difference between them as a calibration error is a category error dressed as a metric.
+
+2.3 The finite transformation set
+
+Because Track B perturbations and Track A variant scores are not the same quantity, any comparison between them requires an explicit transformation. The transformation set \mathcal{T} is finite and pre-specified:
+
+\mathcal{T} = \{\,\text{identity},\ \text{rank},\ \text{linear},\ \text{sigmoid},\ \text{none}\,\}.
+
+No transformation outside \mathcal{T} may be applied after evaluation data are observed. A transformation chosen post hoc is not a transformation; it is a fit to the evaluation set.
+
+---
+
+3. Formal Definitions and Estimands
+
+3.1 Three measurement constructs
+
+Three quantities are defined and reported separately. They are never conflated.
+
+Direction accuracy. For a set of n paired observations (\hat{y}_i, y_i^{\exp}),
+
+\mathrm{DA} = \frac{1}{n}\sum_{i=1}^{n} \mathbf{1}\!\left[\operatorname{sign}(\hat{y}_i) = \operatorname{sign}(y_i^{\exp})\right].
+
+\mathrm{DA} measures sign agreement. It does not measure discrimination. Where a binary task is defined, \mathrm{auROC} is reported separately and is never substituted for \mathrm{DA}.
+
+Rank correlation. Spearman's \rho_s measures the agreement of rank order. It does not measure magnitude. A model with \rho_s = 0.95 may predict effects five times too small and be declared accurate by a rank-only criterion.
+
+Magnitude error. Magnitude is reported as mean absolute error and root-mean-square error:
+
+\mathrm{MAE} = \frac{1}{n}\sum_{i=1}^{n}\left|\hat{y}_i - y_i^{\exp}\right|, \qquad
+\mathrm{RMSE} = \sqrt{\frac{1}{n}\sum_{i=1}^{n}\left(\hat{y}_i - y_i^{\exp}\right)^2}.
+
+3.2 Calibration model and crossing point
+
+Calibration is estimated under a model with both intercept and slope:
+
+y^{\exp} = \alpha + \beta\,\hat{y} + \varepsilon.
+
+Under this parameterisation, \beta > 1 indicates that the model underestimates magnitude; \beta < 1 indicates overestimation. This direction is fixed and is not reversed anywhere in the analysis.
+
+The crossing point, at which predicted and observed effects coincide, is
+
+\hat{y}^{*} = -\frac{\alpha}{\beta - 1}.
+
+The crossing point is a descriptive quantity, not a biological threshold. It is reported with a bootstrap confidence interval. A pre-specified rule governs interpretation: if the bootstrap interval for \hat{y}^{*} covers the entire observed predictor range, the data do not identify a crossing, and the result is reported as no crossing identified rather than as a point estimate.
+
+To avoid classifying a mixed-regime dataset from \beta alone, the analysis reports the fraction of observations lying on each side of \hat{y}^{*}, together with region-wise underprediction fractions.
+
+3.3 Distance-dependent miscalibration
+
+Let d_i denote the distance between the regulatory element and the transcription start site for observation i, standardised to zero mean and unit variance. The mixed error model is
+
+y_i^{\exp} = \alpha + \beta\,\hat{y}_i + \gamma_1 d_i + \gamma_2 (\hat{y}_i \cdot d_i) + \gamma_3 d_i^{2} + \varepsilon_i,
+
+with \gamma_3 the coefficient of primary interest for distal curvature. The hypothesis-relevant contrast between two models is
+
+\Delta\gamma_3 = \gamma_3^{\mathrm{AG2}} - \gamma_3^{\mathrm{AG1}},
+
+estimated with a clustered bootstrap confidence interval. A difference in significance between two separately estimated coefficients is not a significant difference between them; the contrast is therefore estimated directly rather than inferred from two p-values.
+
+3.4 Controlled modality ablation effect
+
+The Controlled Modality Ablation Effect measures the change in model output under a controlled masking of an input modality:
+
+\mathrm{CMAE} = \mathbb{E}\!\left[\, S_{\mathrm{obs}} - S_{\mathrm{mask}} \,\right],
+
+where S_{\mathrm{obs}} is the score under the observed input and S_{\mathrm{mask}} is the score under the masked input. CMAE is a claim about model input, not about biology. Its interpretation is gated by two validity conditions:
+
+C1 — no out-of-distribution collapse. Masking must not move the output distribution beyond a pre-specified quantitative threshold. The threshold is fixed before analysis; a judgement made after observing the result defeats preregistration.
+
+C2 — held-constant conditions. All non-masked inputs are held fixed across the observed and masked conditions.
+
+Two controls accompany every CMAE estimate: a null-ablation control, in which a modality that should not matter is ablated and its CMAE reported alongside the real estimate; and an imputation-redundancy check, in which masking is compared with imputation so that a small CMAE can be distinguished from genuine unimportance. A small CMAE under redundancy means the model reconstructs the modality internally; it does not mean the modality is unimportant.
+
+An observational fallback, the Imputation-Reliability Gap, is defined as
+
+\mathrm{IRG} = \mathbb{E}\!\left[\, S \mid I = 1 \,\right] - \mathbb{E}\!\left[\, S \mid I = 0 \,\right],
+
+where I denotes imputation status. IRG is explicitly observational and is never reported as causal.
+
+3.5 Provenance as a three-level variable
+
+Provenance is not binary. Every track carries an imputation mode
+
+\pi \in \{\,\texttt{observed},\ \texttt{imputed\_supported},\ \texttt{imputed\_exploratory}\,\}.
+
+Exploratory tracks are unbenchmarked hypotheses and are treated as non-informative for confirmatory claims. The provenance contrast is estimated separately for supported versus observed and for exploratory versus observed:
+
+\Delta_{\mathrm{sup}} = \mathbb{E}[S \mid \pi = \texttt{imputed\_supported}] - \mathbb{E}[S \mid \pi = \texttt{observed}],
+
+\Delta_{\mathrm{exp}} = \mathbb{E}[S \mid \pi = \texttt{imputed\_exploratory}] - \mathbb{E}[S \mid \pi = \texttt{observed}].
+
+A pre-specified monotonicity expectation holds: if provenance matters, |\Delta_{\mathrm{exp}}| > |\Delta_{\mathrm{sup}}|. If the exploratory gap is smaller than the supported gap, that is evidence against the provenance account and is reported as such rather than averaged away.
+
+The conditioning mode is declared per hypothesis. Under expression conditioning, no track is labelled observed; all are imputed variants. If one hypothesis uses expression conditioning and another uses reference conditioning, the two are tested under different provenance regimes and are not combined without explicit disclosure.
+
+3.6 Utility metrics
+
+For a prioritised set of size k, let U_k(\cdot) denote the mean measured effect of the top-k selected items. Two endpoints are reported.
+
+Validation yield. The enrichment ratio and its absolute difference:
+
+\mathrm{ER}@k = \frac{U_k(\mathcal{E})}{U_k(\mathcal{S}_{\mathrm{raw}})}, \qquad
+\Delta@k = U_k(\mathcal{E}) - U_k(\mathcal{S}_{\mathrm{raw}}),
+
+where \mathcal{E} is the evidence-layer ranking and \mathcal{S}_{\mathrm{raw}} is the raw-score ranking. Because \mathrm{ER}@k is undefined when the denominator is zero and can cancel under signed effects, \Delta@k is always reported alongside it, and a pre-specified rule governs the zero-denominator case.
+
+Biological utility. A second endpoint measures the mean absolute log fold-change of the selected set. Because this scalar mixes direction, magnitude, and gene essentiality, a pre-specified biological filter or an alternative utility function is reported as a sensitivity analysis.
+
+A diversity constraint limits selection to at most two items per gene and three per 100 kb. A TAD-aware sensitivity analysis redefines the window by topologically associating domain boundaries and reports both definitions; if the conclusion depends on the window definition, it is not robust and is reported as such.
+
+3.7 The evidence score
+
+The evidence score aggregates four components:
+
+E(v) = w_1\,\mathrm{Stab}(v) + w_2\,\mathrm{Conc}(v) + w_3\,\mathrm{Prov}(v) - w_4\,\mathrm{Dist}(v),
+
+with weights frozen on development data. Four leakage controls are frozen in the configuration file:
+
+· L1 — stochastic-pass seed;
+· L2 — primary-modality map;
+· L3 — separation of development and evaluation k (k_{\mathrm{dev}} \neq k_{\mathrm{eval}});
+· L4 — normalisation constants.
+
+The provenance component respects the three-level structure of Section 3.5; exploratory tracks are assigned non-informative weight for confirmatory claims.
+
+Two structural safeguards apply. First, E(v) must beat a two-variable baseline consisting of the raw score and distance by more than the utility equivalence margin on development data before it is admitted to confirmatory testing. A flexible score that cannot beat a two-variable baseline has not earned its complexity. Second, a complexity audit reports the number of free parameters in E(v), the development-set size, and their ratio; an unfavourable ratio is acknowledged in advance as a power limitation.
+
+---
+
+4. Hypotheses and Decision Rules
+
+4.1 H1 — Distance-dependent magnitude miscalibration
+
+Statement. Conditional genomic foundation models exhibit distance-dependent magnitude miscalibration, and the miscalibration differs between model generations.
+
+Status. The distal underprediction phenomenon is documented in the independent literature for this model family. H1 is therefore partly a replication hypothesis and partly a quantification-and-correction hypothesis. The confirmatory contribution is the estimation of \Delta\gamma_3 with a clustered bootstrap interval, not the discovery of distal underprediction.
+
+Decision rule. A three-part structure:
+
+\text{H1} \in \{\,\text{supported},\ \text{equivalent},\ \text{inconclusive}\,\}.
+
+Supported if the confidence interval for \Delta\gamma_3 excludes zero and the estimated effect exceeds the minimum detectable effect. Equivalent if the two-one-sided-tests procedure rejects both one-sided nulls at the pre-specified margin \delta^{\mathrm{eq}}. Inconclusive otherwise. A non-significant result is never reported as falsification.
+
+4.2 H2 — Cell-state conditioning
+
+H2 is split into two claims with different evidential status.
+
+H2a — Within-K562 conditioning. Matched K562 conditioning improves Track-B prediction relative to a matched control. This is testable with available data.
+
+H2b — Cross-state generalisation. The gain generalises to a non-K562 cell state. This is untested until a high-quality non-K562 perturbation resource is secured. H2b is marked as untested in every abstract, figure, and preregistration statement. The search for such a resource is a gating requirement for any generalisation claim.
+
+Direction and magnitude are reported separately; H2a is supported only if both exceed the minimum detectable effect.
+
+4.3 H3 — Modality provenance
+
+Observed-versus-imputed status predicts reliability, estimated separately across the three imputation modes with the monotonicity expectation of Section 3.5. The operational primitive is the observed-track filter; the audit verifies whether it returns a strict subset, a null filter, or a collapse, and whether per-track metadata remain consistent after filtering.
+
+4.4 H4 — Evidence-based prioritisation
+
+The evidence layer improves validation yield and biological utility over raw scores. The decision is two-part:
+
+\text{H4} \in \{\,\text{superior},\ \text{equivalent},\ \text{inconclusive}\,\}.
+
+Superior if \Delta@k exceeds zero beyond the minimum detectable effect. Equivalent if the two-one-sided-tests procedure rejects both one-sided nulls at the utility equivalence margin. A small-but-real effect is therefore not misreported as null.
+
+4.5 Component ablation
+
+A ten-row ablation table reports each component's contribution under both additive and leave-one-out designs, together with a direct provenance-ablation test. The purpose is to permit the framework to deny credit to provenance if provenance does not earn it.
+
+---
+
+5. Experimental Design and Data Eligibility
+
+5.1 Dataset classification
+
+Datasets are classified by contamination category:
+
+· C₀ — independent, no known overlap with training data;
+· C₁ — locus overlap possible, dataset independent;
+· C₂ — high probability of training inclusion;
+· C₃ — listed among training sources.
+
+Confirmatory Track-A inference is restricted to in-distribution data only. Datasets that appear in the training corpus are excluded from confirmatory hypothesis testing; using a developer benchmark to test developer claims is circular.
+
+5.2 Track-B datasets
+
+Three CRISPR perturbation resources form the Track-B evidence base: a FlowFISH enhancer screen, a genome-wide pooled CRISPRi screen, and a TAP-seq enhancer screen. All three are in a single leukaemia cell line. This fact caps what the programme can claim: H2b is untestable with the current evidence base, and the confirmatory H2a claim is a statement about within-line conditioning, not about biological transfer.
+
+The pooled screen is designated the primary H1 dataset on power grounds; the FlowFISH screen, with a validated pair set of approximately sixty, is designated a consistency check. The two screens are not pooled as if they carried equal evidential weight, and any pooled analysis carries an explicit dataset indicator. The readout difference between the screens — bulk FlowFISH versus high-multiplicity pooled single-cell — is disclosed.
+
+The high-multiplicity design of the pooled screen creates correlated structure among guides. The cluster definition is fixed in advance (by gene, enhancer, locus, or guide), and a locus-level re-clustering sensitivity analysis is reported. If the H1 conclusion reverses under re-clustering, the conclusion is reported as fragile.
+
+A non-K562 perturbation resource is a hard gate for any H2b claim. A larger compendium is not automatically cleaner: its underlying perturbation training data must be re-audited for overlap with the model's training corpus before use.
+
+5.3 Dataset harmonisation
+
+Before joint analysis, a common estimand is defined for the Track-B resources: a distance window, a false-discovery-rate threshold, and an effect-size floor. Harmonisation is a prerequisite for pooling, not a post-hoc adjustment.
+
+5.4 Audit gates
+
+No analysis code is executed until the preregistration is deposited. Audit code for the provenance-primitive verification is exempt because it is itself part of the frozen protocol. The primitive audit is executed with a minimal public notebook so that any reader can reproduce it, and it tests both the strict-subset property and the metadata consistency of the returned object.
+
+---
+
+6. Statistical Analysis Plan
+
+6.1 Small-cluster inference
+
+Cluster-robust standard errors are unreliable when the number of clusters is small and the cluster sizes are imbalanced. The primary inference procedure is the wild cluster bootstrap with six-point weights, appropriate when the number of clusters is below approximately twelve. For intermediate cluster counts, the six-point procedure remains the primary method, and a score-transformed variant is reported as a sensitivity check. The analysis reports the raw cluster count, the cluster-size distribution, and the effective number of clusters.
+
+6.2 Power
+
+Minimum detectable effects are computed at a two-sided \alpha = 0.05 and power 0.80, under the observed cluster-size distribution of the chosen Track-B datasets rather than a balanced assumption. A balanced-cluster power calculation is optimistic for the imbalanced structure that the datasets actually exhibit.
+
+6.3 Equivalence margins
+
+Equivalence margins are derived, not asserted. The directional margin for H1 follows from the smallest distance-interaction difference of scientific interest, anchored to the independent benchmark literature. The utility margin for H4 follows from a cost model: the validation-yield gain that justifies the evidence layer's compute, API, and analyst cost. Until the derivation is recorded, both margins are provisional and are not treated as frozen constants.
+
+Equivalence is concluded only through a two-one-sided-tests procedure in which both one-sided nulls are rejected at the pre-specified margin.
+
+6.4 Multiplicity
+
+Secondary subgroup analyses are controlled by the Benjamini–Hochberg procedure at a pre-specified false-discovery rate. Primary hypotheses are not adjusted; each carries its own decision rule.
+
+6.5 Missing data
+
+Complete-case logging is used. Experimental outcomes are never imputed.
+
+---
+
+7. Reproducibility and Provenance Controls
+
+7.1 Hosted-model reproducibility
+
+The model is served through a hosted API whose weights are not presently released. The hosted model is not version-pinned. Bit-identical outputs on a single day do not constitute a version guarantee.
+
+Every API call logs the client version, the returned model-version string where available, the condition identifier, the request timestamp, and the full request payload. Raw outputs are stored, not only derived scores, so that a later model change can be detected by re-querying a fixed canary set.
+
+7.2 The canary set
+
+A fixed canary set of fifty to one hundred pairs is queried at the start and at the end of the evaluation period. If the canary outputs drift, the evaluation is paused and the drift is reported. Without this control, a null utility result could reflect a silent model update rather than a property of the evidence layer.
+
+7.3 Leakage controls
+
+The four leakage controls of Section 3.7 are frozen in the configuration file before any evaluation-set inference. Leakage is silent; a seed, a modality map, a value of k, or a normalisation constant chosen after seeing evaluation data renders the metric partially in-sample, and no post-hoc correction recovers it.
+
+7.4 Perturbation-operator discipline
+
+The in-silico perturbation operator is pre-specified on distributional grounds: the operator must preserve the composition of the input sufficiently that the perturbed sequence is not out-of-distribution. The composition-preserving shuffle is the primary operator. At least one alternative operator is reported as a sensitivity analysis. If the primary results do not survive the operator sensitivity analysis, that fragility is reported.
+
+7.5 Fixed pair set
+
+Comparisons between model generations are conducted on a fixed scored pair set. A comparison that allows the larger-context model to score a different pair set is confounded by context length, and the apparent advantage of the larger model may be an artefact of seeing more sequence.
+
+---
+
+8. Falsification Conditions
+
+8.1 Composite falsification
+
+The framework's value is falsified if, on the primary dataset with the pair set held fixed, all three of the following hold:
+
+1. the evidence layer does not improve validation yield beyond the utility equivalence margin;
+2. the provenance contrast is flat across the three imputation modes; and
+3. the distance interaction is explained by a single global calibration slope rather than a distance-dependent term.
+
+Together, these three nulls would show that the layer adds complexity without predictive gain. The composite condition is stated in the preregistration so that a null result is interpretable as a finding rather than as an ambiguous failure.
+
+8.2 Component-level falsification
+
+Independently of the composite condition, provenance is denied credit if its component does not survive the leave-one-out ablation. The framework is permitted — indeed required — to report that its own evidence layer is unnecessary.
+
+8.3 Reporting discipline
+
+Negative, equivalent, and inconclusive results are all reportable. The three-part decision structure exists precisely so that no result is forced into a false binary. The written narrative leads with the Track-B perturbation outcomes; developer-benchmark diagnostics are reported as secondary calibration checks and remain visibly separated from confirmatory claims.
+
+---
+
+9. Expected Contributions and Limitations
+
+9.1 Contributions
+
+The dissertation contributes (i) a formal separation of calibration, rank, and magnitude as distinct measurement constructs with distinct decision-theoretic consequences; (ii) a provenance model grounded in the three-level imputation semantics of the target API rather than in a binary observed/imputed fiction; (iii) a small-cluster inference protocol appropriate to the imbalanced structure of enhancer–perturbation data; (iv) a derivation-based rather than assertion-based treatment of equivalence margins; and (v) a composite falsification condition that renders the framework's own irrelevance a reportable scientific outcome.
+
+9.2 Limitations
+
+Three limitations are acknowledged in advance and are not discovered post hoc.
+
+Cell-line concentration. The Track-B evidence base is concentrated in a single leukaemia line. H2b is untested. Any claim of cross-state generalisation awaits a non-K562 perturbation resource of usable scale.
+
+Hosted-model opacity. The model is not version-pinned and its weights are unreleased. The canary set and request logging mitigate but do not eliminate the risk that a silent update contaminates the evaluation.
+
+Estimand heterogeneity. The Track-B resources measure different perturbation modalities with different readouts. Harmonisation to a common estimand is a modelling decision with irreducible residual heterogeneity, which is disclosed rather than assumed away.
+
+9.3 Prospective extension
+
+A minimal prospective element — held-out loci or a small new perturbation pilot — is designed after the retrospective analysis so that the utility endpoint is not purely post hoc. The prospective element is reported separately and is not pooled with retrospective results.
+
+---
+
+10. Conclusion
+
+AG2-PACT is a falsification-first evaluation framework whose central commitment is that it must be able to demonstrate its own irrelevance. Every structural decision follows from that commitment. The three-part decision rule exists so that no result is forced into a false binary. The equivalence clauses exist so that a small-but-real effect is not misreported as null. The component ablation exists so that provenance can be denied credit if it does not earn it. The preregistration gate exists so that the evidence score cannot be tuned to the evaluation set. The observed-track fallback exists so that a missing API primitive cannot be replaced by a plausible-sounding proxy. The track separation exists so that a category error cannot be dressed as a calibration metric. The contamination audit exists so that a zero-shot claim is not contaminated by training data. The canary set exists so that a silent model update cannot masquerade as a scientific finding.
+
+The programme does not set out to show that its evidence layer improves the base model. It sets out to test whether it does, and to report the outcome either way without distortion. If the layer improves validation efficiency beyond a derived margin, the contribution is the layer. If it does not, the contribution is the demonstration that the layer is unnecessary. Both are scientific. The framework is built so that neither can be mistaken for the other.
+
+AG2-PACT — Final Appendices
+
+Analytical appendices to the theoretical dissertation: definitions, decision registries, dataset classifications, statistical protocols, reproducibility controls, design corrections, and gating requirements.
+
+---
+
+Appendix A — Notation and Symbol Table
+
+Symbol Meaning
+f_\theta Base conditional genomic foundation model, parameters \theta
+x Genomic input (sequence, variant, or perturbed construct)
+c Conditioning state (cell type, tissue, assay context)
+\hat{y} Model prediction (Track A: variant score; Track B: transformed perturbation score)
+y^{\exp} Experimental measurement
+\pi Provenance configuration of the underlying tracks
+I Imputation indicator (I=1 imputed, I=0 observed)
+d_i Standardised enhancer–TSS distance for observation i
+\alpha,\beta Calibration intercept and slope
+\hat{y}^{*} Crossing point of the calibration line
+\gamma_1,\gamma_2,\gamma_3 Distance main effect, score×distance interaction, distance-squared coefficient
+\Delta\gamma_3 Generation-to-generation contrast in \gamma_3
+S Model score under a given input condition
+G Number of clusters
+k Selection depth; k_{\mathrm{dev}} \neq k_{\mathrm{eval}}
+\mathcal{T} Finite transformation set
+\mathcal{E}, \mathcal{S}_{\mathrm{raw}} Evidence-layer ranking, raw-score ranking
+U_k(\cdot) Mean measured effect of the top-k set
+\delta^{\mathrm{eq}}_{H1}, \delta^{\mathrm{eq}}_{H4} Equivalence margins for H1 and H4
+E(v) Evidence score for candidate v
+w_1,\dots,w_4 Evidence-score weights frozen on development data
+\rho Intra-cluster correlation
+m Mean cluster size
+\mathrm{DE} Design effect, 1+(m-1)\rho
+
+---
+
+Appendix B — Formal Definitions
+
+B.1 Direction accuracy
+
+\mathrm{DA} = \frac{1}{n}\sum_{i=1}^{n}\mathbf{1}\!\left[\operatorname{sign}(\hat{y}_i)=\operatorname{sign}(y_i^{\exp})\right].
+
+\mathrm{DA} measures sign agreement only. Where a binary task exists, \mathrm{auROC} is reported separately and is never substituted for \mathrm{DA}. The two quantities answer different questions and are never treated as interchangeable.
+
+B.2 Rank correlation
+
+Spearman's \rho_s measures agreement of order only. It carries no information about magnitude. A model with \rho_s=0.95 may compress all effects by a constant factor and remain rank-perfect.
+
+B.3 Magnitude error
+
+\mathrm{MAE}=\frac{1}{n}\sum_{i=1}^{n}\left|\hat{y}_i-y_i^{\exp}\right|,\qquad
+\mathrm{RMSE}=\sqrt{\frac{1}{n}\sum_{i=1}^{n}\left(\hat{y}_i-y_i^{\exp}\right)^2}.
+
+B.4 Calibration model
+
+y^{\exp}=\alpha+\beta\hat{y}+\varepsilon .
+
+Direction convention, fixed throughout: \beta>1 ⇒ underestimation of magnitude; \beta<1 ⇒ overestimation. This convention is not reversed in any derived quantity.
+
+B.5 Crossing point
+
+\hat{y}^{*}=-\frac{\alpha}{\beta-1}.
+
+Delta-method variance:
+
+\operatorname{Var}(\hat{y}^{*})\approx
+\frac{1}{(\beta-1)^2}\operatorname{Var}(\hat{\alpha})
++\frac{\alpha^2}{(\beta-1)^4}\operatorname{Var}(\hat{\beta})
+-\frac{2\alpha}{(\beta-1)^3}\operatorname{Cov}(\hat{\alpha},\hat{\beta}).
+
+Reported with a bootstrap interval. Identification rule: if the interval for \hat{y}^{*} covers the entire observed predictor range, the result is reported as no crossing identified. A point estimate is never reported as a discovery in that case.
+
+Region-wise reporting. Fraction of observations above and below \hat{y}^{*}, together with region-wise underprediction fractions, are always reported. No dataset is classified from \beta alone.
+
+B.6 Distance-dependent miscalibration
+
+y_i^{\exp}=\alpha+\beta\hat{y}_i+\gamma_1 d_i+\gamma_2(\hat{y}_i d_i)+\gamma_3 d_i^{2}+\varepsilon_i,
+\qquad
+\Delta\gamma_3=\gamma_3^{\mathrm{AG2}}-\gamma_3^{\mathrm{AG1}}.
+
+\Delta\gamma_3 is estimated directly with a clustered bootstrap interval. Two separately estimated coefficients with differing significance are not evidence of a difference between them.
+
+B.7 Controlled modality ablation effect
+
+\mathrm{CMAE}=\mathbb{E}\!\left[S_{\mathrm{obs}}-S_{\mathrm{mask}}\right].
+
+Validity gates, both required before any CMAE is reported:
+
+· C1 (no OOD collapse): the masked-condition output distribution must not shift beyond a pre-specified quantitative threshold \tau_{C1}, fixed before analysis.
+· C2 (held constant): all non-masked inputs identical across conditions.
+
+Mandatory controls:
+
+1. Null ablation — ablate a modality irrelevant to the prediction; report its CMAE alongside the substantive one.
+2. Imputation redundancy — compare masking with imputation. A small CMAE under redundancy indicates internal reconstruction, not unimportance of the modality.
+3. Shuffled-modality ablation — ablation of a permuted version of the modality; if it also moves the prediction, the operator rather than the information is driving the effect.
+
+B.8 Imputation-reliability gap (observational)
+
+\mathrm{IRG}=\mathbb{E}[S\mid I=1]-\mathbb{E}[S\mid I=0].
+
+Explicitly observational. Never reported with causal language. Scope of causal language is restricted to the model-input intervention actually performed, which is CMAE.
+
+B.9 Provenance contrasts (three-level)
+
+\pi\in\{\texttt{observed},\ \texttt{imputed\_supported},\ \texttt{imputed\_exploratory}\},
+
+\Delta_{\mathrm{sup}}=\mathbb{E}[S\mid\pi=\texttt{imputed\_supported}]-\mathbb{E}[S\mid\pi=\texttt{observed}],
+
+\Delta_{\mathrm{exp}}=\mathbb{E}[S\mid\pi=\texttt{imputed\_exploratory}]-\mathbb{E}[S\mid\pi=\texttt{observed}].
+
+Monotonicity expectation, pre-specified: |\Delta_{\mathrm{exp}}|>|\Delta_{\mathrm{sup}}|. Violation is a result against the provenance account and is reported as such, not averaged away. Exploratory tracks carry non-informative weight for confirmatory claims.
+
+B.10 Utility metrics
+
+\mathrm{ER}@k=\frac{U_k(\mathcal{E})}{U_k(\mathcal{S}_{\mathrm{raw}})},\qquad
+\Delta@k=U_k(\mathcal{E})-U_k(\mathcal{S}_{\mathrm{raw}}).
+
+Zero-denominator rule (pre-specified): if U_k(\mathcal{S}_{\mathrm{raw}})=0, \mathrm{ER}@k is undefined and only \Delta@k is reported; no smoothing constant is introduced after seeing the data. Signed-cancellation rule: because \mathrm{ER}@k can cancel under signed effects, \Delta@k is always co-reported and is the primary quantity for the H4 decision.
+
+B.11 Evidence score
+
+E(v)=w_1\mathrm{Stab}(v)+w_2\mathrm{Conc}(v)+w_3\mathrm{Prov}(v)-w_4\mathrm{Dist}(v).
+
+Admission requirement:
+
+\Delta@k\big(E(v)\big)-\Delta@k\big(\text{raw}+\text{distance}\big)>\delta^{\mathrm{eq}}_{H4}\quad\text{on development data.}
+
+Complexity audit reported: number of free parameters p_E, development-set size n_{\mathrm{dev}}, ratio p_E/n_{\mathrm{dev}}.
+
+---
+
+Appendix C — Hypothesis and Decision-Rule Registry
+
+C.1 H1 — Distance-dependent magnitude miscalibration
+
+Decision set: \{\text{supported},\ \text{equivalent},\ \text{inconclusive}\}.
+
+· Supported if the clustered bootstrap interval for \Delta\gamma_3 excludes zero and |\widehat{\Delta\gamma_3}|>\mathrm{MDE}.
+· Equivalent if TOST rejects both one-sided nulls at \delta^{\mathrm{eq}}_{H1}.
+· Inconclusive otherwise.
+
+A non-significant contrast is never reported as falsification. H1 is framed as a replication-and-quantification hypothesis, not a discovery hypothesis: distal underprediction in this model family is documented in the independent benchmark literature, and the confirmatory contribution is the direct estimation of \Delta\gamma_3.
+
+C.2 H2 — Cell-state conditioning, split
+
+H2a (testable): matched within-K562 conditioning improves Track-B prediction relative to a matched control. Supported only if both direction and magnitude exceed the MDE.
+
+H2b (untested): the gain generalises to a non-K562 state. Marked untested in every abstract, figure, and preregistration statement until a non-K562 perturbation resource of usable scale is secured. This is a gating requirement, not a caveat.
+
+C.3 H3 — Modality provenance
+
+Estimated separately for \Delta_{\mathrm{sup}} and \Delta_{\mathrm{exp}} with the monotonicity expectation of B.9. Conditioning mode is declared per hypothesis: under expression conditioning no track carries the observed label, so hypotheses tested under different conditioning modes are not combined without explicit disclosure.
+
+C.4 H4 — Evidence-based prioritisation
+
+Decision set: \{\text{superior},\ \text{equivalent},\ \text{inconclusive}\}.
+
+· Superior if \Delta@k>0 beyond the MDE.
+· Equivalent if TOST rejects both one-sided nulls at \delta^{\mathrm{eq}}_{H4}.
+· Inconclusive otherwise.
+
+A small-but-real effect is therefore not misreported as null.
+
+C.5 Composite falsification
+
+The framework's value is falsified if, on the primary dataset with the pair set held fixed, all three hold:
+
+1. the evidence layer does not improve validation yield beyond \delta^{\mathrm{eq}}_{H4};
+2. the provenance contrast is flat across the three imputation modes;
+3. the distance interaction is explained by a single global calibration slope rather than a distance-dependent term.
+
+Stated in the preregistration so that a null outcome is interpretable as a finding.
+
+---
+
+Appendix D — Frozen Decision Registry
+
+Change requires a versioned amendment with documented justification.
+
+ID Decision
+FR-01 Track A / Track B separation is non-negotiable
+FR-02 \mathrm{DA}, \rho_s, and magnitude are reported separately and never conflated
+FR-03 Under the through-origin-plus-intercept model, \beta>1 denotes underestimation
+FR-04 \hat{y}^{*} is always reported with an interval and the identification rule of B.5
+FR-05 IRG is observational; causal language is restricted to CMAE and to model input
+FR-06 C1 and C2 gates precede any CMAE reporting
+FR-07 H1 decision is three-part (supported / equivalent / inconclusive)
+FR-08 H1 equivalence margin derived from the smallest distance-interaction effect of interest; provisional until derivation recorded
+FR-09 Wild cluster bootstrap with six-point weights is the primary inference procedure for small G
+FR-10 Preregistration precedes any evaluation-set inference
+FR-11 Datasets present in the training corpus are excluded from confirmatory inference
+FR-12 Norman-type CRISPRa data are supplementary only
+FR-13 The TAP-seq enhancer resource is single-cell-line; no cross-state generalisation is claimed from it
+FR-14 The observed-track filter is the provenance primitive; three-level metadata is read after filtering
+FR-15 Four leakage controls L1–L4 frozen in the configuration file
+FR-16 H4 carries an equivalence clause; margin derived from the cost model; provisional until derivation recorded
+FR-17 The framework must be able to demonstrate its own irrelevance
+FR-18 H2b is marked untested until a non-K562 perturbation resource is secured
+FR-19 Provenance is modelled as three levels; exploratory tracks are non-informative for confirmatory claims
+FR-20 E(v) must beat the raw-plus-distance baseline on development data before confirmatory testing
+FR-21 API canary set and full request logging precede evaluation-set inference
+FR-22 The in-silico perturbation operator is pre-specified on composition-preservation grounds, with an operator sensitivity analysis
+FR-23 Generation comparisons are conducted on a fixed scored pair set
+FR-24 Composite falsification condition (C.5) is preregistered verbatim
+
+---
+
+Appendix E — Dataset Classification Log
+
+E.1 Contamination categories
+
+Category Definition
+C₀ Independent; no known overlap with training data
+C₁ Locus overlap possible; dataset independent
+C₂ High probability of training inclusion
+C₃ Listed among training sources
+
+E.2 Track A — Variant-effect inference
+
+Bulk multi-tissue eQTL/sQTL resource. Category C₃ (listed among training sources). Confirmatory eligibility: in-distribution calibration only; excluded from confirmatory H1. Out-of-distribution generalisation cannot be claimed for data present in the training corpus.
+
+Single-cell eQTL resource in immune subtypes. Category C₃ (primary developer benchmark: recall at 90 % precision 16 %→30 %; directional recall 23 %→43 %, developer-reported from a non-peer-reviewed preprint). Confirmatory eligibility: in-distribution only; excluded from confirmatory H1. Testing a developer claim on the developer benchmark is circular.
+
+Massively parallel reporter assay compendium. Category C₂/C₃. Eligibility requires locus-level audit before any confirmatory use.
+
+E.3 Track B — Perturbation inference
+
+FlowFISH enhancer screen. C₀/C₁. Single cell line (K562). Screen breadth: >3,000 potential enhancer–gene connections across 30 genes; validated pair set used in benchmarking is approximately 60. Designated a consistency check, not the primary H1 dataset: at n\approx62 the correlation interval is wide and differences of 0.05–0.10 should be read as tied. Readout: bulk FlowFISH.
+
+Genome-wide pooled CRISPRi screen. C₀/C₁. Single cell line (K562). Scale: 5,920 candidate enhancers, 254,974 single-cell transcriptomes, 664 significant enhancer–gene pairs with a high-confidence subset of 470. Designated the primary H1 dataset on power grounds. Readout: high-multiplicity pooled single-cell. Median guides per cell approximately 15; the resulting correlated structure motivates the cluster definition of F.1. Pooling with the FlowFISH screen requires an explicit dataset indicator; the two are never pooled as if equally weighted.
+
+TAP-seq enhancer screen. C₀. Single cell line (K562). Scale: 1,778 enhancers within approximately 2.5 % of the genome. Eligibility: locus and assay generalisation only. No cross-cell-state claim is licensed by this resource.
+
+CRISPRa transcription-factor perturbation resource. C₀/C₁. Single cell line (K562); CRISPR activation, not interference. Supplementary only: contextual sensitivity and generalisation analyses, not enhancer-ablation validation. Mixing perturbation types across tracks is prohibited.
+
+Enhancer–gene interaction compendium. Aggregated element–gene pairs measured across many biosamples. Its perturbation training data are concentrated in a single cell line; biosample breadth resides in predictive interactions, not in perturbation validation. Any use requires re-audit for training-corpus overlap. A larger compendium is not automatically cleaner.
+
+E.4 Harmonisation requirements
+
+Before any joint Track-B analysis, the following are fixed: distance window, false-discovery-rate threshold, effect-size floor, and readout normalisation. Harmonisation is a prerequisite, not a post-hoc adjustment. Residual heterogeneity after harmonisation is disclosed rather than assumed away.
+
+---
+
+Appendix F — Statistical Appendix
+
+F.1 Cluster structure
+
+Cluster definition (by gene, enhancer, locus, or guide) is fixed in advance. Reported for every analysis:
+
+· raw cluster count G;
+· full cluster-size distribution, not only the count;
+· effective number of clusters;
+· locus-level re-clustering sensitivity analysis.
+
+If the H1 conclusion reverses under locus-level re-clustering, the conclusion is reported as fragile.
+
+F.2 Wild cluster bootstrap
+
+Test statistic with cluster-robust variance:
+
+t=\frac{\hat{\beta}-\beta_0}{\sqrt{\hat{V}_{\mathrm{CV1}}}}.
+
+Restricted residuals are imposed under the null; clusters are reweighted by six-point weights
+
+w_g\in\left\{-\sqrt{\tfrac{3}{2}},\,-1,\,-\sqrt{\tfrac{1}{2}},\,\sqrt{\tfrac{1}{2}},\,1,\,\sqrt{\tfrac{3}{2}}\right\},
+
+each with probability 1/6. The bootstrap distribution of t^{*} supplies the p-value and the interval. Six-point weights are the primary procedure for small G; a score-transformed variant is reported as a pre-specified sensitivity check. Balanced-cluster asymptotics are not relied upon.
+
+F.3 Minimum detectable effect under clustering
+
+\mathrm{MDE}=\left(z_{1-\alpha/2}+z_{1-\beta}\right)\cdot\sigma\sqrt{\frac{\mathrm{DE}}{Gm}},
+\qquad \mathrm{DE}=1+(m-1)\rho .
+
+Computed at \alpha=0.05 (two-sided), power 0.80, using the observed cluster-size distribution and an empirically anchored \rho. Balanced-cluster computations are reported only as an optimistic bound, never as the operative MDE.
+
+F.4 Two one-sided tests
+
+With margin bounds \delta_L,\delta_U:
+
+t_L=\frac{\hat{\beta}-\delta_L}{\widehat{\mathrm{SE}}},\qquad
+t_U=\frac{\hat{\beta}-\delta_U}{\widehat{\mathrm{SE}}}.
+
+Equivalence is concluded only if both one-sided nulls are rejected at level \alpha. Absence of significance is never treated as equivalence.
+
+F.5 Multiplicity
+
+Primary hypotheses each carry their own decision rule and are not adjusted. Secondary subgroup analyses are controlled by the Benjamini–Hochberg procedure at a pre-specified false-discovery rate.
+
+F.6 Missing data
+
+Complete-case logging only. Experimental outcomes are never imputed. Missingness is reported by dataset and by cluster.
+
+---
+
+Appendix G — Component Ablation Specification
+
+Ten rows, each reporting \Delta@k with a clustered interval, under both additive and leave-one-out designs.
+
+Row Configuration
+1 Raw score only
+2 Raw score + distance (two-variable baseline)
+3 + stability
+4 + concordance
+5 + provenance (three-level)
+6 Full E(v)
+7 Full minus stability
+8 Full minus concordance
+9 Full minus provenance
+10 Full minus distance
+
+Direct provenance-ablation test. Provenance is denied credit if row 9 does not degrade relative to row 6 beyond the utility margin. The framework is required to be able to report this outcome.
+
+Baseline gate. Row 6 must exceed row 2 by more than \delta^{\mathrm{eq}}_{H4} on development data before any confirmatory H4 test is conducted.
+
+Diversity sensitivity. H4 is re-run with diversity defined by TAD boundaries in place of the fixed 100 kb window. Both are reported; dependence of the conclusion on the window definition is reported as fragility.
+
+---
+
+Appendix H — Reproducibility Protocol
+
+H.1 Logged fields per API call
+
+Field Content
+Client version Package and build identifier
+Model version string As returned, where available
+Condition identifier Cell type, tissue, assay context
+Request timestamp UTC, millisecond resolution
+Full request payload Sequence, variant, conditioning, all flags
+Provenance metadata Per-track imputation mode after filtering
+Raw output Stored unmodified, not only derived scores
+
+H.2 Canary set
+
+Fifty to one hundred fixed pairs, queried at the start and at the end of the evaluation period. Drift beyond a pre-specified tolerance triggers a pause and a reported drift note. Without this control, a null utility result cannot be distinguished from a silent model update.
+
+H.3 Leakage controls
+
+· L1 stochastic-pass seed fixed before data access;
+· L2 primary-modality map fixed before data access;
+· L3 k_{\mathrm{dev}}\neq k_{\mathrm{eval}}, both fixed;
+· L4 normalisation constants frozen in the configuration file.
+
+Leakage is silent. A seed, a modality map, a value of k, or a normalisation constant chosen after seeing evaluation data renders the metric partially in-sample, and no post-hoc correction recovers it.
+
+H.4 Perturbation-operator discipline
+
+Primary operator preserves single-base and dinucleotide composition; a substitution operator is rejected on distributional grounds. At least one alternative operator is reported as a sensitivity analysis, and non-survival under that analysis is reported.
+
+H.5 Fixed pair set
+
+All generation comparisons are scored on a fixed pair set. A comparison permitting different scored pairs is confounded by context length, and the apparent advantage of a larger-context model may be an artefact of seeing more sequence.
+
+H.6 Primitive audit
+
+Executed as a minimal public notebook, before main analysis, testing both:
+
+1. whether the observed-track filter returns a strict subset, a null filter, or induces collapse;
+2. whether per-track metadata remain consistent on the returned object.
+
+Audit code is exempt from the no-code-before-preregistration rule because it is itself part of the frozen protocol.
+
+---
+
+Appendix I — Design Corrections Incorporated
+
+Each correction was identified during design review and is recorded so that the corrected form, not the discarded form, governs the analysis.
+
+I.1 Factual
+
+ID Error Correction Consequence if uncorrected
+F-01 Calibration slope interpretation reversed Through-origin-plus-intercept model; \beta>1 ⇒ underestimation H1 unfalsifiable in the direction of interest; the calibration programme would have inverted its conclusion
+F-02 Rank correlation used as a magnitude measure \rho_s for order; MAE/RMSE/\beta for magnitude A model with \rho_s=0.95 predicting effects fivefold too small would be declared accurate
+F-03 Direction accuracy conflated with discrimination \mathrm{DA} and \mathrm{auROC} reported separately Direction would have been measured by a metric that does not measure direction
+F-04 CRISPRa perturbation resource treated as enhancer-ablation benchmark Demoted to supplementary Track B would have mixed non-equivalent perturbation types
+F-05 TAP-seq resource described as near-matched cross-state data Corrected to single-cell-line, locus/assay generalisation only H2 would have been supported by data incapable of supporting it
+F-06 Provenance audit targeted hypothetical metadata fields Observed-track filter identified as the operational primitive; per-track metadata read after filtering The audit would have failed against a non-existent field and provenance analysis would have been impossible
+F-07 Median guides per cell in the pooled screen misstated Corrected to approximately 15 Power computation would have used an inflated cluster correlation
+F-08 FlowFISH breadth conflated with validated benchmark set Screen breadth (>3,000 connections, 30 genes) reported separately from the ~60-pair validated set Fulco would have been treated as adequately powered for H1
+
+I.2 Methodological
+
+ID Error Correction Consequence if uncorrected
+M-01 Perturbation compared directly to variant score as if a calibration error Track separation; finite pre-specified transformation set Category error; Track B uninterpretable
+M-02 Modality index described as causal Renamed CMAE; causal scope restricted to model input Over-claim of biological causality from a model intervention
+M-03 \beta alone used to classify underprediction Crossing point plus region-wise fractions Mixed-regime datasets misclassified as uniformly underpredicted
+M-04 H1 powered for significance only Three-part decision plus TOST Underpowered nulls reported as falsification
+M-05 H4 superiority-only Equivalence clause added Small-but-real effects misreported as null
+M-06 Cluster-robust inference assumed valid at any G Six-point wild cluster bootstrap; cluster-size distribution and effective count reported Downwardly biased standard errors in small, imbalanced cluster sets
+M-07 Four leakage channels left unfrozen L1–L4 frozen in configuration file ER@k partially in-sample; stability tuned to the evaluation set
+M-08 H2 treated as a single claim Split into testable within-line and untested cross-state components Cross-state generalisation asserted without evidence
+M-09 Equivalence margins asserted as round numbers Margins derived from SESOI and a cost model; provisional until derivation recorded Post-hoc freedom disguised as rigour
+M-10 C1 gate left qualitative Quantitative threshold fixed in advance; null-ablation and redundancy controls added C1 becomes a post-hoc judgement, defeating preregistration
+M-11 Provenance modelled as binary Three-level model with separate contrasts and monotonicity expectation Collapsing supported and exploratory discards the informative contrast
+M-12 Hosted model assumed stable Canary set and full request logging Null result could reflect a silent model update
+
+I.3 Scope
+
+ID Error Correction Consequence if uncorrected
+S-01 Building on assumed model deficiencies Falsification-first design with composite falsification condition Programme becomes engineering rather than science
+S-02 Training-corpus datasets considered confirmatory Excluded from confirmatory inference Zero-shot claim contaminated
+S-03 Aggregated compendium treated as automatically cleaner Re-audit for training overlap required Larger but no less contaminated evidence base
+S-04 Weak "no conditioning" baseline for H2 Matched controls required H2 would support a trivial comparison
+S-05 Utility endpoint treated as a single scalar Biological filter or alternative utility function as sensitivity analysis Fragile scalar mistaken for a robust conclusion
+
+---
+
+Appendix J — Epistemic Principles
+
+J.1 Measurement
+
+P-1. A metric measures what it measures, not what we want it to measure. Conflating rank, magnitude, and discrimination is a category error, not a simplification.
+
+P-2. A slope alone does not classify a dataset. Under y^{\exp}=\alpha+\beta\hat{y} the sign of the error depends on \hat{y}; the crossing point, the fractions on each side, and region-wise error are reported.
+
+P-3. No non-significant result is proof of no effect. Equivalence is tested, never inferred from absence of significance.
+
+J.2 Design
+
+P-4. Perturbation is not variation. Treating the difference between a CRISPRi ablation and a DNA variant as calibration error is a category error dressed as a metric.
+
+P-5. A transformation must be pre-specified, finite, and falsifiable. Otherwise the transformation is a post-hoc fit to the evaluation set.
+
+P-6. Dataset selection is a scientific eligibility decision. A public dataset is not automatically licensed, independent, or out-of-distribution.
+
+J.3 Inference
+
+P-7. Small-cluster inference requires small-cluster methods. Asymptotic cluster-robust standard errors are unreliable when clusters are few and imbalanced.
+
+P-8. A difference in significance is not a significant difference. Generation contrasts are estimated directly, not inferred from two p-values.
+
+P-9. Leakage is silent. Any quantity chosen after seeing evaluation data renders the metric partially in-sample, and no correction recovers it.
+
+J.4 Honesty
+
+P-10. The framework must be able to demonstrate its own irrelevance. A framework that can only confirm its utility is a persuasion device, not a scientific instrument.
+
+P-11. Negative, equivalent, and inconclusive results are all reportable. The three-part decision structure exists so that no result is forced into a false binary.
+
+P-12. Preregistration is the cheapest defence against post-hoc drift. It converts a framework we built into a hypothesis we tested.
+
+P-13. Causal language is scoped to the intervention actually performed. CMAE is a claim about model input, not about biology.
+
+J.5 Programme discipline
+
+P-14. Measure the evidence base first; build the instrument second.
+
+P-15. Verification against primary sources is not optional. Every factual correction in Appendix I was caught by verification; without it the programme would rest on a reversed slope, a mislabelled dataset, and a non-existent API field.
+
+P-16. Every correction is logged, not overwritten. The intellectual trajectory is part of the scientific record.
+
+P-17. Ambition is bounded by the evidence base before the evidence base is asked to support it.
+
+---
+
+Appendix K — Composite Falsification Registry
+
+Condition Operative test Reporting consequence
+K-1 Utility null \Delta@k within \pm\delta^{\mathrm{eq}}_{H4} on the primary dataset, fixed pair set Reported as equivalence, not as failure to detect
+K-2 Provenance flat \( \Delta_{\mathrm{exp}}
+K-3 Distance term redundant Distance interaction absorbed by a single global slope H1 reported as reducible to global calibration
+K-1 ∧ K-2 ∧ K-3 All three simultaneously Framework's value reported as falsified; contribution reclassified as a negative result
+Row 9 of Appendix G non-degrading Provenance ablation does not reduce \Delta@k Provenance denied credit in the written conclusion
+
+Each condition is preregistered verbatim. A registered null is a finding; it is not reframed as a limitation.
+
+---
+
+Appendix L — Open Questions and Gating Requirements
+
+ID Question Blocks Resolution path Status
+OQ-01 Does the observed-track filter return a strict subset or a null filter? H3, primitive audit Primitive audit, phase 1 Open — gate
+OQ-02 Does the API support controlled masking? CMAE, H3 Primitive audit, phase 2 Open — gate
+OQ-03 Is the training corpus disclosed sufficiently to verify independence for the Track-B resources? H1, H4 Locus-level audit Open — gate
+OQ-04 Does the k_{\mathrm{dev}}\in\{50,200\} / k_{\mathrm{eval}}\in\{100,500\} separation preserve adequate power? H4 Power simulation under observed cluster distribution Open
+OQ-05 Can the three Track-B resources be harmonised to a single perturbation estimand? Track B pooling Harmonisation protocol Open — gate
+OQ-06 Is a non-K562 enhancer-perturbation resource of usable scale available? H2b Targeted resource search plus overlap audit Open — hard gate
+OQ-07 Does the evidence score survive prospective validation? H4 robustness Post-retrospective prospective element Open
+OQ-08 What diversity threshold applies under TAD-aware windows? H4 TAD-aware sensitivity analysis Open
+OQ-09 Same or independent folds for the generation comparison? H1 Statistical decision; independent folds preferred for a difference claim Open
+OQ-10 Is mean absolute log fold-change directionally meaningful for enhancer ablation? H4 Biological review; alternative utility function Open
+OQ-11 What is the quantitative C1 threshold \tau_{C1}? CMAE reporting Fixed before analysis Open — gate
+OQ-12 What is the derivation of \delta^{\mathrm{eq}}_{H1} and \delta^{\mathrm{eq}}_{H4}? H1, H4 SESOI anchor and cost model Open — gate
+OQ-13 What perturbation operator is primary, and does the conclusion survive the alternative? H1 Operator pre-specification and sensitivity analysis Open
+
+Gating rule. No evaluation-set inference proceeds while any item marked gate remains unresolved. Gating items are resolved by a recorded decision, not by an implicit default. OQ-06 is a hard gate: absent a non-K562 resource, H2b remains untested and no cross-state generalisation is asserted anywhere in the dissertation.
+
+---
+
+Appendix M — Parameter and Complexity Budget
+
+Quantity Value Constraint
+Free parameters in E(v), p_E Reported Must satisfy baseline gate (B.11)
+Development-set size n_{\mathrm{dev}} Reported k_{\mathrm{dev}}\neq k_{\mathrm{eval}}
+Ratio p_E/n_{\mathrm{dev}} Reported Unfavourable ratio acknowledged as a power limitation in advance
+Frozen weights w_1\dots w_4 Frozen on development data; never re-tuned after evaluation
+Leakage channels 4 L1–L4 in configuration file
+Canary pairs 50–100 Queried at start and end of evaluation
+Ablation rows 10 Appendix G
+Primary hypotheses 4 H1, H2a, H3, H4; H2b untested
+
+---
+
+Closing Statement of the Appendices
+
+The appendices exist for one purpose: to ensure that no definition, decision, correction, or open question can be silently altered between the written design and the executed analysis. Every formula above is fixed before data access. Every margin is either derived or explicitly marked provisional. Every gate is either resolved by record or blocks inference. Every correction is logged so that the discarded form cannot quietly return.
+
+The framework's central commitment is unchanged and is recorded here as the appendices' final entry: AG2-PACT is not designed to demonstrate that its evidence layer must improve a conditional genomic foundation model. It is designed to test whether it does, and to report the outcome either way without distortion.
+
+AG2-PACT — ASCII Diagrams
+
+Figure set accompanying the final appendices. Pure ASCII, fixed-width; align in monospace.
+
+---
+
+Figure F-1 — Three-Layer Architecture
+
+```
+              +-------------------------------------------+
+              |        INPUT   (x, c, pi)                 |
+              |  sequence/variant | conditioning state   |
+              +----------------------+--------------------+
+                                     |
+          +--------------------------+--------------------------+
+          |                          |                          |
+          v                          v                          v
+ +------------------+     +---------------------+     +------------------+
+ | LAYER 1          |     | LAYER 2             |     | LAYER 3          |
+ | PREDICTIVE       |     | CONTEXTUAL          |     | UTILITY          |
+ |                  |     |                     |     |                  |
+ | f_theta(x,c)     |---->| g(x,c,pi) = r       |---->| h(y_hat,r) = u   |
+ | -> y_hat         |     | reliability         |     | prioritisation   |
+ +--------+---------+     +----------+----------+     +--------+---------+
+          |                          |                         |
+          v                          v                         v
+    raw score S_raw       provenance / distance       ER@k, Delta@k
+                          stability / concordance     biological utility
+
+ FALSIFICATION TARGET: do Layers 2+3 add value beyond Layer 1 alone?
+```
+
+---
+
+Figure F-2 — Track Separation (Non-Negotiable)
+
+```
+                  +-------------------------------+
+                  |     ALL CANDIDATE DATA        |
+                  +---------------+---------------+
+                                  |
+              +-------------------+-------------------+
+              |                                       |
+              v                                       v
+  +-----------------------+               +-----------------------+
+  | TRACK A               |               | TRACK B               |
+  | VARIANT-EFFECT        |               | PERTURBATION          |
+  |                       |               |                       |
+  | DNA variant -> effect |               | CRISPRi/a/TAP-seq     |
+  | estimand: variant     |               | estimand: ablation    |
+  +-----------+-----------+               +-----------+-----------+
+              |                                       |
+              v                                       v
+  +-----------------------+               +-----------------------+
+  | in-distribution only  |               | prioritisation util.  |
+  | C0/C1 confirmatory    |               | ER@k, Delta@k         |
+  | C2/C3 excluded from H1|               | K562-only => H2b      |
+  |                       |               | UNTESTED              |
+  +-----------------------+               +-----------------------+
+
+        >>> NEVER POOLED -- DIFFERENT ESTIMANDS <<<
+        transformation set T = {identity, rank, linear, sigmoid, none}
+        fixed in advance; nothing outside T after evaluation data
+```
+
+---
+
+Figure F-3 — Programme Flow and Gates
+
+```
+ G0   +-------------------+
+----->| Adversarial audit |   no code written
+      +---------+---------+
+                |
+                v
+ G1.1 +-------------------+   track sep, metric sep,
+      | DESIGN FREEZE     |   slope convention, CMAE,
+      +---------+---------+   H1 three-part
+                |
+                v
+ G1.2 +-------------------+   contamination categories,
+      | DATASET AUDIT     |   harmonisation estimand
+      +---------+---------+
+                |  [GATE: OQ-03, OQ-05]
+                v
+ G1.3 +-------------------+   MDE under OBSERVED clusters,
+      | POWER / SAP       |   margins derived, k_dev != k_eval
+      +---------+---------+
+                |
+                v
+ G1.3b+-------------------+   composite falsification
+      | PREREGISTRATION   |   recorded verbatim (OSF)
+      +---------+---------+
+                |  [GATE: OQ-12 margin derivation]
+                v
+ G1.4 +-------------------+   phase 1: strict subset?
+      | PRIMITIVE AUDIT   |   phase 2: masking supported?
+      +---------+---------+   (audit code exempt from rule)
+                |  [GATE: OQ-01, OQ-02, OQ-11]
+                v
+ G1.5 +-------------------+   canary set, request logging,
+      | REPRODUCIBILITY   |   operator pre-specification
+      +---------+---------+
+                |
+                v
+      +-------------------+
+      | EVALUATION        |   Track B primary; Track A
+      | INFERENCE         |   secondary; fixed pair set
+      +-------------------+
+
+      GATING RULE: no evaluation-set inference while any
+      [GATE] item is unresolved by record, not by default.
+```
+
+---
+
+Figure F-4 — Calibration Line and Crossing Point
+
+```
+   y_exp
+     ^
+     |                                     /
+     |                                  /     beta > 1  =>  UNDER
+     |                               /          (through-origin-plus-
+     |                            /              intercept model)
+     |                         /
+     |                      /   *
+     |                   /  *       y* = -alpha / (beta - 1)
+     |                / *            report with interval;
+     |             /*                if interval spans whole range
+     |          /                      => NO CROSSING IDENTIFIED
+     |       /
+     |    /         beta < 1  =>  OVER
+     | /
+     +--------------------------------------------------> y_hat
+          |                    |
+          |                    |
+     region below         region above
+       (over)               (under)
+
+   ALWAYS REPORT: y*, its interval, fraction on each side,
+                  region-wise underprediction fractions.
+   NEVER: classify a dataset from beta alone.
+```
+
+---
+
+Figure F-5 — H1 Three-Part Decision Rule
+
+```
+                 +-------------------------------+
+                 | Estimate Delta_gamma_3 with   |
+                 | clustered bootstrap interval  |
+                 +---------------+---------------+
+                                 |
+             +-------------------+-------------------+
+             |                                       |
+             v                                       v
+  +---------------------+                 +---------------------+
+  | CI excludes zero    |                 | TOST rejects BOTH   |
+  | AND |Delta| > MDE   |                 | one-sided nulls at  |
+  |                     |                 | delta_eq_H1         |
+  +----------+----------+                 +----------+----------+
+             |                                       |
+             v                                       v
+      +-------------+                         +-------------+
+      |  SUPPORTED  |                         | EQUIVALENT  |
+      +-------------+                         +-------------+
+
+             +-------------------+-------------------+
+                                 |
+                                 v
+                       +-------------------+
+                       |  INCONCLUSIVE     |
+                       | (never reported   |
+                       |  as falsified)    |
+                       +-------------------+
+
+  A difference in significance is NOT a significant difference.
+  Delta_gamma_3 is estimated directly, never inferred from 2 p-values.
+```
+
+---
+
+Figure F-6 — H4 Utility Decision Rule
+
+```
+  +------------------------+        +-------------------------+
+  | Delta@k with clustered |        | ER@k co-reported;       |
+  | interval               |        | zero denominator ->     |
+  |                        |        | report Delta@k only     |
+  +-----------+------------+        +------------+------------+
+              |                                  |
+              +----------------+-----------------+
+                               |
+                               v
+               +-------------------------------+
+               | compare with delta_eq_H4      |
+               | (derived from COST MODEL)     |
+               +---------------+---------------+
+                               |
+        +----------------------+----------------------+
+        |                      |                      |
+        v                      v                      v
+ +-------------+        +-------------+        +-------------+
+ | Delta > 0   |        | within      |        | neither     |
+ | and > MDE   |        | +/- delta   |        |             |
+ | SUPERIOR    |        | EQUIVALENT  |        | INCONCLUSIVE|
+ +-------------+        +-------------+        +-------------+
+
+  DIVERSITY: <=2 per gene, <=3 per 100 kb
+  SENSITIVITY: TAD-aware windows, both reported.
+  Small-but-real effect is NOT misreported as null.
+```
+
+---
+
+Figure F-7 — Provenance as a Three-Level Variable
+
+```
+                    +-------------------------------+
+                    |  TRACK METADATA (per track)   |
+                    +---------------+---------------+
+                                    |
+        +---------------------------+---------------------------+
+        |                           |                           |
+        v                           v                           v
++------------------+      +--------------------+      +---------------------+
+| observed         |      | imputed_supported  |      | imputed_exploratory |
+|                  |      |                    |      |                     |
+| directly         |      | constrained by     |      | unbenchmarked       |
+| measured         |      | experimental       |      | hypothesis          |
+|                  |      | constraints        |      | (non-informative    |
+|                  |      |                    |      |  for confirmatory)  |
++--------+---------+      +---------+----------+      +----------+----------+
+         |                          |                            |
+         |              Delta_sup   |                            | Delta_exp
+         |<-------------------------+                            |
+         |<------------------------------------------------------+
+         |
+  PRE-SPECIFIED MONOTONICITY:  |Delta_exp| > |Delta_sup|
+  VIOLATION => report as evidence AGAINST provenance,
+               never average away.
+
+  CONDITIONING MODE: under expression conditioning NO track
+  is "observed" => mode is declared per hypothesis; hypotheses
+  under different modes are never combined without disclosure.
+```
+
+---
+
+Figure F-8 — CMAE Validity Gates and Controls
+
+```
+   +-----------------------------------------------------+
+   |  CMAE = E[ S_obs - S_mask ]                         |
+   |  claim about MODEL INPUT, not about biology         |
+   +--------------------------+--------------------------+
+                              |
+              +---------------+---------------+
+              |                               |
+              v                               v
+   +---------------------+         +---------------------+
+   | C1: no OOD collapse |         | C2: held constant   |
+   | shift < tau_C1      |         | non-masked inputs   |
+   | tau_C1 fixed BEFORE |         | identical across    |
+   | analysis            |         | both conditions     |
+   +----------+----------+         +----------+----------+
+              |                               |
+              +---------------+---------------+ 
+                              |
+                              v
+              +-------------------------------+
+              | MANDATORY CONTROLS            |
+              |  1. null ablation             |
+              |  2. imputation redundancy     |
+              |  3. shuffled-modality ablation|
+              +---------------+---------------+
+                              |
+                              v
+              +-------------------------------+
+              | INTERPRET                     |
+              | small CMAE + redundancy  =>   |
+              | model reconstructs internally |
+              | => NOT "modality unimportant" |
+              +-------------------------------+
+
+  IRG (observational fallback) is NEVER reported with
+  causal language; causal scope is CMAE only.
+```
+
+---
+
+Figure F-9 — Small-Cluster Inference Protocol
+
+```
+   data with clusters g = 1..G
+             |
+             v
+   +---------------------------+
+   | G small / imbalanced ?    |
+   +------------+--------------+
+                | yes
+                v
+   +---------------------------+
+   | impose null: restricted   |
+   | residuals                 |
+   +------------+--------------+
+                |
+                v
+   +---------------------------+
+   | reweight clusters,        |
+   | Webb 6-point weights:     |
+   |  {-sqrt(3/2), -1,         |
+   |   -sqrt(1/2), +sqrt(1/2), |
+   |   +1, +sqrt(3/2)}         |
+   |  each with p = 1/6        |
+   +------------+--------------+
+                |
+                v
+   +---------------------------+
+   | bootstrap distribution    |
+   | of t*                     |
+   +------------+--------------+
+                |
+        +-------+-------+
+        |               |
+        v               v
+   +---------+    +--------------+
+   | p-value |    | interval     |
+   +---------+    +--------------+
+        |
+        v
+   SENSITIVITY : score-transformed variant (WCR-S)
+   REPORT      : G, cluster-size distribution,
+                 effective number of clusters
+   ROBUSTNESS  : locus-level re-clustering
+                 (if H1 flips => reported as FRAGILE)
+```
+
+---
+
+Figure F-10 — Evidence Score, Baseline Gate, Ablation
+
+```
+   candidates v
+        |
+        +--> Stab(v) --w1--+
+        +--> Conc(v) --w2--+
+        +--> Prov(v) --w3--+--> E(v) = sum --> ranking E(v)
+        +--> Dist(v) --w4--+                        |
+                                                    |
+   raw score S_raw --------------------------> ranking S_raw
+                                                    |
+                                                    v
+                                    +-------------------------------+
+                                    | BASELINE GATE                 |
+                                    | E(v) must beat raw+distance   |
+                                    | by > delta_eq_H4 on DEV DATA  |
+                                    +---------------+---------------+
+                                                    |
+                                         no --------+-------- yes
+                                         |                   |
+                                         v                   v
+                                 +-------------+     +-------------+
+                                 | DO NOT TEST |     | ADMIT to    |
+                                 | (complexity |     | confirmatory|
+                                 |  unearned)  |     | test        |
+                                 +-------------+     +------+------+
+                                                            |
+                                                            v
+                                            +-------------------------------+
+                                            | 10-ROW ABLATION               |
+                                            | row 9 = full minus Prov       |
+                                            | no degradation => PROVENANCE  |
+                                            | DENIED CREDIT in conclusion   |
+                                            +-------------------------------+
+
+   LEAKAGE CONTROLS FROZEN IN CONFIG: L1 seed, L2 modality map,
+   L3 k_dev != k_eval, L4 normalisation constants.
+```
+
+---
+
+Figure F-11 — Contamination and Eligibility
+
+```
+   +-----------------------------------------------------------+
+   | C3  listed among training sources                         |--+
+   | C2  high probability of training inclusion                |--+--> EXCLUDED
+   +-----------------------------------------------------------+   |    from
+   | C1  locus overlap possible, dataset independent           |--+--> confirmatory
+   | C0  independent                                           |--+    H1
+   +-----------------------------------------------------------+   |
+                                                                   v
+                                                    Track A: in-distribution
+                                                             calibration only
+                                                    Track B: prioritisation
+                                                             utility
+
+   AGGREGATED COMPENDIUM: re-audit for training overlap required.
+   Larger compendium is NOT automatically cleaner.
+```
+
+---
+
+Figure F-12 — Reproducibility Canary and Logging
+
+```
+   t_start                                            t_end
+      |                                                  |
+      v                                                  v
+   +--------+    query fixed 50-100 pairs    +--------+    compare
+   | CANARY |------------------------------->| CANARY |--------+
+   +--------+                                +--------+        |
+      |                                                         v
+      |                                        +---------------------------+
+      |                                        | drift > tolerance ?       |
+      |                                        +------+-------------+------+
+      |                                               | yes         | no
+      |                                               v             v
+      |                                      +--------------+  +----------+
+      |                                      | PAUSE and    |  | proceed  |
+      |                                      | report drift |  |          |
+      |                                      +--------------+  +----------+
+      v
+   LOG EVERY CALL:
+     client version | model version string | condition id
+     request timestamp | full request payload
+     provenance metadata after filtering | RAW output
+
+   Hosted model is NOT version-pinned. Bit-identical one day
+   is not a version guarantee.
+```
+
+---
+
+Figure F-13 — Composite Falsification Gate
+
+```
+   +-------------+    +-------------+    +-------------+
+   | K-1 utility |    | K-2 prov.   |    | K-3 distance|
+   | null        |    | flat        |    | redundant   |
+   +------+------+    +------+------+    +------+------+
+          |                  |                  |
+          +------------------+------------------+
+                             |
+                             v
+                  +---------------------+
+                  | ALL THREE HOLD ?    |
+                  +----------+----------+
+                             |
+                    yes -----+----- no
+                     |              |
+                     v              v
+          +-------------------+  +--------------------+
+          | FRAMEWORK VALUE   |  | report each        |
+          | FALSIFIED         |  | condition          |
+          | => negative       |  | separately;        |
+          |    result         |  | contribution       |
+          |                   |  | stands where       |
+          |                   |  | supported          |
+          +-------------------+  +--------------------+
+
+   REGISTERED NULL IS A FINDING -- not a limitation.
+```
+
+---
+
+Figure F-14 — H2 Split and the Hard Gate
+
+```
+                    H2  cell-state conditioning
+                                |
+                +---------------+---------------+
+                |                               |
+                v                               v
+   +--------------------------+   +--------------------------+
+   | H2a  within-K562         |   | H2b  cross-state         |
+   | TESTABLE NOW             |   | UNTESTED                 |
+   |                          |   |                          |
+   | matched control          |   | HARD GATE: OQ-06         |
+   | direction AND magnitude  |   | non-K562 perturbation    |
+   | both > MDE               |   | resource of usable scale |
+   +--------------------------+   +------------+-------------+
+                                               |
+                                               v
+                                  +--------------------------+
+                                  | marked UNTESTED in every |
+                                  | abstract, figure, and    |
+                                  | preregistration          |
+                                  | statement                |
+                                  +--------------------------+
+
+   All Track-B evidence is a single leukaemia line.
+   No cross-state generalisation is asserted anywhere.
+```
+
+---
+
+Figure F-15 — One-Page Programme Map
+
+```
+                 +=====================================+
+                 |         CENTRAL QUESTION            |
+                 |  does provenance + distance         |
+                 |  improve validation efficiency      |
+                 |  beyond raw sequence-to-function?   |
+                 +================+====================+
+                                  |
+        +-------------------------+-------------------------+
+        |                         |                         |
+        v                         v                         v
+ +--------------+          +--------------+          +--------------+
+ | MEASUREMENT  |          | INFERENCE    |          | INTEGRITY    |
+ |              |          |              |          |              |
+ | DA           |          | WCB 6-point  |          | prereg       |
+ | rho_s        |          | TOST         |          | canary       |
+ | magnitude    |          | MDE observed |          | L1-L4 frozen |
+ | SEPARATED    |          | clusters     |          | C1 threshold |
+ +------+-------+          +------+-------+          +------+-------+
+        |                         |                         |
+        +-------------------------+-------------------------+
+                                  |
+                                  v
+                       +---------------------+
+                       | H1   H2a   H3   H4  |
+                       | (H2b UNTESTED)      |
+                       +----------+----------+
+                                  |
+                                  v
+                       +---------------------+
+                       | COMPOSITE FALSIF.   |
+                       | report either way   |
+                       +---------------------+
+
+   If yes  -> contribution is the evidence layer.
+   If no   -> contribution is the demonstration that it is
+              unnecessary. Both are scientific.
+```
+
+---
+
+Figure F-16 — Open-Question Gate Ledger
+
+```
+  OQ-01 strict subset?        --[GATE]--> H3, primitive audit
+  OQ-02 masking supported?    --[GATE]--> CMAE, H3
+  OQ-03 corpus disclosed?     --[GATE]--> H1, H4
+  OQ-05 harmonisable?         --[GATE]--> Track B pooling
+  OQ-06 non-K562 resource?    --[HARD GATE]--> H2b
+  OQ-11 tau_C1 value?         --[GATE]--> CMAE reporting
+  OQ-12 margin derivation?    --[GATE]--> H1, H4
+
+  OQ-04 power at k_dev/k_eval     (open)
+  OQ-07 prospective validation    (open)
+  OQ-08 TAD diversity threshold   (open)
+  OQ-09 same vs independent folds (open)
+  OQ-10 utility scalar meaning    (open)
+  OQ-13 operator sensitivity      (open)
+
+  ---------+-----------------------------------------------
+           |  GATE OPEN   =>  NO EVALUATION-SET INFERENCE
+           |  GATE CLOSED =>  closed BY RECORD, not default
+  ---------+-----------------------------------------------
+```
+
