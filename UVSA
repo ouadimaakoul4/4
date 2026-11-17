@@ -1,0 +1,1299 @@
+Deterministic Projection Algebra and Independence Calculus for Canonical Knowledge Ledgers
+
+ouadi Maakoul and SI TEAM 
+
+Abstract
+
+This work specifies a formal architecture for a canonical, append-only knowledge ledger whose projections are deterministic under rebuild noise and whose epistemic transitions are gated by a computed independence relation rather than a declared provenance label. The central falsifiable hypothesis is a commutation condition: reconstruction from the ledger must factor through the projection function on the manifest-covered subledger, and null-rebuild control must pass before any hash comparison is interpreted as evidence of determinism. Three formal commitments distinguish the specification. First, the vector projection is stated over a symbolic state identity derived from stored embeddings under exact replay, with a separate tolerance contract for re-encoding under a guard band; the two contracts are not conflated. Second, bitemporal determinism is enforced through valid-time exclusion and transaction-time continuity under an explicit application-level serialization discipline, because the temporal projection requires a total order to be well-defined. Third, independence is computed as a dependency-closure property over a provenance graph, with same-root evidence collapsed before any corroboration tally, and the promotion gate is stated as a threshold-admissibility condition rather than a variance discount. No experimental result is claimed; the contribution is a falsifiable specification whose correctness conditions can be tested.
+
+---
+
+1. Research Question and Formal Hypothesis
+
+1.1 Objects
+
+Let $\mathcal{L}$ be the canonical ledger, represented as a finite set of typed relations over an append-only domain. Let $\mathcal{G}$, $\mathcal{V}$, $\mathcal{T}$ be the graph, vector, and temporal projections respectively. Let $\mathcal{R}$ be the reconstruction procedure. A projection is a function
+
+P : \Sigma_{\mathcal{L}} \to \Sigma_{P}
+
+where $\Sigma_{\mathcal{L}}$ is the space of canonical ledger states and $\Sigma_{P}$ is the space of projection states. The projection is deterministic if for every ledger state $L \in \Sigma_{\mathcal{L}}$, $P(L)$ is unique. Determinism is a property of the projection specification, not of the storage substrate.
+
+1.2 Central hypothesis
+
+\mathcal{R}_{P} \circ \iota = \pi_{P}
+
+on the manifest-covered subledger, where $\iota : \Sigma_{\mathcal{L}} \to \Sigma_{\mathcal{L}}$ is the identity on the ledger restricted to the reconstruction manifest’s covered subledger and $\pi_{P}$ is the projection function. The hash condition is the corollary
+
+\sigma_{P}\bigl(\mathcal{R}_{P}(L)\bigr) = \sigma_{P}\bigl(\pi_{P}(L)\bigr).
+
+If coverage is partial, the diagram commutes only on the covered subledger and the reconstruction procedure must return a partial equivalence witness—the covered set and the uncovered set—rather than a binary pass/fail.
+
+Falsifiability condition. The equality is meaningful only if it holds on a null rebuild—a rebuild with no change to any canonical input. If the null-rebuild hash differs from the baseline, the determinism contract is violated and no subsequent hash comparison can be interpreted. The null-rebuild control is therefore a precondition of the benchmark, not a result of it. A null rebuild must vary execution environment, batch size, and reduction order; two reconstructions in the same environment prove nothing about determinism under rebuild noise.
+
+1.3 Scope boundary
+
+The formalism begins after extraction. Nondeterminism in automatic speech recognition, optical character recognition, and other upstream extractors is outside the projection contract. The ledger records extraction artifacts; it does not claim to make extraction deterministic. This boundary must be stated explicitly wherever a projection hash is interpreted as evidence about the ledger rather than about the extractor.
+
+---
+
+2. Canonical Serialization
+
+Let $\mathcal{D}$ be a set of typed data objects. A canonical serialization is a function
+
+\mathsf{ser} : \mathcal{D} \to \{0,1\}^{n}
+
+satisfying injectivity up to declared logical equivalence, stability under insertion order, memory layout, and locale, and version tagging with the serialization version $\nu$ embedded in the output. For JSON-valued content, the canonical form is fixed by RFC 8785 (JCS): sorted object keys at every depth, no insignificant whitespace, UTF-8 encoding, arrays in declared order, and explicit null representation.
+
+RFC 8785 requires every JSON number to be expressible as an IEEE 754 double, and integers beyond $2^{53}$ lose exactness under JCS re-serialization. A ledger that stores int64 identifiers or large counters must therefore carry such values as strings under JCS, or declare a canonicalization profile that explicitly admits int64 and specifies its lexical form. The same applies to negative zero and to non-finite values: neither has a JCS representation, and both must be rejected at the serialization boundary rather than silently mapped to a neighbouring value. The hash is
+
+H_{\nu}(x) = \mathsf{SHA256}\bigl(\nu \,\|\, \mathsf{ser}_{\nu}(x)\bigr).
+
+Without these restrictions, $\mathsf{ser}_{\nu}$ is under-specified in exactly the places where cross-platform hash equality is most likely to fail.
+
+---
+
+3. The Canonical Ledger
+
+3.1 Ledger signature
+
+\mathcal{L} = (\mathcal{K}, \mathcal{R}, \mathcal{E}, \mathcal{A}, \mathcal{M})
+
+where $\mathcal{K}$ is the set of KEU identities, $\mathcal{R}$ is the set of immutable content revisions, $\mathcal{E}$ is the set of epistemic events, $\mathcal{A}$ is the set of independence assessments, and $\mathcal{M}$ is the set of projection reconstruction manifests. The outbox is a transport artifact subject to retention policy and is not a reconstruction source.
+
+3.2 Bitemporal domain
+
+A bitemporal KEU revision is a tuple
+
+\rho = \bigl(\mathrm{vid}, v, [t_{s}, t_{e}), [\tau_{r}, \tau_{s}), \ldots \bigr)
+
+where $v$ is the revision number, $[t_{s}, t_{e})$ is the valid-time interval during which the proposition is asserted to hold, and $[\tau_{r}, \tau_{s})$ is the transaction-time interval during which this revision is the current recorded version, with $\tau_{r} = \texttt{recorded\_at}$ and $\tau_{s} = \texttt{superseded\_at}$.
+
+Invariant V1 (valid-time exclusion). For any two revisions $\rho_{a}$, $\rho_{b}$ of the same KEU identity that are concurrently current in transaction time, the valid-time intervals do not overlap:
+
+[t_{s}^{a}, t_{e}^{a}) \cap [t_{s}^{b}, t_{e}^{b}) = \varnothing.
+
+The qualification “concurrently current in transaction time” is essential: a correction to a valid-time interval is a legitimate operation, and must be expressible as a supersession that makes the corrected revision current while the superseded revision remains historical. V1 without the qualification forbids correction.
+
+Invariant T1 (transaction-time continuity). For consecutive revisions $v$ and $v+1$ of the same KEU identity,
+
+\tau_{s}^{(v)} = \tau_{r}^{(v+1)}.
+
+The supersession chain is gap-free. This makes the transaction-time total order well-defined for replay.
+
+Concurrency discipline. V1 is enforceable through a PostgreSQL exclusion constraint over the valid-time range, keyed by KEU identity. PostgreSQL 18’s WITHOUT OVERLAPS covers a single range column, and for two time axes the established pattern is an EXCLUDE constraint over both ranges. Neither mechanism alone resolves concurrent inserts of intervals that individually satisfy V1 but jointly violate it: two transactions can each insert a non-overlapping interval without seeing the other’s uncommitted row. The insertion path must acquire an exclusive lock on the KEU identity before attempting the insert—SELECT ... FOR UPDATE on the identity row or a per-identity advisory lock held for the transaction. T1 is not expressible as a declarative range constraint and must be enforced by a constraint trigger or a previous-pointer chain under the same lock. Ordering must not depend on wall-clock timestamps or sequence values, both of which can be made visible out of order or can contain permanent gaps; the transaction position is assigned by the ledger under the identity lock and recorded as the ordering key.
+
+3.3 Ledger invariants
+
+L1 (Revision immutability). The tuple $(\texttt{content}, \texttt{media\_start\_ms}, \texttt{media\_end\_ms}, \texttt{extraction\_method}, \texttt{producer\_agent})$ is write-once. Supersession updates only $\texttt{superseded\_at}$ and the historical status marker; it does not mutate content.
+
+L2 (Deferred epistemic-event existence). Every revision that is not the terminal superseded revision of its KEU identity eventually acquires at least one epistemic event whose revision field matches. The constraint is deferred to the transaction boundary, not required at revision insertion, so that a revision can exist in an epistemically inert state before an event is attached. This makes $\mathrm{UNDEFINED}$ reachable and observable, rather than excluded by construction.
+
+L3 (Status transition consistency). For every epistemic event with a non-null new status, the previous status equals the new status of the immediately preceding event for the same revision under the ledger ordering, or is null if the event is first.
+
+L4 (Manifest coverage). A projection $P$ is reconstructible at ledger state $L$ iff there exists a manifest $M_{P}(L)$ listing, for every canonical revision contributing to $P(L)$, the required encoder artifacts, transformation versions, and serialization specifications. The coverage of $P$ at $L$ is
+
+\mathrm{cov}_{P}(L) = \frac{|\{\text{contributing revisions covered by } M_{P}(L)\}|}{|\{\text{contributing revisions at } L\}|}.
+
+A projection with $\mathrm{cov}_{P}(L) < 1$ is partially reconstructible, and the reconstruction procedure reports the uncovered set.
+
+L5 (Commit-time epistemic stratification). The effective epistemic status of a revision is not stored as a mutable column. It is computed as the endpoint of the unique maximal event chain for that revision under the ledger ordering. Projection workers read the computed status, never a cached field. A revision with no event chain is epistemically inert: it may exist in the ledger, but it cannot contribute to a verified graph edge or a corroboration tally. This mirrors the commit-time status discipline of Eigenius, adapted to a ledger in which status transitions are events rather than column updates.
+
+---
+
+4. Deterministic Projection Algebra
+
+4.1 Projection definition
+
+A projection $P$ is a triple $(\Sigma_{P}, \pi_{P}, \sigma_{P})$ where $\Sigma_{P}$ is the projection state space, $\pi_{P} : \Sigma_{\mathcal{L}} \to \Sigma_{P}$ is the projection function, and $\sigma_{P} : \Sigma_{P} \to \{0,1\}^{256}$ is the projection identity function
+
+\sigma_{P}(S) = H_{\nu}\bigl(\mathsf{ser}_{\nu}(S)\bigr).
+
+$P$ is deterministic iff $\sigma_{P}(\pi_{P}(L)) = \sigma_{P}(\pi_{P}(L'))$ whenever $L$ and $L'$ are canonically equivalent ledger states—states differing only in non-semantic metadata such as arrival order, transaction identifiers not referenced by the projection, and physical storage layout.
+
+4.2 The vector projection: two contracts, not one
+
+A single vector contract cannot serve both exact replay and re-encoding. The specification therefore separates them.
+
+Exact-replay contract. When the original embedding artifacts are stored and replayed without re-encoding, the projection state is the set of stored vectors keyed by stable identifier,
+
+\mathcal{V}_{\mathrm{replay}}(L) = \bigl\{ (\mathrm{id}_{i}, \mathrm{bytes}(e_{i})) \;\big|\; e_{i} \text{ stored in } L \bigr\},
+
+and the projection identity is the hash of the canonically serialized set. This contract is bit-exact and falsifiable: a null replay with the same artifact bytes must produce the same hash, and a differing hash indicates a serialization or assembly defect, not a semantic change.
+
+Re-encoding contract. When the embedding must be regenerated—because the artifact is unavailable or because a downstream task requires a fresh encoding—the projection state is the symbolic row set
+
+\mathcal{V}_{\mathrm{sym}}(L) = \bigl\{ (\mathrm{id}_{i}, \kappa(e_{i})) \;\big|\; e_{i} \text{ is an embedding recorded in } L \bigr\},
+
+where $\kappa : \mathbb{R}^{d} \to \mathcal{Q}^{m}$ is a fixed deterministic quantizer into a finite alphabet. The re-encoding contract is not hash equality. It is a tolerance condition against a floor calibrated from null re-encodings, and the floor must be measured across environments, not within one.
+
+The boundary problem. Proposition 1 in its naive form—quantization makes the hash invariant under rebuild noise—is vacuous. The proof says the hash is unchanged whenever noise does not cross a bin boundary, which is the claim itself. A point lying arbitrarily close to a quantization boundary incurs the full symbolic jump for an arbitrarily small perturbation, and the flip probability grows with the number of rows and symbolic dimensions relative to the bin width. A whole-corpus hash over a single quantizer will therefore fail under realistic rebuild noise even when no semantic change has occurred.
+
+The resolution is twofold. First, per-row hashes are stored under a Merkle tree, so that a differing root localizes to differing rows rather than forcing a whole-state pass/fail. Second, a guard band is declared: rows within a margin of a bin boundary are flagged at encoding time and are excluded from the tolerance comparison, with their identities reported explicitly. A candidate re-encoding passes the tolerance gate iff the flagged-row set is unchanged and every unflagged row satisfies
+
+d_{H}\bigl(\kappa(e_{i}), \kappa(e_{i}')\bigr) \le \Phi + \varepsilon,
+
+where $\Phi$ is the floor observed across environments and $\varepsilon$ is a declared margin. Rows exceeding the floor are reported as genuine changes, not absorbed into noise. Multiple quantizers may be used to reduce the flagged set, but they do not eliminate the boundary phenomenon and must be stated as part of the encoding contract.
+
+Proposition 1 (Replay determinism). Under the exact-replay contract, if the stored embedding bytes and the serialization version are fixed, $\sigma_{\mathcal{V}}$ is a deterministic function of the ledger state, and a null replay with identical bytes yields identical identity.
+
+Proof. The projection state is a set of identifier–byte pairs. Canonical serialization is a function of that set alone, and SHA-256 is a function of its input. No reduction order, device, or batch size enters the replay path. $\square$
+
+Proposition 2 (Re-encoding is not bit-deterministic). There is no finite quantization scheme and no non-zero noise bound under which the whole-corpus re-encoding identity is guaranteed invariant.
+
+Proof sketch. For any bin partition, there exist embedding coordinates arbitrarily close to a boundary. A perturbation smaller than the bin width can cross the boundary and change the symbol. Since a corpus contains finitely many rows, the probability of at least one crossing is positive for any non-zero noise, and grows with corpus size. $\square$
+
+The re-encoding contract is therefore a tolerance contract with a flagged set, not a hash contract. Conflating the two contracts produces a specification that is either unfalsifiable (if the tolerance is read as a hash) or unsatisfiable (if the hash is read as a tolerance).
+
+4.3 The graph projection and edge stratification
+
+The graph projection state is $\mathcal{G}(L) = (V_{\mathcal{G}}, E_{\mathcal{G}})$ where nodes are revisions and edges are typed relations. Each edge carries a stratification tag in $\{\mathrm{DERIVED\_FROM}, \mathrm{SUPPORTS}, \mathrm{CAUSES}\}$.
+
+Edge admissibility. An edge $e = (u, v, \mathrm{CAUSES})$ is admissible only if both endpoint statuses are defined, there exists a supporting evidence record whose proved proposition covers the causal proposition and whose KEU identity matches $u$, and the causal proposition itself has an epistemic event with a new status in $\{\mathrm{CLAIMED}, \mathrm{OBSERVED}, \mathrm{CORROBORATED}\}$. The existence of two verified nodes does not license a causal edge; the edge is itself a proposition requiring evidence and status. The graph identity is the hash of the node set and the edge set sorted by $(\mathrm{source\_id}, \mathrm{target\_id}, \mathrm{relation\_type})$, with each edge serialization including its stratification tag and supporting evidence identifiers.
+
+4.4 The temporal projection
+
+\mathcal{T}(L) = \bigl\{ (\mathrm{keu\_id}, v, [t_{s}, t_{e}), [\tau_{r}, \tau_{s})) \bigr\}
+
+serialized in ledger-assigned transaction order, with ties broken by revision number. Under V1 with the concurrency qualification and T1, the serialization order is uniquely determined, and $\sigma_{\mathcal{T}}$ is a deterministic function of $L$. Without the qualification, corrections would be unrepresentable; without T1, the transaction order would be partial and the hash not well-defined.
+
+---
+
+5. Independence Calculus
+
+5.1 The false-corroboration problem
+
+Let $S = \{s_{1}, \dots, s_{k}\}$ be evidence records that agree on a proposition $p$. The naive tally $C_{\mathrm{naive}}(p) = |S|$ is incorrect whenever two or more records share a common epistemic ancestor. Provenance reconstruction alone does not prevent this failure: a system can reconstruct the derivation chain with perfect fidelity and still count the leaves as independent, because it is computing the wrong quantity. The failure mode is structural and has been observed empirically: agents assign laundered clusters credence comparable to independent controls, and a structural provenance gate reduces but does not eliminate the effect; plain word-overlap deduplication also merges genuinely independent pages, and independently rewritten false pages are largely not collapsed. The collapse operator is only as good as the recorded edges, and its recall on adversarial paraphrase is a declared limitation, not a solved problem.
+
+5.2 Dependency closure and the corrected effective count
+
+Define the provenance graph $G_{\mathrm{prov}} = (S, D)$ where a directed edge $(s_{i}, s_{j}) \in D$ means “$s_{i}$ was derived from $s_{j}$.” Let $\mathrm{root}(s)$ be the set of source nodes reachable from $s$ by following $D$ backwards to nodes with no incoming derivation edge. The naive closure is
+
+\mathrm{cl}(S) = \bigcup_{s \in S} \mathrm{root}(s).
+
+The cardinality $|\mathrm{cl}(S)|$ is not bounded above by $|S|$: a single synthesis record derived from three sources contributes one record and three roots. A corroboration count must never exceed the number of records, and must count roots that actually bear on $p$, not roots that merely exist upstream.
+
+Definition (root-collapsed corroboration count). Let $\mathrm{supp}(s) \subseteq \mathrm{root}(s)$ be the roots whose content supports the exact proposition $p$ under the declared evidence relation. The root-collapsed count is
+
+k_{\mathrm{eff}}^{\mathrm{collapse}}(S) = \max \bigl\{ |T| : T \subseteq S,\; \{\mathrm{supp}(s)\}_{s \in T} \text{ pairwise disjoint} \bigr\}.
+
+This is the size of the largest subset of $S$ whose supporting-root sets are pairwise disjoint. It is at most $|S|$ by construction, it counts a multi-root synthesis as contributing at most one unit of warrant per record, and it excludes roots that do not bear on $p$.
+
+Proposition 3 (False-corroboration exclusion). If every $s \in S$ has $\mathrm{supp}(s) = \{r_{0}\}$ for a single root $r_{0}$, then $k_{\mathrm{eff}}^{\mathrm{collapse}}(S) = 1$ regardless of $|S|$.
+
+Proof. Any two records in $S$ have supporting-root sets that intersect at $r_{0}$, so no two-element subset has pairwise disjoint supporting-root sets. The maximum is therefore one. $\square$
+
+Proposition 4 (Nominal multiplicity bound). For any finite $S$, $k_{\mathrm{eff}}^{\mathrm{collapse}}(S) \le |S|$, with equality only if every record has a non-empty supporting-root set and all such sets are pairwise disjoint.
+
+Proof. The count is the size of a subset of $S$. Equality requires the whole of $S$ to be admissible, which requires non-empty pairwise-disjoint supporting-root sets. $\square$
+
+5.3 Residual dependence as an error correlation, not an agreement correlation
+
+The collapsed count can be further discounted by residual dependence among distinct roots. The discount must not use agreement as a proxy for dependence. Every record in $S$ agrees on $p$ by construction; sharing a true value does not imply copying, while sharing a false value is a low-probability event for independent sources. Agreement is therefore uninformative about the dependence that matters.
+
+The relevant quantity is the correlation of the roots’ error indicators with respect to the ground truth, not the correlation of their asserted values. Let $Z_{r} \in \{0,1\}$ indicate that root $r$ errs on $p$, and let $\rho_{\mathrm{err}}$ be the pairwise correlation of $\{Z_{r}\}$ across the collapsed roots. The design-effect correction is
+
+n_{\mathrm{eff}}(S) = \frac{k_{\mathrm{eff}}^{\mathrm{collapse}}(S)}{1 + \bigl(k_{\mathrm{eff}}^{\mathrm{collapse}}(S) - 1\bigr) \rho_{\mathrm{err}}},
+
+with $n_{\mathrm{eff}} = k_{\mathrm{eff}}^{\mathrm{collapse}}$ when $\rho_{\mathrm{err}} = 0$ and $n_{\mathrm{eff}} = 1$ when $\rho_{\mathrm{err}} = 1$. This is a heuristic, not a theorem. Kish’s formula is a variance-inflation factor for clustered samples, and its application to warrant is an analogy. The analogy is defensible only if $\rho_{\mathrm{err}}$ is estimated from lineage overlap or from a source-dependence model, not from embedding similarity, which confuses topic with dependence.
+
+The threshold caveat. The promotion gate is a threshold decision, and the correlation that Kish’s formula requires for a threshold is not the score correlation but the correlation of exceedance indicators at the operating level. Substituting a score or agreement correlation into Kish’s formula understates dispersion when the decision is threshold-based: the naive design effect can vanish while the true design effect remains above one. Two responses are admissible. Either the gate uses the exceedance design effect with $\rho_{I}(p)$, the correlation of the indicator variables at the operating threshold, or the discount is dropped and the gate operates on $k_{\mathrm{eff}}^{\mathrm{collapse}}$ alone, which is conservative and avoids the theoretical error at the cost of being unable to distinguish two independent roots from ten correlated ones. The specification adopts the conservative option as the default and records the exceedance variant as an explicit alternative with its own calibration obligation.
+
+5.4 Promotion gate
+
+Definition (CORROBORATED admissibility). A transition of revision $r$ to the status $\mathrm{CORROBORATED}$ is admissible only if there exists a supporting evidence set $S$ such that:
+
+1. Evidence sufficiency: each $s \in S$ has $\mathrm{proves}(s) \supseteq p$, where $p$ is the exact proposition being corroborated.
+2. Collapsed corroboration: $k_{\mathrm{eff}}^{\mathrm{collapse}}(S) \ge 2$.
+3. Effective corroboration: $n_{\mathrm{eff}}(S) \ge n_{\min}$, where $n_{\min}$ is calibrated from a null model in which all evidence traces to a single root, such that the false-promotion rate under that model is below a declared threshold. A default of $n_{\min} = 1.5$ is a placeholder until calibration is performed.
+4. Assessment existence: a human-auditable independence assessment records the known common ancestors and the justification for $\rho_{\mathrm{err}}$ or for the conservative collapse-only choice.
+5. Method adequacy: the assessment method is not citation-graph alone.
+6. Scope validity: the verification scope is non-empty and covers the exact proposition $p$.
+
+The top status is named $\mathrm{CORROBORATED}$, not $\mathrm{VERIFIED}$, because the gate establishes human-assessed corroboration under a computed independence relation; it does not establish a formally checked proof term of the kind that Eigenius requires for its verified category. The naming distinction is substantive, not terminological.
+
+Theorem 1 (No promotion from nominal multiplicity). For any finite $S$, the promotion gate rejects $S$ if $k_{\mathrm{eff}}^{\mathrm{collapse}}(S) = 1$, regardless of $|S|$.
+
+Proof. Condition 2 requires at least two records with pairwise disjoint supporting-root sets. If the maximum such subset has size one, the condition fails. $\square$
+
+Theorem 2 (Gate is not monotone in record count). There exist sets $S_{1} \subset S_{2}$ with $|S_{2}| > |S_{1}|$ such that the gate admits $S_{1}$ and rejects $S_{2}$.
+
+Proof. Let $S_{1}$ contain two records with disjoint supporting-root sets. Let $S_{2}$ add a third record whose supporting-root set intersects both, and suppose no three-element subset has pairwise disjoint supporting-root sets. Then $k_{\mathrm{eff}}^{\mathrm{collapse}}(S_{1}) = 2$ and $k_{\mathrm{eff}}^{\mathrm{collapse}}(S_{2})$ may remain two, but if the added record forces the maximum admissible subset to size one under the exact-proposition support relation, the gate rejects $S_{2}$. Nominal multiplicity is not a sufficient statistic for warrant. $\square$
+
+---
+
+6. Epistemic Event Calculus
+
+6.1 Status lattice
+
+\mathcal{S} = \{\bot, \mathrm{CLAIMED}, \mathrm{OBSERVED}, \mathrm{CORROBORATED}\}
+
+with the partial order
+
+\bot \sqsubset \mathrm{CLAIMED} \sqsubset \mathrm{CORROBORATED}, \qquad
+\bot \sqsubset \mathrm{OBSERVED} \sqsubset \mathrm{CORROBORATED}.
+
+$\mathrm{CLAIMED}$ and $\mathrm{OBSERVED}$ are incomparable. $\mathrm{CORROBORATED}$ is the unique top.
+
+Lattice admissibility. A transition $s \to s'$ with $s' \neq s$ is admissible iff $s \sqsubset s'$ and, when $s' = \mathrm{CORROBORATED}$, the gate of §5.4 passes. The transition $\mathrm{CLAIMED} \to \mathrm{OBSERVED}$ is not a lattice refinement, because the two statuses are incomparable; it is recorded as a kind change with its own event type, not as a warrant increase, and it does not move the revision upward in the lattice. This resolves the inconsistency between a lattice-order transition rule and the operational need to record a change in the kind of evidence.
+
+6.2 Event algebra
+
+An epistemic event is a tuple $e = (r, s_{\mathrm{prev}}, s_{\mathrm{new}}, \alpha, \beta, \gamma, \eta)$ where $r$ is the revision, $\alpha$ is the assessment reference or $\bot$, $\beta$ is the corroboration reference set, $\gamma$ is the corroboration scope, and $\eta$ is the hash of the gate’s inputs—the collapsed root set, the $\rho_{\mathrm{err}}$ estimate or the conservative-choice marker, and the support relation used. Composition $\circ$ is defined iff the codomain status of the first event equals the domain status of the second. Under L3, every revision’s event history is a path in the lattice starting at $\bot$.
+
+6.3 The gate is not a pure function of the ledger
+
+The promotion gate reads the provenance graph and the dependence estimate, both of which can change after a $\mathrm{CORROBORATED}$ event is recorded. A later-discovered common ancestor or a revised $\rho_{\mathrm{err}}$ can invalidate the gate’s premises. The event must therefore carry $\eta$, and the ledger must admit a defeat event that revokes or downgrades a prior corroboration when the gate’s inputs change. Stale corroboration without defeat is a silent integrity failure, and Non-claim 2—the incompleteness of the provenance graph—is precisely the condition under which it occurs. The defeat event is not an appendix to the calculus; it is a structural requirement of a gate whose inputs are not frozen at commit time.
+
+6.4 Proposition 5 (No silent promotion)
+
+Under L2 and L3, no revision can attain effective status $\mathrm{CORROBORATED}$ without an event whose admissibility was checked by the gate of §5.4.
+
+Proof. Effective status is the endpoint of the event history. L2 guarantees that every revision that is not terminal-superseded eventually acquires an event history; L3 guarantees that the history is a lattice path. An event with $s_{\mathrm{new}} = \mathrm{CORROBORATED}$ is inserted only if the gate returns true; otherwise the transaction aborts. Therefore no revision reaches $\mathrm{CORROBORATED}$ without passing the gate. $\square$
+
+---
+
+7. Reconstruction Protocol and Manifest Algebra
+
+7.1 Ledger-authoritative reconstruction
+
+A reconstruction manifest for projection $P$ is a tuple
+
+M_{P} = (P, \nu, \mathcal{T}_{P}, \mathcal{E}_{P}, \mathcal{S}_{P})
+
+where $\mathcal{T}_{P}$ is the transformation version set, $\mathcal{E}_{P}$ is the encoder artifact identifier set for the vector projection, and $\mathcal{S}_{P}$ is the serialization specification set. $M_{P}$ is complete at $L$ iff every revision contributing to $P(L)$ is covered by at least one encoder or transformation entry and every referenced artifact is resolvable.
+
+7.2 Reconstruction algorithm
+
+Algorithm 1: Ledger-authoritative reconstruction.
+
+```
+Input:  projection name P, ledger L, manifest M_P
+Output: reconstructed state S_P, coverage report, verdict
+
+1.  C ← covered_subledger(L, M_P)
+2.  if C = ∅:
+3.      return (∅, coverage=0, INSUFFICIENT_MANIFEST)
+4.  freeze_projection_workers(P)
+5.  S_P ← empty_state(P)
+6.  for each revision r ∈ C in ledger-assigned order:
+7.      if r contributes to P:
+8.          apply_event(S_P, transform(r, M_P))
+9.  end for
+10. S_P ← canonicalize(S_P, M_P.serialization_spec)
+11. h ← SHA256(serialize(S_P))
+12. report ← coverage_report(C, L, M_P)
+13. if report.coverage < 1:
+14.     return (S_P, report, PARTIAL_EQUIVALENCE)
+15. return (S_P, report, hash_verdict(h, baseline_hash(P)))
+```
+
+Step 10 is non-negotiable: canonicalization must be applied to the reconstructed state before hashing, otherwise the hash is a function of the reconstruction execution order rather than the projection function. For the vector projection, step 11 dispatches to the exact-replay hash or the re-encoding tolerance verdict according to the manifest’s declared contract; the two verdicts are never compared to each other.
+
+7.3 Null-rebuild control
+
+Algorithm 2: Null-rebuild control across environments.
+
+```
+Input:  projection P, ledger L with no pending canonical changes
+Output: environment-invariant hash or DETERMINISM_VIOLATION
+
+1.  for each environment configuration γ in the declared set:
+2.      S_γ ← reconstruct(P, L; γ)
+3.  end for
+4.  if hash(S_γ1) ≠ hash(S_γ2) for any pair:
+5.      return DETERMINISM_VIOLATION
+6.  return hash(S_γ1)
+```
+
+The declared environment set must vary at least batch size, device or device generation, and reduction order through a pinned single-kernel or integer pipeline. Two executions in the same environment bound nothing. A pass of 100 null rebuilds bounds the per-rebuild failure probability only at the order of three percent at ninety-five percent confidence under the rule of three; the benchmark must report the number of cycles and the resulting bound, not assert determinism unconditionally.
+
+---
+
+8. Benchmark and Acceptance Criteria
+
+8.1 Separate metrics
+
+Q_{\mathrm{recon}} = \frac{N_{\text{cycles with null-rebuild pass and hash match}}}{N_{\text{tested cycles}}},
+
+Q_{\mathrm{epistemic}} = \frac{N_{\text{adversarial tests with expected effective status}}}{N_{\text{adversarial tests}}},
+
+Q_{\mathrm{coverage}} = \frac{1}{|\mathcal{P}|} \sum_{P \in \mathcal{P}} \mathrm{cov}_{P}(L_{\mathrm{final}}),
+
+where $\mathcal{P} = \{\mathcal{G}, \mathcal{V}, \mathcal{T}\}$.
+
+8.2 Acceptance criteria
+
+The prototype passes its integrity experiment only if all of the following hold.
+
+1. Null-rebuild determinism across environments: Algorithm 2 returns a stable hash for all three projections across the declared environment set and all 100 cycles, with the rule-of-three bound reported.
+2. Reconstruction fidelity: $Q_{\mathrm{recon}} = 1.0$.
+3. Manifest coverage: $Q_{\mathrm{coverage}} = 1.0$ at the final ledger state.
+4. Epistemic adversarial: $Q_{\mathrm{epistemic}} = 1.0$ for the false-corroboration tests and the internal-consistency tests.
+5. Invalid promotion rejection: every attempt to insert a $\mathrm{CORROBORATED}$ event that fails §5.4 is rejected at the transaction boundary with no partial state.
+6. Bitemporal invariants: V1 under the concurrency qualification and T1 hold under concurrent revision creation; overlapping intervals among concurrently current revisions are rejected, while corrections through supersession are admitted.
+7. Defeat propagation: a later-discovered common ancestor triggers a defeat or downgrade event on affected corroborations, and the effective status changes accordingly.
+
+8.3 Adversarial tests
+
+Test Scenario Expected behaviour
+T7 Three evidence records, all derived from a single root observation $k_{\mathrm{eff}}^{\mathrm{collapse}} = 1$; transition rejected
+T8 Two evidence records from distinct roots, plus one derivative of the first $k_{\mathrm{eff}}^{\mathrm{collapse}} = 2$; gate evaluates $n_{\mathrm{eff}}$ against $n_{\min}$
+T9 Revision with no epistemic event Effective status $\mathrm{UNDEFINED}$; excluded from edge admissibility and corroboration tallies
+T10 Adaptive paraphrase laundering: an independent-looking rewrite of a single source Collapse operator reports limited recall; gate does not count the rewrite as independent
+T11 Multi-root synthesis record supporting $p$ $k_{\mathrm{eff}}^{\mathrm{collapse}}$ is at most the number of records, not the number of roots
+T12 Common ancestor discovered after a $\mathrm{CORROBORATED}$ event Defeat event fires; effective status downgrades; the stale assessment is flagged
+
+---
+
+9. Relation to Prior Work
+
+Eigenius. Eigenius is a typed knowledge-graph DBMS with four epistemic categories, status computed from the provenance graph, and a verified category that requires a formally re-checked proof term. The present specification adopts the commit-time status discipline but names its top category $\mathrm{CORROBORATED}$ because the gate establishes human-assessed corroboration under an independence relation, which is weaker than a checked proof term. The naming difference is a claim difference, not a stylistic preference.
+
+Evidence laundering. The closest empirical work to the independence calculus reports that agents give laundered clusters credence comparable to independent controls and that a structural provenance gate reduces the effect. Its limitations are adopted here as declared bounds: word-overlap deduplication merges independent pages, and independently rewritten false pages are largely not collapsed. The collapse operator is only as good as the recorded edges, and the benchmark must measure recall on the adversarial rewrite test rather than assume it.
+
+Bayesian source-dependence detection. The lineage-based collapse is a structural approximation to a problem that Bayesian formulations treat probabilistically, detecting dependence between sources from value agreement patterns and source accuracy. The structural operator is adopted because it is auditable and computable at transaction time, with the Bayesian formulation recorded as the reference model against which the $\rho_{\mathrm{err}}$ estimate should be calibrated.
+
+Bitemporal event logs. XTDB-style and Datomic-style bitemporal event logs are the natural baseline for the temporal projection. The contribution here is not the bitemporal model itself but the combination of valid-time exclusion under a concurrency discipline with a transaction-time continuity invariant and a reconstruction manifest that makes the projection replayable.
+
+---
+
+10. Open Problems and Non-Claims
+
+Non-claim 1 (Semantic fidelity of the quantizer). The symbolic encoding makes a tolerance contract achievable. It does not establish that the symbolic state preserves downstream task utility. That is a separate empirical question.
+
+Non-claim 2 (Completeness of the provenance graph). The dependency closure is only as good as the recorded derivation edges. Hidden common ancestors are invisible to the operator. The defeat mechanism partially compensates by allowing revocation when an ancestor is discovered, but it does not eliminate the risk of stale corroboration before discovery.
+
+Non-claim 3 (Bit-identical re-encoding across encoder versions). Encoder version changes create new artifacts and new manifests. The floor calibration distinguishes noise from change for a fixed encoder; it does not license bit-identical reconstruction across encoder versions.
+
+Open problem 1 (Calibration of $n_{\min}$). The conservative collapse-only gate avoids the Kish threshold error but cannot distinguish two independent roots from many correlated ones. The exceedance design effect offers a principled alternative, but its indicator correlation must be estimated from data, and the estimation procedure is not yet specified.
+
+Open problem 2 (Assessment quality). The gate computes a structural count, but $\rho_{\mathrm{err}}$ is an estimate and the support relation is a judgement. A systematically underestimated dependence or an over-broad support relation will overcount independence. Human review of the assessment record remains essential, and the defeat mechanism is the only structural protection against assessment drift.
+
+Open problem 3 (Upstream nondeterminism). The formalism begins after extraction. Nondeterminism in extraction is outside the contract, and a projection hash cannot be interpreted as evidence about the ledger when the extractor itself varies across runs.
+
+---
+
+11. Conclusion
+
+The specification replaces implicit architectural assumptions with explicit, falsifiable contracts. The decisive commitments are four. The vector projection is split into an exact-replay hash contract and a re-encoding tolerance contract with a guard band and a flagged set, because a single contract cannot be both bit-exact and noise-tolerant. Bitemporal determinism is enforced through valid-time exclusion under an application-level serialization discipline and transaction-time continuity, with corrections admitted through supersession rather than forbidden by an over-strong invariant. Independence is computed as a root-collapsed count over the provenance graph, corrected for nominal multiplicity, with residual dependence treated as an error correlation rather than an agreement correlation, and with the threshold caveat stated rather than hidden. The null-rebuild control is the precondition that makes hash comparison meaningful, and it must vary the environment rather than repeat within one. The acceptance criterion is the triple $(Q_{\mathrm{recon}}, Q_{\mathrm{epistemic}}, Q_{\mathrm{coverage}})$, each of which can fail independently and informatively. The prototype’s integrity benchmark is designed to fail if these contracts are not satisfied.
+
+APPENDICES:
+
+Appendix A: Formal Proofs and Counterexamples
+
+A.1 Proposition 1 (Replay determinism) — expanded proof
+
+Proposition. Under the exact-replay contract, if the stored embedding bytes and the serialization version $\nu$ are fixed, $\sigma_{\mathcal{V}}$ is a deterministic function of the ledger state, and a null replay with identical bytes yields identical identity.
+
+Proof. The exact-replay projection state is
+
+\mathcal{V}_{\mathrm{replay}}(L) = \{(\mathrm{id}_{i}, \mathrm{bytes}(e_{i}))\}_{i=1}^{N}
+
+where $\mathrm{bytes}(e_{i})$ is the stored artifact, not a freshly computed encoding. Canonical serialization $\mathsf{ser}_{\nu}$ is a function of this set alone: it sorts by identifier, emits bytes without transformation, and embeds $\nu$. SHA-256 is a deterministic function of its input. No batch size, device, reduction order, or memory layout enters the replay path, because no floating-point arithmetic is performed. Therefore $\sigma_{\mathcal{V}}$ is a function of $L$ alone, and two null replays on canonically equivalent $L$ produce identical bytes and identical hash. $\square$
+
+The proof is deliberately narrow. It does not claim that re-encoding is deterministic; it claims that replaying stored bytes is. The two contracts are separated precisely because the first is a theorem and the second is not.
+
+A.2 Proposition 2 (Re-encoding is not bit-deterministic) — expanded proof
+
+Proposition. There is no finite quantization scheme and no non-zero noise bound under which the whole-corpus re-encoding identity is guaranteed invariant.
+
+Proof sketch. Let $\kappa : \mathbb{R}^{d} \to \mathcal{Q}^{m}$ be any quantizer with a finite alphabet $\mathcal{Q}$. For each symbolic coordinate $q_{j}$, the preimage $\kappa^{-1}(q_{j})$ is a measurable cell with a boundary $\partial\kappa^{-1}(q_{j})$. For any non-zero noise vector $\delta$, there exists an embedding $e$ such that $e$ and $e + \delta$ lie in different cells: choose $e$ within $\|\delta\|$ of a boundary. The corpus contains $N$ rows and $m$ symbolic coordinates per row, so the probability that at least one row has at least one coordinate within $\|\delta\|$ of a boundary is positive and increasing in $N$ and $m$. Therefore the probability that $\kappa(e_{i}) \neq \kappa(e_{i} + \delta)$ for at least one $i$ is positive, and the whole-corpus hash differs. No finite scheme eliminates this, because the boundary set is non-empty for any non-trivial quantizer. $\square$
+
+Corollary. The re-encoding contract must be stated as a tolerance condition with a flagged set, not as a hash equality. The flagged set consists of rows within the declared guard band of a boundary; these rows are excluded from the tolerance comparison and reported explicitly, so that a whole-corpus verdict is never the sole evidence of determinism.
+
+A.3 Proposition 3 (False-corroboration exclusion) — expanded proof
+
+Proposition. If every $s \in S$ has $\mathrm{supp}(s) = \{r_{0}\}$ for a single root $r_{0}$, then $k_{\mathrm{eff}}^{\mathrm{collapse}}(S) = 1$ regardless of $|S|$.
+
+Proof. Let $T \subseteq S$ be any subset with $|T| \ge 2$. For any two distinct $s, s' \in T$, $\mathrm{supp}(s) = \mathrm{supp}(s') = \{r_{0}\}$, so $\mathrm{supp}(s) \cap \mathrm{supp}(s') = \{r_{0}\} \neq \varnothing$. Therefore no two-element subset has pairwise disjoint supporting-root sets, and the maximum admissible subset has size one. $\square$
+
+A.4 Proposition 4 (Nominal multiplicity bound) — expanded proof
+
+Proposition. For any finite $S$, $k_{\mathrm{eff}}^{\mathrm{collapse}}(S) \le |S|$, with equality only if every record has a non-empty supporting-root set and all such sets are pairwise disjoint.
+
+Proof. The count is defined as the maximum cardinality of a subset of $S$, so it cannot exceed $|S|$. If some $s \in S$ has $\mathrm{supp}(s) = \varnothing$, then no admissible subset contains $s$, and the maximum is strictly less than $|S|$. If two records have intersecting supporting-root sets, no admissible subset contains both, and again the maximum is strictly less than $|S|$. Equality therefore requires non-empty pairwise-disjoint supporting-root sets for the whole of $S$. $\square$
+
+A.5 Counterexample to the naive closure bound
+
+Let $S = \{s_{1}\}$ where $s_{1}$ is a synthesis derived from three independent sources. Then $|\mathrm{cl}(S)| = 3$ while $|S| = 1$, violating the claimed bound $|\mathrm{cl}(S)| \le |S|$. This is the counterexample that forces the root-collapsed definition in §5.2: the count must be the size of the largest subset of records with pairwise disjoint supporting-root sets, not the cardinality of the union of root sets. The union counts roots; the subset counts records, and only the latter is bounded by nominal multiplicity.
+
+A.6 Proposition 5 (No silent promotion) — expanded proof
+
+Proposition. Under L2 and L3, no revision can attain effective status $\mathrm{CORROBORATED}$ without an event whose admissibility was checked by the gate of §5.4.
+
+Proof. Effective status is the endpoint of the unique maximal event chain under the ledger ordering. L2 guarantees that every non-terminal-superseded revision eventually acquires an event chain; L3 guarantees that the chain is a path in the lattice. An event with $s_{\mathrm{new}} = \mathrm{CORROBORATED}$ is inserted only if the gate function returns true; otherwise the transaction aborts and no event is recorded. Since no other insertion path produces a $\mathrm{CORROBORATED}$ event, every $\mathrm{CORROBORATED}$ endpoint was gated. $\square$
+
+---
+
+Appendix B: Algorithm Specifications
+
+B.1 Algorithm 1 — Ledger-authoritative reconstruction (full specification)
+
+Input. Projection name $P$; ledger snapshot $L$; manifest $M_{P}$; declared contract $c \in \{\mathrm{REPLAY}, \mathrm{RE\_ENCODE}\}$.
+
+Output. Reconstructed state $S_{P}$; coverage report $R$; verdict $v \in \{\mathrm{PASS}, \mathrm{PARTIAL}, \mathrm{INSUFFICIENT\_MANIFEST}, \mathrm{TOLERANCE\_FAIL}\}$; flagged set $F$ (for re-encoding).
+
+```
+ 1.  C ← covered_subledger(L, M_P)
+ 2.  if C = ∅:
+ 3.      return (∅, coverage=0, INSUFFICIENT_MANIFEST, ∅)
+ 4.  acquire_reconstruction_lock(P)           # serializes against writers
+ 5.  S_P ← empty_state(P)
+ 6.  for each revision r ∈ C in ledger_assigned_order:
+ 7.      if r contributes to P:
+ 8.          apply_event(S_P, transform(r, M_P))
+ 9.  end for
+10.  S_P ← canonicalize(S_P, M_P.serialization_spec)
+11.  R ← coverage_report(C, L, M_P)
+12.  if c = REPLAY:
+13.      h ← SHA256(serialize(S_P))
+14.      if R.coverage < 1:
+15.          return (S_P, R, PARTIAL, ∅)
+16.      return (S_P, R, hash_verdict(h, baseline_hash(P)), ∅)
+17.  else:  # RE_ENCODE
+18.      for each row i in S_P:
+19.          if near_boundary(row_i, guard_band):
+20.              F ← F ∪ {id_i}
+21.      for each row i not in F:
+22.          if d_H(row_i, baseline_row_i) > Φ + ε:
+23.              return (S_P, R, TOLERANCE_FAIL, F)
+24.      if R.coverage < 1:
+25.          return (S_P, R, PARTIAL, F)
+26.      return (S_P, R, PASS, F)
+27.  release_reconstruction_lock(P)
+```
+
+Step 4 is mandatory for every projection, not only the temporal projection. A reconstruction that reads a moving ledger state cannot produce a stable hash regardless of canonicalization. Step 10 must precede step 12; hashing an uncanonicalized state measures execution order, not projection identity.
+
+B.2 Algorithm 2 — Null-rebuild control across environments (full specification)
+
+Input. Projection $P$; ledger $L$ with no pending canonical changes; environment set $\Gamma = \{\gamma_{1}, \dots, \gamma_{k}\}$.
+
+Output. Environment-invariant hash $h$ or $\mathrm{DETERMINISM\_VIOLATION}$; per-environment hashes; cycle count $n$.
+
+```
+ 1.  for each γ ∈ Γ:
+ 2.      S_γ ← reconstruct(P, L; γ)          # full Algorithm 1
+ 3.      h_γ ← hash(S_γ)
+ 4.  end for
+ 5.  if |{h_γ : γ ∈ Γ}| > 1:
+ 6.      return (DETERMINISM_VIOLATION, {h_γ}, |Γ|)
+ 7.  return (h_γ1, {h_γ}, |Γ|)
+```
+
+The environment set $\Gamma$ must vary at least: batch size (which changes the reduction order on GPU), device generation, and device count. A null rebuild that holds all three constant proves only that the code path is repeatable within one configuration; it says nothing about determinism under rebuild noise. A pass of $n$ null rebuilds bounds the per-rebuild failure probability at approximately $3/n$ at 95% confidence under the rule of three; the benchmark must report $n$ and the resulting bound rather than assert determinism absolutely.
+
+B.3 Gate evaluation — transaction-time pseudocode
+
+```
+FUNCTION promote_to_corroborated(revision r, evidence_set S, proposition p):
+    # 1. Evidence sufficiency
+    FOR s IN S:
+        ASSERT proves(s) ⊇ p
+    # 2. Root-collapsed count
+    k_eff ← max_subset_with_disjoint_supports(S, p)
+    IF k_eff < 2: REJECT("nominal multiplicity")
+    # 3. Effective count (conservative default)
+    IF conservative_mode:
+        n_eff ← k_eff
+    ELSE:
+        rho_err ← estimate_error_correlation(S, p)
+        n_eff ← k_eff / (1 + (k_eff - 1) * rho_err)
+    IF n_eff < n_min: REJECT("effective corroboration")
+    # 4. Assessment existence
+    ASSERT assessment_exists(S, rho_err, method ≠ citation_graph_only)
+    # 5. Scope validity
+    ASSERT verification_scope ⊇ p
+    # 6. Record event with input hash
+    eta ← SHA256(serialize(k_eff, rho_err, supp_sets, method))
+    INSERT event(r, s_prev, CORROBORATED, alpha, S, p, eta)
+    RETURN ACCEPT
+```
+
+B.4 Defeat propagation — pseudocode
+
+```
+FUNCTION on_provenance_change(new_edge (s_i, s_j)):
+    FOR each corroborated revision r whose event set references s_i or s_j:
+        e ← latest event for r
+        IF e.eta ≠ recompute_gate_inputs(r):
+            INSERT event(r, CORROBORATED, DEFEATED, alpha, ∅, ∅, ∅)
+            effective_status(r) ← previous_non_corroborated_status(r)
+```
+
+The defeat event is structural, not advisory. Without it, a corroboration whose premise has changed remains in the ledger as a silent overclaim, which is exactly the failure mode that Non-claim 2 identifies.
+
+---
+
+Appendix C: Schema-Level Constraints and Concurrency
+
+C.1 Valid-time exclusion (V1) under concurrency
+
+The exclusion constraint is:
+
+```sql
+ALTER TABLE keu_revision
+ADD CONSTRAINT v1_valid_time_exclusion
+EXCLUDE USING GIST (
+    keu_id WITH =,
+    valid_time WITH &&
+) WHERE (is_current_in_transaction_time);
+```
+
+The WHERE clause implements the concurrency qualification: V1 applies only among revisions that are concurrently current in transaction time, so a correction expressed as a supersession (which makes the corrected revision current and the prior revision historical) is admissible. PostgreSQL 18’s WITHOUT OVERLAPS covers a single range column and is implemented internally as an exclusion constraint; for two time axes the explicit EXCLUDE form is the established pattern.
+
+The constraint alone does not resolve concurrent inserts of intervals that individually satisfy V1 but jointly violate it. Two transactions can each insert a non-overlapping interval without seeing the other’s uncommitted row, and the constraint is evaluated per-row against committed state. The insertion path must therefore acquire an exclusive lock on the KEU identity before attempting the insert:
+
+```sql
+SELECT 1 FROM keu_identity WHERE keu_id = $1 FOR UPDATE;
+```
+
+or a transaction-scoped advisory lock pg_advisory_xact_lock(keu_id). The lock must be held for the entire transaction that writes the revision, not released after the existence check.
+
+C.2 Transaction-time continuity (T1)
+
+T1 is not expressible as a declarative range constraint because it constrains the boundary between consecutive rows, not the range of a single row. The two admissible enforcement mechanisms are:
+
+1. Constraint trigger AFTER INSERT OR UPDATE on keu_revision that checks $\tau_{s}^{(v)} = \tau_{r}^{(v+1)}$ for the newly inserted or updated revision and its immediate successor under the ledger ordering, within the same transaction as the write.
+2. Previous-pointer chain: each revision stores previous_revision_id, and the trigger verifies that the previous revision’s superseded_at equals the new revision’s recorded_at.
+
+Both mechanisms require the identity lock of §C.1. Without the lock, two concurrent insertions for the same KEU identity can both pass the trigger check against the committed predecessor and produce a gap or a fork.
+
+C.3 Ledger-assigned ordering
+
+Ordering must not depend on wall-clock timestamps or sequence values. Concurrent writers can make events visible out of order, and sequences can contain permanent gaps. The ledger assigns a ledger_position under the identity lock, and all ordering in reconstruction, projection serialization, and event-chain resolution uses ledger_position, with revision number as the tie-breaker.
+
+C.4 Canonical JSON restrictions
+
+RFC 8785 serializes every JSON number by parsing it into an IEEE 754 double and re-serializing it, which silently rounds $2^{53} + 1$ to $2^{53}$. The ledger must therefore either (a) carry integer identifiers and counters beyond $2^{53}$ as strings, or (b) declare a canonicalization profile that explicitly admits int64 with a fixed lexical form and record that profile in $\nu$. Negative zero must be normalized to zero; NaN and ±Infinity must be rejected at the serialization boundary rather than mapped to a neighbouring value. These are not optional refinements: they are the conditions under which two platforms can produce the same hash from the same logical content.
+
+---
+
+Appendix D: Calibration Procedures
+
+D.1 Floor calibration for re-encoding
+
+Procedure.
+
+1. Select a reference corpus $E^{(0)}$ and encode it under the declared production configuration to obtain $\kappa(E^{(0)})$.
+2. For each environment $\gamma \in \Gamma$, perform a null re-encoding $E^{(1)}_{\gamma}$ with no semantic change.
+3. Compute per-row Hamming displacement $d_{H}(\kappa(e_{i}^{(0)}), \kappa(e_{i}^{(1)}))$ for every row and every environment.
+4. Set $\Phi = \sup_{i, \gamma} d_{H}(\cdot, \cdot)$.
+5. Recompute the floor whenever the reference, the encoder revision, or the noise regime changes; a floor measured against one reference does not transfer to another.
+
+D.2 Guard-band specification
+
+For each symbolic coordinate, the guard band is the set of values within a margin $\beta$ of a cell boundary. Rows with any coordinate in the guard band are flagged at encoding time and excluded from the tolerance comparison. The flagged set is reported explicitly in the reconstruction output. The margin $\beta$ is a declared parameter of the encoding contract; it trades recall (a wider band flags more rows) against false-change sensitivity (a narrower band admits more boundary crossings into the tolerance verdict).
+
+D.3 Calibration of $n_{\min}$
+
+The conservative gate uses $k_{\mathrm{eff}}^{\mathrm{collapse}} \ge 2$ and does not require $n_{\min}$. If the effective-count variant is enabled, $n_{\min}$ must be calibrated against a null model in which all evidence traces to a single root:
+
+1. Generate synthetic evidence sets with known single-root structure and known independence violations.
+2. Run the gate across a grid of $n_{\min}$ values.
+3. Select the smallest $n_{\min}$ for which the false-promotion rate under the null model is below the declared threshold (initially 1%).
+4. Publish the calibration curve, not only the selected value.
+
+The default $n_{\min} = 1.5$ in the main text is a placeholder until this procedure is executed.
+
+D.4 Exceedance design effect (alternative calibration)
+
+The threshold-based alternative uses
+
+n_{\mathrm{eff}} = \frac{k_{\mathrm{eff}}^{\mathrm{collapse}}}{1 + (k_{\mathrm{eff}}^{\mathrm{collapse}} - 1)\rho_{I}(p)}
+
+where $\rho_{I}(p)$ is the correlation of the exceedance indicators at the operating threshold $p$, not the score correlation. The literature exhibits a valid copula with zero score correlation but a true design effect of 1.44; the naive Kish substitution vanishes while the true effect remains. $\rho_{I}(p)$ must be estimated from lineage overlap or a source-dependence model, and the estimate must be recorded in the assessment. If it cannot be estimated with declared uncertainty, the conservative collapse-only gate is the default.
+
+---
+
+Appendix E: Adversarial Test Matrix (expanded)
+
+ID Scenario Input construction Expected outcome Metrics checked
+T1 Null rebuild, same environment Reconstruct twice with identical config Identical hash $Q_{\mathrm{recon}}$
+T2 Null rebuild, varied batch size Reconstruct with batch sizes $b_{1}, b_{2}$ Identical hash $Q_{\mathrm{recon}}$
+T3 Null rebuild, varied device Reconstruct on two device generations Identical hash $Q_{\mathrm{recon}}$
+T4 Exact-replay artifact missing Remove one stored artifact $\mathrm{PARTIAL\_EQUIVALENCE}$; uncovered set non-empty $Q_{\mathrm{coverage}}$
+T5 Re-encoding with known semantic change Modify one row’s source content Row flagged as genuine change; tolerance verdict fails Flagged set, tolerance
+T6 Re-encoding with boundary-proximate row Place one row within guard band Row flagged; excluded from tolerance comparison Flagged set
+T7 Single-root derivative cluster Three records, all derived from one root $k_{\mathrm{eff}}^{\mathrm{collapse}} = 1$; gate rejects $Q_{\mathrm{epistemic}}$
+T8 Two roots plus one derivative Two independent roots, one derivative of the first $k_{\mathrm{eff}}^{\mathrm{collapse}} = 2$; gate evaluates $n_{\mathrm{eff}}$ $Q_{\mathrm{epistemic}}$
+T9 No epistemic event Revision inserted, no event attached Effective status $\mathrm{UNDEFINED}$; excluded from tallies $Q_{\mathrm{epistemic}}$
+T10 Adaptive paraphrase laundering Independent-looking rewrite of one source Collapse operator reports limited recall; rewrite not counted as independent Recall on adversarial rewrite
+T11 Multi-root synthesis One record derived from three roots $k_{\mathrm{eff}}^{\mathrm{collapse}} \le$ record count; not root count $Q_{\mathrm{epistemic}}$
+T12 Late-discovered common ancestor Insert derivation edge after corroboration Defeat event fires; status downgrades; assessment flagged Defeat propagation
+T13 Concurrent valid-time overlap Two transactions insert overlapping intervals Both individually pass V1; second blocked by identity lock V1 under concurrency
+T14 Correction via supersession Supersede a revision with corrected valid time Admitted; prior revision remains historical V1 with qualification
+T15 Gap in transaction-time chain Insert revision without matching $\tau_{r}$ Constraint trigger rejects T1
+T16 Canonical JSON int64 overflow Serialize $2^{53} + 1$ Rejected or carried as string per declared profile Serialization stability
+
+The test matrix is designed so that each row can fail independently and informatively. A pass on T1–T3 without a pass on T10–T12 demonstrates determinism without epistemic adequacy; a pass on T7–T12 without a pass on T1–T3 demonstrates epistemic adequacy without determinism. The acceptance criterion is the triple $(Q_{\mathrm{recon}}, Q_{\mathrm{epistemic}}, Q_{\mathrm{coverage}})$, not a single number.
+
+---
+
+Appendix F: Relation to Prior Art — Detailed Comparison
+
+F.1 SEMQ
+
+SEMQ encodes unit-norm float32 vectors into quantized symbolic rows, derives a whole-state identity from the row set, measures a floor from null rebuilds, and diffs candidate builds against that floor row by row. Its conformance vectors pin byte-identical behaviour across Python, Rust, Go, and TypeScript bindings. The re-encoding contract of §4.2 is semantically aligned with SEMQ’s Encoding/state_id/Floor/diff pipeline. The contribution of the present specification is not the quantized identity itself but the separation of the replay contract from the re-encoding contract, the guard-band flagged set, and the integration of the vector projection into a ledger-level determinism contract with coverage reporting. If the prototype does not adopt SEMQ directly, it must provide a comparative justification and a test case where its quantizer succeeds and SEMQ fails; without that, the reinvention is unjustified.
+
+F.2 Eigenius
+
+Eigenius enforces epistemic status (declared/observed/derived/verified) as a strict commit-time invariant over a typed knowledge-graph DBMS, with status computed from the provenance graph and “verified” carrying a formally re-checked proof term via Lean 4. The present specification adopts the commit-time discipline (L5) but names its top category $\mathrm{CORROBORATED}$ because the gate establishes human-assessed corroboration under a computed independence relation, which is weaker than a checked proof term. The naming difference is a claim difference: Eigenius’s verified category warrants a stronger assertion than the gate of §5.4 can support.
+
+F.3 Evidence Laundering
+
+The EMNLP 2026 study evaluates a content-only attack in which one false claim is published across paraphrased pages that appear to be independent sources, and shows that agents assign laundered clusters credence comparable to genuine independence controls; a structural provenance gate substantially reduces the failure. Its limitations are adopted here as declared bounds: plain word-overlap deduplication merges genuinely independent pages, and independently rewritten false pages are largely not collapsed. The collapse operator of §5.2 is only as good as the recorded derivation edges, and the benchmark must measure recall on the adaptive paraphrase test (T10) rather than assume it.
+
+F.4 Bayesian source dependence
+
+The VLDB 2009 work applies Bayesian analysis to decide dependence between sources, iteratively detecting copying and discovering truth from conflicting information, and extends the model to source accuracy and value similarity. The structural collapse of §5.2 is an auditable, transaction-time approximation to this problem; the Bayesian formulation is the reference model against which the $\rho_{\mathrm{err}}$ estimate should be calibrated. Co-copying and transitive copying remain harder cases for the structural operator, because both require edges that may not be recorded.
+
+F.5 Bitemporal event logs
+
+XTDB-style and Datomic-style bitemporal event logs are the natural baseline for the temporal projection. The contribution of the present specification is not the bitemporal model itself but the combination of valid-time exclusion under an explicit concurrency discipline, transaction-time continuity enforced by a trigger or pointer chain, and a reconstruction manifest that makes the projection replayable with coverage reporting. The comparison benchmark must include a bitemporal event log baseline, not only an internal null rebuild.
+
+---
+
+Appendix G: Rule-of-Three Reporting Template
+
+For $n$ null-rebuild cycles with zero observed violations, the upper 95% bound on the per-cycle failure probability is approximately $3/n$. The benchmark report must state:
+
+· $n$, the number of cycles;
+· the environment set $\Gamma$ and the variation across it;
+· the rule-of-three bound $3/n$;
+· the observed hashes per environment;
+· any cycle in which the flagged set changed even if the hash did not.
+
+A report that states “deterministic across 100 cycles” without the bound is overclaiming: 100 cycles with zero failures is consistent with a per-cycle failure rate as high as roughly 3% at 95% confidence. The correct statement is “no failures in 100 cycles, with an upper 95% bound of 3% per cycle under the rule of three,” and the benchmark’s acceptance criterion should be stated in those terms.
+
+---
+
+Appendix H: Notation Summary
+
+Symbol Meaning
+$\mathcal{L}$ Canonical ledger
+$\Sigma_{\mathcal{L}}$ Space of canonical ledger states
+$P$ Projection ( $\mathcal{G}, \mathcal{V}, \mathcal{T}$ )
+$\pi_{P}$ Projection function
+$\sigma_{P}$ Projection identity hash
+$\mathsf{ser}_{\nu}$ Canonical serialization at version $\nu$
+$\kappa$ Quantizer from $\mathbb{R}^{d}$ to $\mathcal{Q}^{m}$
+$\Phi$ Floor observed across null re-encodings
+$\varepsilon$ Declared tolerance margin
+$S$ Evidence set
+$\mathrm{supp}(s)$ Supporting-root set for record $s$
+$k_{\mathrm{eff}}^{\mathrm{collapse}}$ Root-collapsed corroboration count
+$\rho_{\mathrm{err}}$ Correlation of root error indicators
+$\rho_{I}(p)$ Correlation of exceedance indicators at threshold $p$
+$n_{\mathrm{eff}}$ Effective corroboration count
+$\eta$ Hash of gate inputs recorded in the event
+$\Gamma$ Environment set for null-rebuild control
+$Q_{\mathrm{recon}}$ Reconstruction determinism metric
+$Q_{\mathrm{epistemic}}$ Epistemic adversarial metric
+$Q_{\mathrm{coverage}}$ Manifest coverage metric
+
+ASCII Diagrams for the Specification
+
+Figure 1. System Architecture Overview
+
+```
+                         UPSTREAM (outside the contract)
+     ASR / OCR / extractors  ──►  nondeterministic artifact production
+                                  (recorded, not made deterministic)
+                                          │
+                                          ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         CANONICAL LEDGER  L                             │
+│                                                                         │
+│   ┌─────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌─────┐  │
+│   │ K : KEU │  │ R : revs   │  │ E : events │  │ A : assess │  │ M   │  │
+│   │         │  │ (immutable │  │ (epistemic │  │ (human     │  │ man.│  │
+│   │         │  │  content)  │  │  calculus) │  │  audit)    │  │     │  │
+│   └─────────┘  └────────────┘  └────────────┘  └────────────┘  └─────┘  │
+│                                                                         │
+│   append-only · bitemporal · ledger-assigned ordering · no outbox       │
+└─────────────────────────────────┬───────────────────────────────────────┘
+                                  │   projection functions π_P
+                ┌─────────────────┼─────────────────┐
+                ▼                 ▼                 ▼
+          ┌──────────┐      ┌──────────┐      ┌──────────┐
+          │ G graph  │      │ V vector │      │ T time   │
+          └────┬─────┘      └────┬─────┘      └────┬─────┘
+               │                 │                 │
+               └─────────────────┼─────────────────┘
+                                 ▼
+                    ┌────────────────────────────┐
+                    │   σ_P = H_ν( ser_ν(state) )│
+                    │   projection identity      │
+                    └──────────────┬─────────────┘
+                                   │
+                                   ▼
+                    ┌────────────────────────────┐
+                    │  Reconstruction  R_P       │
+                    │  contract: R_P ∘ ι = π_P   │
+                    │  (on the covered subledger)│
+                    └────────────────────────────┘
+```
+
+---
+
+Figure 2. The Ledger Tuple and Its Invariants
+
+```
+                       L = ( K, R, E, A, M )
+                             │  │  │  │  │
+      ┌──────────────────────┘  │  │  │  └──────────────────────┐
+      │                         │  │  │                          │
+      ▼                         ▼  ▼  ▼                          ▼
+┌───────────┐              ┌────────────┐                   ┌────────────┐
+│ K identities│            │ R revisions│                   │ M manifests│
+│           │              │            │                   │            │
+│ L1 content│              │ content is │                   │ L4 coverage│
+│ immutable │              │ write-once │                   │ cov_P(L)∈  │
+│ (supersede│              │ via supers.│                   │ [0,1]      │
+│  not edit)│              └─────┬──────┘                   └────────────┘
+└───────────┘                    │
+                                 ▼
+                       ┌─────────────────────┐
+                       │ E epistemic events  │
+                       │                     │
+                       │ L2 deferred exist.  │
+                       │ L3 prev = last new  │
+                       │ L5 status = max e*  │  ◄── commit-time
+                       └──────────┬──────────┘      stratification
+                                  │
+                                  ▼
+                       ┌─────────────────────┐
+                       │ A independence      │
+                       │   assessments       │
+                       │ (human-auditable    │
+                       │  justification)     │
+                       └─────────────────────┘
+```
+
+---
+
+Figure 3. Bitemporal Domain (valid time × transaction time)
+
+```
+        valid time  (asserted in world)
+              t →
+        ┌─────────────────────────────────────────────────────┐
+        │                                                     │
+   t=0  ├──[ A ]──[ B ]──[ C ]──[ C' ]──[ D ]───────────────► │
+        │      ▲                                           ▲  │
+        │      │  correction: C' supersedes C              │  │
+        │      │  (V1 applies only among revisions         │  │
+        │      │   concurrently current in transaction     │  │
+        │      │   time, so C' may overlap C historically) │  │
+        │      │                                           │  │
+        └──────┼───────────────────────────────────────────┼──┘
+               │                                           │
+   τ (tx time) │                                           │
+        ▲      │                                           │
+        │      │                                           │
+        │  ┌───┴────────────────────────────────────────┐  │
+        │  │                                            │  │
+        │  │  τ_r(A)=0 ────── τ_s(A)=τ_r(B)             │  │
+        │  │  τ_r(B) ──────── τ_s(B)=τ_r(C)             │  │   T1: gap-free
+        │  │  τ_r(C) ──────── τ_s(C)=τ_r(C')            │  │   supersession
+        │  │  τ_r(C') ─────── τ_s(C')=τ_r(D)            │  │   chain
+        │  │  τ_r(D) ───────  (current, τ_s = ⊥)        │  │
+        │  │                                            │  │
+        │  └────────────────────────────────────────────┘  │
+        │                                                  │
+        ▼                                                  ▼
+   historical rows                                current row
+
+   V1 (valid-time exclusion) enforced by EXCLUDE ... WHERE is_current_in_tx
+   T1 (tx-time continuity)  enforced by trigger or previous-pointer chain
+   Both require an identity lock before insertion (see Figure 3b)
+```
+
+Figure 3b. Concurrency discipline for V1 / T1
+
+```
+   Txn A                              Txn B
+   ─────                              ─────
+   BEGIN                              BEGIN
+   SELECT ... FOR UPDATE              SELECT ... FOR UPDATE
+     WHERE keu_id = X                   WHERE keu_id = X
+        │                                  │
+        │  ◄──── B blocks until A commits ─┤
+        │                                  │
+   INSERT revision (valid_time)       (waiting)
+   CHECK EXCLUDE V1                   (waiting)
+   TRIGGER checks T1                  (waiting)
+   COMMIT                             │
+        └──────────── lock released ──►│
+                                       │
+                                   INSERT revision
+                                   CHECK EXCLUDE V1   ← now sees A
+                                   TRIGGER checks T1  ← now sees A
+                                   COMMIT
+
+   Without the lock, A and B could each see no
+   committed overlap and jointly violate V1.
+```
+
+---
+
+Figure 4. The Two Vector Contracts (replay vs. re-encode)
+
+```
+                    VECTOR PROJECTION
+                           │
+          ┌────────────────┴────────────────┐
+          ▼                                 ▼
+   EXACT REPLAY                     RE-ENCODING
+   (artifact bytes)                 (regenerate from source)
+   ─────────────────                ─────────────────────
+   state = {(id, bytes(e))}         state = {(id, κ(e))}
+          │                                 │
+          ▼                                 ▼
+   σ_V = H_ν(ser_ν(state))          tolerance verdict
+   deterministic ✓                  not bit-deterministic ✗
+   (Proposition 1)                  (Proposition 2)
+          │                                 │
+          │                                 ▼
+          │                       ┌─────────────────────┐
+          │                       │ per-row Merkle tree │
+          │                       │ + guard band        │
+          │                       │ + floor Φ           │
+          │                       └──────────┬──────────┘
+          │                                  │
+          ▼                                  ▼
+   PASS / FAIL hash                 PASS / TOLERANCE_FAIL
+   (falsifiable)                    (falsifiable, but not by hash)
+
+   The two contracts are never compared to each other.
+```
+
+---
+
+Figure 5. The Quantization Boundary Problem
+
+```
+   Real-valued coordinate  ──────────►  symbol
+                                         
+   cell 0        boundary       cell 1
+   │                 │            │
+   │   [  e   ]      │     [ e' ] │
+   │    ↑            │      ↑     │
+   │    │            │      │     │
+   └────┼────────────┼──────┼─────┘
+        │            │      │
+      e          boundary   e'
+   κ(e)=0                   κ(e')=1
+   
+   For any δ > 0, there exists e within δ of the boundary
+   such that κ(e) ≠ κ(e+δ). The whole-corpus hash differs
+   even though no semantic change occurred.
+
+   Mitigations:
+   ────────────
+   1. Per-row hashes under a Merkle tree
+        → differing root localizes to specific rows
+   2. Guard band
+        → rows within β of a boundary are FLAGGED
+        → flagged rows are excluded from tolerance verdict
+        → flagged set is reported explicitly
+   3. Multiple quantizers
+        → reduces flagged set but does not eliminate boundary
+   
+   What the contract claims:
+   ────────────────────────
+   "Unflagged rows satisfy d_H(κ(e_i), κ(e_i')) ≤ Φ + ε."
+   NOT "the whole-corpus hash is invariant."
+```
+
+---
+
+Figure 6. Provenance Graph, Dependency Closure, and Root-Collapse
+
+```
+    EVIDENCE SET  S = { s1, s2, s3, s4 }
+
+                     ┌──────┐
+                     │ r0   │  root (shared ancestor)
+                     └───┬──┘
+                         │
+          ┌──────────────┼──────────────┐
+          ▼              ▼              ▼
+       ┌─────┐        ┌─────┐        ┌─────┐
+       │ s1  │        │ s2  │        │ s3  │
+       └──┬──┘        └──┬──┘        └──┬──┘
+          │              │              │
+          ▼              ▼              ▼
+       (agree on p)   (agree on p)   (agree on p)
+       
+                              ┌─────┐
+                              │ s4  │  ← synthesis
+                              └──┬──┘
+                                 │
+                          derived from r1, r2, r3
+                          (three distinct roots)
+
+   ─────────────────────────────────────────────────────────
+   NAIVE closure:  cl(S) = {r0, r1, r2, r3}      |cl| = 4
+                   |cl| > |S| when S = {s4} only  ← counterexample
+   
+   ROOT-COLLAPSED count (Definition §5.2):
+       supp(s1) = supp(s2) = supp(s3) = {r0}
+       supp(s4) = {r1, r2, r3}
+   
+   All four records share r0 through their derivation or through s4's roots.
+   Any 2-element subset has intersecting supports → max disjoint subset = 1.
+   
+   k_eff^collapse(S) = 1   (regardless of |S| = 4)
+
+   ─────────────────────────────────────────────────────────
+   CONTRAST: S' = { s1, s4' }  where s4' is derived from r1, r2, r3
+   and s1 is derived from r0 (independent of r1,r2,r3)
+   
+       supp(s1) = {r0}
+       supp(s4') = {r1, r2, r3}
+       {supp(s1), supp(s4')}  pairwise disjoint → admissible
+       k_eff^collapse(S') = 2
+```
+
+---
+
+Figure 7. Epistemic Status Lattice
+
+```
+                       ┌──────────────────┐
+                       │  CORROBORATED    │  (top, requires §5.4 gate)
+                       │  ─────────────   │
+                       │  human-assessed  │
+                       │  (≠ Eigenius      │
+                       │   VERIFIED, which │
+                       │   has Lean proof) │
+                       └────────┬─────────┘
+                                │
+             ┌──────────────────┴──────────────────┐
+             │                                     │
+             ▼                                     ▼
+    ┌─────────────────┐                  ┌─────────────────┐
+    │   CLAIMED       │                  │   OBSERVED      │
+    │                 │                  │                 │
+    └────────┬────────┘                  └────────┬────────┘
+             │        incomparable                 │
+             │        (⊑ does not relate          │
+             │         CLAIMED to OBSERVED)       │
+             │                                     │
+             └──────────────────┬──────────────────┘
+                                ▼
+                        ┌─────────────────┐
+                        │      ⊥          │
+                        │  UNDEFINED      │
+                        └─────────────────┘
+
+   Lattice refinement  (⊏): ⊥ ⊏ CLAIMED ⊏ CORROBORATED
+                            ⊥ ⊏ OBSERVED ⊏ CORROBORATED
+   
+   CLAIMED → OBSERVED  is a "kind change" event,
+   NOT a lattice refinement. It is recorded as a
+   separate event type and does not advance rank.
+```
+
+---
+
+Figure 8. Event Chain with Defeat Propagation
+
+```
+   Revision r's event chain over ledger position:
+
+     pos=10   pos=25        pos=40             pos=60              pos=85
+       │        │             │                  │                   │
+       ▼        ▼             ▼                  ▼                   ▼
+   ┌──────┐ ┌───────┐ ┌──────────────────┐ ┌──────────┐ ┌──────────────────┐
+   │ ⊥ →  │ │ CLAIM │ │ CLAIM → OBSERVED │ │ OBSERVED │ │ CORROBORATED →   │
+   │ CLAIM│ │       │ │ (kind change)    │ │  → CORR. │ │ DEFEATED         │
+   └──────┘ └───────┘ └──────────────────┘ └──────────┘ └──────────────────┘
+                              │                  │                  ▲
+                              │                  │                  │
+                              │                  │          defeat event
+                              │                  │          (provenance change
+                              │                  │           discovered after
+                              │                  │           corroboration)
+                              │                  │
+                              │                  │
+                              │                  └─── gate §5.4 passes
+                              │                       η = hash(k_eff, ρ_err,
+                              │                                 supp_sets, method)
+                              │
+                              └─── kind change, not rank advance
+
+   Effective status at any instant = endpoint of the unique maximal
+   chain under ledger-assigned position. A later-discovered common
+   ancestor fires DEFEATED, which changes the effective status to
+   the previous non-CORROBORATED status (OBSERVED here).
+   
+   Without defeat:
+     stale CORROBORATED persists as a silent overclaim
+     (Non-claim 2 manifesting as silent integrity failure).
+```
+
+---
+
+Figure 9. Algorithm 1 — Ledger-Authoritative Reconstruction (flow)
+
+```
+   ┌──────────────────────────────────────────────────────────────┐
+   │ INPUT: projection P, ledger L, manifest M_P, contract c      │
+   └─────────────────────────┬────────────────────────────────────┘
+                             ▼
+                 ┌───────────────────────┐
+                 │ C ← covered(L, M_P)   │
+                 └───────────┬───────────┘
+                             ▼
+                       ┌───────────┐
+                       │  C = ∅ ?  │─── yes ──► INSUFFICIENT_MANIFEST
+                       └─────┬─────┘
+                             │ no
+                             ▼
+                 ┌───────────────────────┐
+                 │ acquire_recon_lock(P) │  ◄── mandatory, not optional
+                 └───────────┬───────────┘
+                             ▼
+                 ┌───────────────────────┐
+                 │ S_P ← empty_state(P)  │
+                 └───────────┬───────────┘
+                             ▼
+                 ┌───────────────────────┐
+                 │ for r ∈ C:            │  in ledger-assigned order
+                 │   if r contributes:   │
+                 │     apply(transform)  │
+                 └───────────┬───────────┘
+                             ▼
+                 ┌───────────────────────┐
+                 │ canonicalize(S_P)     │  ◄── non-negotiable
+                 └───────────┬───────────┘
+                             ▼
+                 ┌───────────────────────┐
+                 │ coverage_report(C,L)  │
+                 └───────────┬───────────┘
+                             ▼
+                    ┌────────────────┐
+                    │   c = REPLAY ? │
+                    └───┬────────┬───┘
+                       yes       no
+                        │        │
+                        ▼        ▼
+              ┌─────────────┐  ┌────────────────────┐
+              │ h=H(ser(S)) │  │ for each row:      │
+              │ if cov<1:   │  │   if near_boundary │
+              │   PARTIAL   │  │     → flag, skip   │
+              │ else hash   │  │   else check       │
+              │  verdict    │  │   d_H ≤ Φ+ε        │
+              └──────┬──────┘  └──────────┬─────────┘
+                     │                    │
+                     │                    ▼
+                     │         ┌────────────────────┐
+                     │         │ cov<1 ?  PARTIAL   │
+                     │         │ else PASS /        │
+                     │         │  TOLERANCE_FAIL    │
+                     │         └────────────────────┘
+                     │
+                     ▼
+              release_recon_lock(P)
+              return verdict
+```
+
+---
+
+Figure 10. Algorithm 2 — Null-Rebuild Control Across Environments
+
+```
+   Environment set Γ = { γ1, γ2, ..., γk }
+   Each γ varies batch size, device generation, or reduction order
+   (a null rebuild that holds them constant proves nothing about
+    determinism under rebuild noise)
+
+     γ1              γ2              γ3   ...   γk
+      │               │               │            │
+      ▼               ▼               ▼            ▼
+   ┌──────┐        ┌──────┐        ┌──────┐    ┌──────┐
+   │ recon│        │ recon│        │ recon│    │ recon│
+   │ L;γ1 │        │ L;γ2 │        │ L;γ3 │    │ L;γk │
+   └──┬───┘        └──┬───┘        └──┬───┘    └──┬───┘
+      │               │               │            │
+      ▼               ▼               ▼            ▼
+    h_γ1            h_γ2            h_γ3         h_γk
+      │               │               │            │
+      └───────────────┼───────────────┼────────────┘
+                      │               │
+                      ▼               ▼
+                 ┌─────────────────────────┐
+                 │ all h_γ equal?          │
+                 └──────┬──────────┬───────┘
+                        │          │
+                       yes         no
+                        │          │
+                        ▼          ▼
+                  ┌─────────┐  ┌──────────────────────────┐
+                  │ return  │  │ DETERMINISM_VIOLATION    │
+                  │ h_γ1    │  │ per-env hashes reported  │
+                  └────┬────┘  └──────────────────────────┘
+                       │
+                       ▼
+                 ┌─────────────────────────┐
+                 │ report n=|Γ| cycles     │
+                 │ rule-of-three bound 3/n │  ◄── MUST be reported
+                 │ e.g. 100 cycles →       │      (not "determinism"
+                 │ upper 95% ≤ 3%          │       without a bound)
+                 └─────────────────────────┘
+```
+
+---
+
+Figure 11. The Promotion Gate (§5.4) Decision Flow
+
+```
+                     ┌───────────────────────────────────┐
+                     │  Request: promote r to CORROBORATED│
+                     │  with evidence set S, proposition p│
+                     └────────────────┬──────────────────┘
+                                      ▼
+                          ┌───────────────────────┐
+                          │ 1. ∀s∈S: proves(s)⊇p? │
+                          └───────────┬───────────┘
+                                      │ yes
+                                      ▼
+                          ┌───────────────────────┐
+                          │ 2. k_eff^collapse(S)  │
+                          │    ≥ 2 ?              │
+                          └───────────┬───────────┘
+                              no ─────┤───── yes
+                                      ▼
+                          ┌───────────────────────┐
+                          │ 3. n_eff(S) ≥ n_min ? │
+                          │   conservative: k_eff │
+                          │   variant: ρ_err or   │
+                          │   exceedance ρ_I(p)   │
+                          └───────────┬───────────┘
+                              no ─────┤───── yes
+                                      ▼
+                          ┌───────────────────────┐
+                          │ 4. assessment exists  │
+                          │    method ≠ citation  │
+                          │    graph alone?       │
+                          └───────────┬───────────┘
+                                      │ yes
+                                      ▼
+                          ┌───────────────────────┐
+                          │ 5. scope ⊇ p?         │
+                          └───────────┬───────────┘
+                                      │ yes
+                                      ▼
+                          ┌───────────────────────┐
+                          │ 6. η = H(k_eff,ρ_err, │
+                          │    supp_sets, method) │
+                          │    INSERT event with η│
+                          └───────────┬───────────┘
+                                      ▼
+                               ACCEPT (CORROBORATED)
+                               
+   Any "no" → REJECT with reason; no partial state written.
+   η is recorded so that later provenance changes can trigger
+   a DEFEATED event (Figure 8) when gate inputs no longer match.
+```
+
+---
+
+Figure 12. The Commutation Diagram (central hypothesis)
+
+```
+                ι
+   Σ_L ─────────────────────► Σ_L|_{cov(M_P)}
+    │                                │
+    │                                │
+    │ π_P                            │ R_P
+    │                                │
+    ▼                                ▼
+   Σ_P ─────────────────────► Σ_P
+              equality of state
+              (or σ_P-equality)
+
+   Contract:   R_P ∘ ι  =  π_P     (on the covered subledger)
+   Corollary:  σ_P(R_P(L)) = σ_P(π_P(L))
+
+   If cov_P(L) < 1:
+     commutes only on cov(M_P); return PARTIAL_EQUIVALENCE
+     with (covered_set, uncovered_set)
+
+   The null-rebuild control (Figure 10) is the PRECONDITION
+   that makes this diagram meaningful: if R_P is nondeterministic
+   on a null rebuild, the lower-right equality is uninterpretable
+   regardless of the ledger's content.
+```
+
+---
+
+Figure 13. Test Matrix Dependencies
+
+```
+                     ┌────────────────────────────────────┐
+                     │  Test matrix organizes into two    │
+                     │  axes that fail independently     │
+                     └────────────────┬───────────────────┘
+                                      │
+             ┌────────────────────────┴────────────────────────┐
+             ▼                                                 ▼
+   DETERMINISM AXIS                                 EPISTEMIC AXIS
+   ────────────────                                 ──────────────
+   T1  null rebuild, same env                       T7  single-root cluster
+   T2  null rebuild, varied batch                   T8  two roots + derivative
+   T3  null rebuild, varied device                  T9  no event → UNDEFINED
+   T4  artifact missing → PARTIAL                   T10 paraphrase laundering
+   T5  semantic change → flagged                    T11 multi-root synthesis
+   T6  boundary-proximate row → flagged             T12 late ancestor → DEFEAT
+                                                    
+   TEMPORAL AXIS                                    SERIALIZATION AXIS
+   ─────────────                                    ────────────────────
+   T13 concurrent valid-time overlap                T16 int64 overflow under JCS
+   T14 correction via supersession
+   T15 gap in tx-time chain → rejected
+
+   INDEPENDENCE OF FAILURE MODES
+   ─────────────────────────────
+   A system can pass T1–T6 (deterministic) and fail T7–T12 (false
+   corroboration). A system can pass T7–T12 (epistemically adequate)
+   and fail T1–T6 (nondeterministic). This is why the acceptance
+   criterion is the triple (Q_recon, Q_epistemic, Q_coverage), not
+   a single number.
+
+             Q_recon = 1.0        Q_epistemic = 1.0      Q_coverage = 1.0
+             (T1–T6 pass)         (T7–T12 pass)          (cov = 1.0)
+                  │                     │                       │
+                  └──────────┬──────────┴───────────┬───────────┘
+                             ▼                      ▼
+                     ACCEPT benchmark          Any single failure
+                     only if ALL three         → REJECT with a
+                     hold                      specific reason
+```
+
+---
+
+Figure 14. Coverage and Partial Equivalence
+
+```
+   Contributing revisions at ledger state L:  {r1, r2, r3, r4, r5}
+   Manifest M_P covers:                        {r1, r2, r3}
+   
+   cov_P(L) = 3 / 5 = 0.6
+   
+   ┌──────────────────────────────────────────────────────────┐
+   │  Reconstruction verdict  =  PARTIAL_EQUIVALENCE          │
+   │                                                          │
+   │  covered_set   = {r1, r2, r3}   ← commutes with π_P      │
+   │  uncovered_set = {r4, r5}       ← reported, not silently │
+   │                                    dropped               │
+   └──────────────────────────────────────────────────────────┘
+   
+   The reconstruction procedure returns (S_P, R, verdict, F) where
+   R contains both the coverage ratio and the explicit uncovered
+   set. A partial projection is never presented as a whole-projection
+   hash match; the uncovered set is the falsifiability witness.
+```
