@@ -1,0 +1,782 @@
+CABIM: A Game-Based Framework for Credential–Account Binding Integrity in Platform Payment Systems
+
+Abstract
+
+The association of a payment credential with a digital platform account is a security event distinct from payment authorization. Credential possession, issuer-recognized authorization, binding integrity, token validity, and transaction legitimacy are five properties, and none implies the others. This paper develops a conditional, game-based framework for the binding boundary. A Type-1 adversary possesses stolen credential data but lacks the issuer authentication factor; a Type-2 adversary compromises a platform account after a legitimate binding has been established. For Type-1 adversaries, a sequence-of-games bound reduces binding advantage to an authenticated platform–issuer channel, EUF-CMA security of the issuer attestation, session-table correctness, nonce freshness, and an empirically calibrated factor-corruption rate. The bound is concrete rather than asymptotic for the factor term, because SIM-swap and social-engineering success are not functions of a security parameter. A separate Type-2 game formalizes post-binding authorization. Lifecycle revocation is modeled as a race between detection plus propagation and adversary-chosen monetization delay, with propagation delay counted once inside the revocation interval rather than added on top. Cross-account aggregation is formulated as a calibrated detection problem under an adversary diversification budget and structurally impaired labels. A Bayes decision rule is stated under a time-indexed information set, with explicit feasibility conditions for the false-positive and false-negative constraints. Six falsifiable hypotheses are derived, each with an identification strategy that acknowledges what observational data cannot recover. The contribution is not any individual control but the combination of injective agreement over the account-level binding tuple, a concrete factor-calibrated possession-insufficiency bound, a two-class adversary game, a competing-duration exposure model, and a decision rule under label impairment, in one framework.
+
+Keywords: credential binding; payment tokenization; issuer authentication; game-based security; provisioning fraud; cross-account detection; label impairment; revocation latency.
+
+1. Problem and Scope
+
+A platform account u may be associated with a payment credential c through a device context d, producing a network token t issued by a token service provider N under the authority of an issuing institution I. The binding decision is
+
+B(u,c,d,x,\tau) \in \{0,1\},
+
+where x is observable context at time \tau. The payment decision is a different function evaluated later. The security question at the binding boundary is not whether c is syntactically valid or whether t is later accepted within its domain. It is whether the entity requesting the association is authorized to establish that association, whether the authorization evidence is bound to the specific tuple (u,c,d), whether the resulting token can be effectively revoked when the binding proves unauthorized, and whether coordinated attempts across many accounts are detectable under realistic label conditions.
+
+These four questions are formally distinct. Possession of c does not imply issuer-recognized authorization; a valid token does not imply a legitimate binding; and a transaction-level authorization does not retroactively validate the provisioning event. The framework below is organized around this separation. It does not replace tokenization, 3-D Secure, FIDO authentication, issuer risk scoring, or account-takeover protection. It specifies which security properties can be guaranteed at the binding boundary, under which named assumptions, and with what measurable residual exposure.
+
+The motivating empirical setting is a platform payment system in which external bank accounts or debit cards are linked to platform accounts for peer-to-peer transfers and debit-card funding. In such systems, the linkage step is a credential-association event that occurs before any transaction-level authorization. Public reporting of criminal investigation into the use of stolen third-party payment credentials on such a platform establishes that credential association is a live financial-exposure problem; it does not establish a specific provisioning mechanism or a platform compromise. The framework is therefore motivated by the problem class, not derived from a documented attack trace.
+
+2. Prior Art and Residual Contribution
+
+Payment tokenization specifies token lifecycle states, including suspension and revocation, and token-domain restrictions. EMV 3-D Secure specifies issuer authentication for card-not-present transactions. FIDO specifications define authenticator-bound authentication. Issuer provisioning-risk scoring produces a propensity score for a provisioning request. Each of these controls addresses a component of the problem. A recent issuer-managed framework compatible with EMV 3DS and FIDO2/WebAuthn binds a physical EMV card to a FIDO authenticator at registration using standard EMV card authentication, verifies the registered credential for subsequent payments, allows the issuer to revoke all associated credentials with a single update, and reports ProVerif verification of authentication, integrity, confidentiality, and resistance to replay and man-in-the-middle attacks within the symbolic model. That framework anticipates issuer-attested authenticator binding and issuer-side revocation. It does not formalize an account-level binding tuple with an injectivity condition, a possession-insufficiency bound with an explicit adversary interface, a separate post-binding compromise game, a revocation-latency exposure model, or a decision rule under label impairment.
+
+The residual contribution of this paper is therefore narrow and must be stated as such: (i) injective agreement over (u,c,d,s,n_P,n_I), where s is an issuer session identifier and n_P,n_I are platform and issuer nonces, rather than agreement at the authenticator layer alone; (ii) a concrete sequence-of-games bound in which the dominant empirical term is calibrated rather than asymptotic; (iii) a Type-2 post-binding game distinct from the Type-1 binding game; (iv) a competing-duration exposure model with propagation delay counted once; and (v) a Bayes decision rule indexed to the information set available at decision time under delayed, censored, corrupted, and counterfactually missing labels. If prior work combining these five elements is identified, the claim narrows further.
+
+3. Protocol Sketch and Adversary Interface
+
+3.1 Binding protocol
+
+The platform P sends to issuer I:
+
+\text{Request}(c,u,d,n_P),
+
+where n_P is fresh. I creates session s, challenge n_I, and records (c,u,d,s,n_P,n_I) in issuer state. The cardholder authenticates through method m \in \mathcal{M}, where \mathcal{M} includes SMS-OTP, app push, FIDO, call-centre verification, and knowledge-based checks. I returns
+
+\alpha_I = \sigma_I(c,u,d,s,n_P,n_I,\tau,m,q),
+
+where q is assurance metadata and \sigma_I is a signature or MAC under issuer key material. P accepts only if \sigma_I verifies, both nonces are fresh and unconsumed, every field equals the request, and the attestation has not been consumed. Token issuance t follows acceptance.
+
+The protocol makes four requirements explicit that are often left implicit: an authenticated channel between P and I; issuer session state; single-use attestation consumption; and full-tuple equality rather than existential attestation checking. The classic failure is session confusion: an attestation for (c,u_1,d_1) accepted for (c,u_2,d_2) because only c is compared.
+
+3.2 Credential and factor state
+
+Let \mathcal{C} be the set of credentials. Each c \in \mathcal{C} carries a data-corruption flag \delta^{\text{data}}_c \in \{0,1\} and a factor-corruption flag \delta^{\text{factor}}_c \in \{0,1\}. The oracle \text{CorruptCredential}(c) sets \delta^{\text{data}}_c = 1 at no cost, representing the Type-1 starting capability. The oracle \text{CorruptFactor}(c) sets \delta^{\text{factor}}_c = 1 and is assigned the empirical rate \rho_c defined below. \text{IssuerAuth}(c,m) succeeds for an adversary-controlled authentication attempt only if \delta^{\text{factor}}_c = 1 or the authentication method itself is broken; the latter is folded into \rho_c.
+
+For each credential c, let
+
+\text{Authorized}(c) \subseteq \mathcal{U}
+
+be the set of platform accounts that the issuer recognizes as authorized for c. This set is determined by issuer policy and is not observable to the platform as a set; the platform observes only per-request attestations. The Type-1 adversary wins if the challenger records an accepted binding B(u,c,d,x,\tau)=1 with \delta^{\text{data}}_c=1, u \notin \text{Authorized}(c), and \delta^{\text{factor}}_c=0 throughout the game. The Type-2 adversary is defined separately in Section 5.
+
+3.3 Assurance monotonicity as a protocol invariant
+
+The current NIST authenticator-binding provision permits a lower-assurance session, such as AAL1, to bind a higher-assurance authenticator, such as AAL2 or AAL3. The proposed remediation is to require binding at an assurance level equal to or higher than the assurance level of the new authenticator. CABIM adopts this as an explicit invariant:
+
+Assurance monotonicity. If a binding is performed at assurance level a_{\text{bind}} and the bound credential will be usable at assurance level a_{\text{cred}}, then a_{\text{bind}} \geq a_{\text{cred}}.
+
+This is a proposed design constraint, not a description of current regulation. Its motivation is that a compromised lower-assurance authenticator must not be able to enroll a higher-assurance authenticator and thereby escalate control of the account.
+
+The EEA regulatory position provides a narrower but compatible reference: where SCA is required at token issuance, unlocking a mobile phone with biometrics or a PIN is not a valid SCA element for adding a card to a wallet unless the unlocking mechanism is under the issuer’s control or has been tied to the payer through prior SCA. That position is jurisdiction-specific and does not directly govern U.S. platform payment rails; CABIM treats it as evidence that the binding event is recognized as an authentication event requiring its own evidentiary basis, not as a globally portable legal requirement.
+
+4. The Type-1 Binding Game and Its Concrete Bound
+
+4.1 Game definition
+
+Let the challenger maintain honest issuer, platform, network, and token-service state. The adversary \mathcal{A} has access to oracles \text{CreateAccount}(u), \text{CorruptCredential}(c), \text{RequestBinding}(u,c,d), \text{IssuerAuth}(c,m), \text{CorruptFactor}(c), and \text{RevealToken}(t). The adversary wins if an accepted binding occurs for u \notin \text{Authorized}(c) with \delta^{\text{factor}}_c=0 and \delta^{\text{data}}_c=1. Define
+
+\mathbf{Adv}^{\text{bind}}_{\mathcal{A}}(\lambda,\rho)
+
+as the winning probability as a function of the cryptographic security parameter \lambda and the vector of empirical factor-corruption rates \rho = (\rho_c)_{c \in \mathcal{C}}.
+
+4.2 Sequence of games
+
+Game 0 is the real binding game.
+
+Game 1 replaces the issuer attestation with an ideal unforgeable primitive. The distinguishing advantage is bounded by the EUF-CMA advantage of a reduction \mathcal{B}_1 against \sigma_I:
+
+|\Pr[G_0] - \Pr[G_1]| \leq \mathbf{Adv}^{\text{euf-cma}}_{\mathcal{B}_1}(\lambda).
+
+Game 2 replaces n_P with an ideal random value and enforces single-use consumption. The distinguishing advantage is bounded by the probability of nonce collision or reuse among q_B binding queries:
+
+|\Pr[G_1] - \Pr[G_2]| \leq \frac{q_B^2}{2^{|\mathcal{N}|}}.
+
+Game 3 replaces the issuer session table with an ideal injective map from accepted binding tuples to issuer events, and replaces the platform–issuer channel with an authenticated channel. The distinguishing advantage is bounded by a reduction \mathcal{B}_3 against the authenticated-channel security and the session-table correctness property. Session-table correctness is the invariant that no two accepted bindings with distinct tuples map to the same issuer event. This is a property of the issuer’s state machine, not the conclusion of the theorem; the reduction \mathcal{B}_3 is assumed to exist, and if it does not, the term is stated as an assumption:
+
+|\Pr[G_2] - \Pr[G_3]| \leq \mathbf{Adv}^{\text{chan+table}}_{\mathcal{B}_3}(\lambda).
+
+Game 4 is the ideal game. In G_3, the adversary can win only by producing a valid attestation for an unauthorized account. In the ideal game, the only remaining route is factor corruption. The winning probability in G_3 is therefore bounded by the probability that the adversary causes factor corruption on at least one queried credential and then uses it before the game ends.
+
+4.3 Concrete factor-calibrated bound
+
+The factor term is not asymptotic. Let q_F be the number of distinct credentials on which the adversary attempts factor corruption, and let \rho_c be the per-credential factor-corruption success rate over the relevant time window, estimated from operational data. Under an independence assumption across credentials:
+
+\Pr[G_3] \leq 1 - \prod_{c \in \mathcal{Q}_F} (1 - \rho_c),
+
+where \mathcal{Q}_F is the set of queried credentials. For small \rho_c, this is approximately \sum_{c \in \mathcal{Q}_F} \rho_c. Combining:
+
+\mathbf{Adv}^{\text{bind}}_{\mathcal{A}}(\lambda,\rho) \;\leq\; \mathbf{Adv}^{\text{euf-cma}}_{\mathcal{B}_1}(\lambda) + \frac{q_B^2}{2^{|\mathcal{N}|}} + \mathbf{Adv}^{\text{chan+table}}_{\mathcal{B}_3}(\lambda) + \left(1 - \prod_{c \in \mathcal{Q}_F}(1-\rho_c)\right).
+
+Each term has a referent. The first is a standard signature assumption. The second is a freshness calculation over nonce length. The third is a protocol-modeling assumption about the authenticated channel and issuer session table. The fourth is an empirical rate that can be estimated and audited. If the empirical factor term dominates, cryptographic hardening of the attestation does not address the problem; the problem is authentication-channel security. If the channel-and-table term dominates, the problem is session binding.
+
+The bound does not establish that the issuer correctly identifies legal ownership, that factor corruption is independent across credentials, or that the platform implementation enforces the protocol. Those are stated conditions, not conclusions.
+
+4.4 Relationship to symbolic verification
+
+A ProVerif analysis of an issuer-managed FIDO-to-EMV-card binding reports authentication, integrity, confidentiality, and resistance to replay and man-in-the-middle attacks within the symbolic model. CABIM’s injective agreement condition is stronger at the account layer: it requires uniqueness of the issuer event across (u,c,d,s,n_P,n_I), not only agreement at the authenticator layer. Whether a symbolic model can encode account-level tuple equality without collapsing distinct tuples into a single syntactic representative is a modeling question that must be resolved before the injective-agreement lemma can be treated as checked. Until such a model is constructed and the uniqueness lemma is either proved or refuted with a trace, injective agreement over the full tuple remains a proof obligation, not a result.
+
+5. The Type-2 Post-Binding Game
+
+The Type-1 game conditions on the adversary lacking the factor. The Type-2 adversary compromises a platform account after a legitimate binding has been established. This is a distinct game because token validity is orthogonal to account control: a token issued for a legitimate binding can be used by an adversary who later controls the account.
+
+Let \text{CompromisePlatformAccount}(u) be an oracle that gives the adversary control of an account u for which a legitimate binding B(u,c,d,x,\tau)=1 already exists and for which a token t was issued. After compromise, the adversary can initiate transactions through P. The Type-2 game requires the platform to distinguish a transaction authorized by the legitimate account holder from one authorized by the adversary who controls u.
+
+Let A_2 \in \{\text{allow},\text{challenge},\text{suspend}\} be the platform’s action on a post-binding transaction. The Type-2 adversary wins if A_2=\text{allow} on a transaction that the legitimate account holder did not authorize. The available countermeasures are fresh platform-account authentication, step-up credential proof for sensitive actions, and account-level suspension. The Type-2 advantage is:
+
+\mathbf{Adv}^{\text{postbind}}_{\mathcal{A}}(\lambda,\rho_2)
+= \Pr[A_2=\text{allow} \mid \text{account compromised, transaction not authorized by holder}],
+
+where \rho_2 is the empirical rate at which post-binding account compromise occurs without triggering existing account-takeover controls. This game is not reducible to the Type-1 bound: a Type-1 failure produces an unauthorized binding, whereas a Type-2 failure produces unauthorized use of a previously authorized binding. The two failure modes require different controls and different detection signals.
+
+6. Lifecycle, Revocation, and Exposure
+
+6.1 States and re-entry conditions
+
+Let
+
+Q = \{\text{Pending},\text{Verified},\text{Active},\text{Suspended}_{\text{account}},\text{Suspended}_{\text{credential}},\text{Suspended}_{\text{device}},\text{Revoked}\}.
+
+Permitted transitions include \text{Active} \to \text{Suspended}_{\text{account}} on account compromise, \text{Active} \to \text{Suspended}_{\text{credential}} on credential compromise, and \text{Active} \to \text{Suspended}_{\text{device}} on device loss. Re-entry requires the cause-specific condition: account recovery and fresh platform authentication for \text{Suspended}_{\text{account}}; fresh issuer attestation for \text{Suspended}_{\text{credential}}; device re-enrollment for \text{Suspended}_{\text{device}}. \text{Revoked} is terminal.
+
+Revocation terminality (specification invariant). For every reachable state q, if q=\text{Revoked}, then no transition to any state other than \text{Revoked} exists.
+
+This is stated as an inductive invariant over the specification. It is not asserted as a theorem about implementations. Implementation-level enforcement requires a monotonic revocation epoch counter checked on every token use, and the inductive proof over the specification must be complemented by an argument that cached token state cannot bypass the epoch check. The specification invariant and the implementation mechanism are distinct obligations.
+
+6.2 Competing-duration exposure model
+
+Let
+
+T_{\text{detect}}
+
+be the time from unauthorized binding to detection,
+
+T_{\text{prop}}
+
+be the propagation delay from detection to effective revocation at all token locations, including caches and offline terminals, and
+
+T_{\text{monetize}}
+
+be the adversary-chosen time from provisioning to first fraudulent monetization. The effective revocation time is T_{\text{detect}} + T_{\text{prop}}, with propagation counted once inside the revocation interval. The residual loss is
+
+\mathbb{E}[L] = \ell \cdot \Pr[T_{\text{detect}} + T_{\text{prop}} > T_{\text{monetize}}],
+
+where \ell is the expected loss per monetized token. This is not a “competing risk” in the survival-analysis sense of mutually exclusive event types; it is a race between a detection-and-revocation duration and an adversary-controlled monetization duration. The survival function S_{\text{rev}}(t) = \Pr[T_{\text{detect}} + T_{\text{prop}} > t] and the distribution of T_{\text{monetize}} must both be estimated. An adversary who deliberately delays monetization shifts T_{\text{monetize}} to the right and increases expected loss even when detection is fast, which is why immediate post-provisioning monitoring is insufficient as a sole control.
+
+Visa’s operational data provide a baseline scale: token provisioning fraud losses were estimated at $450 million globally in 2022 and are estimated at $809 million in 2025. These figures describe a moving target, not a stationary parameter. The framework treats them as calibration inputs for \ell and for the prior over T_{\text{monetize}}, subject to revision as tokenization adoption and adversary adaptation change the distribution.
+
+7. Cross-Account Detection under Diversification and Label Impairment
+
+7.1 Detection formulation
+
+For each binding event e, let H_0 denote a legitimate attempt and H_1 a coordinated provisioning attempt. The platform observes a feature vector X(e) and chooses an action a \in \{\text{allow},\text{challenge},\text{review},\text{suspend},\text{reject}\}. A detector produces a score s(e), ideally calibrated to
+
+p_t(e) = \Pr[H_1 \mid X(e), \mathcal{F}_t],
+
+where \mathcal{F}_t is the information set available at decision time t. The subscript t is essential: calibration must be assessed relative to the information available at the decision epoch, not relative to eventual ground truth.
+
+7.2 Adversary diversification budget as a diagnostic, not a solved game
+
+Let B be a vector of resources the adversary can plausibly control or rent: distinct IPs, devices, accounts, BINs, and endpoints. The adversary chooses a distribution over observable keys to maximize successful bindings subject to cost. The platform chooses a decision rule to minimize expected loss subject to a false-positive constraint. This is a two-player game, but its equilibrium is not computed here, because the detector space is not compact and the adversary’s cost function is not identified from available data. CABIM requires instead that the platform explicitly state its assumed diversification budget \hat{B} and its detector’s estimated discrimination at that budget, and report the resulting conditional success probability as a scenario, not as a guarantee. The v0.2 counting identity is recovered as the degenerate case \hat{B} concentrated on a single key.
+
+7.3 Graph structure and the honest-seed assumption
+
+Graph-based Sybil detection ranks nodes by random-walk landing probability from a seed set of known honest nodes, on the assumption that attack edges between fake and honest regions are limited. That assumption is plausible in social networks with large-scale infiltration constraints. A payment account–device–credential graph does not generally provide an equivalent honest-seed structure: the platform may have no verified honest set at the granularity of the graph, and shared devices, family accounts, and workplace networks create benign dense clusters that mimic coordinated structure. Graph signals are therefore informative but not self-validating. They require an independent identity-proofing anchor, and in its absence the graph score inherits the false-association risk of the underlying key collection.
+
+7.4 Label impairment
+
+Card-payment fraud detection faces delayed labels, selective censoring, corruption by first-party misuse and dispute noise, and counterfactual absence for declined transactions. These impairments impose a minimax regret lower bound that no learning rule can evade, and they enter multiplicatively in the denominator of the achievable learning rate. A detector estimated on naively treated labels will be optimistically biased relative to a delay-adjusted and censoring-adjusted estimate. The framework therefore requires that any reported detection performance distinguish at least six label types: confirmed unauthorized binding, confirmed unauthorized transaction, account takeover, authentication failure, false-positive intervention, and unresolved or disputed. Performance estimated without a label-impairment model is treated as an upper bound on deployable performance, not as a point estimate.
+
+8. Decision Rule under a False-Positive Constraint
+
+Let C_{\text{FN}} be the cost of allowing an unauthorized binding and C_{\text{FP}} the cost of blocking a legitimate one. Under a calibrated p_t, the Bayes rule rejects when
+
+p_t \cdot C_{\text{FN}} > (1-p_t)\cdot C_{\text{FP}}.
+
+The threshold is
+
+p^* = \frac{C_{\text{FP}}}{C_{\text{FN}}+C_{\text{FP}}}.
+
+The constrained optimization is
+
+\pi^* = \arg\min_{\pi} \mathbb{E}[C(\pi)]
+\quad \text{s.t.} \quad
+\Pr[\text{unauthorized binding}\mid \pi] \leq \delta_b,\;
+\Pr[\text{false positive}\mid \pi] \leq \delta_{\text{FP}}.
+
+The false-positive constraint is necessary for feasibility, but it is not true that “reject everything” is optimal without it: when false-decline cost is included in C(\pi), rejecting everything incurs C_{\text{FP}} on every legitimate attempt and is generally dominated. The correct statement is that the constraint set must be non-empty: there must exist a policy achieving both \delta_b and \delta_{\text{FP}} at some operating point. If no such policy exists, the problem is over-constrained and the platform must relax one bound or acquire a better feature distribution. The optimization is stated under \mathcal{F}_t, because p_t is the decision-time calibrated probability, not the eventual ground-truth probability. A policy that is Bayes-optimal under \mathcal{F}_t may be suboptimal under eventual labels; the framework does not claim global optimality.
+
+Public authentication statistics, such as a North American 3-D Secure success rate of 85% and a frictionless rate of 54%, describe outcomes conditional on a request occurring. They do not identify the causal effect of a challenge on abandonment, because challenged users are selected on risk. A holdout or shadow-scoring design, or a randomized threshold band, is required for any causal claim about friction. Without it, the counterfactual fraud rate and the counterfactual abandonment rate are unidentified.
+
+9. Falsifiable Hypotheses
+
+H1 (Conditional possession insufficiency). Under the protocol of Section 3.1 and the game of Section 4, if the EUF-CMA reduction, the nonce-freshness calculation, and the authenticated-channel-and-session-table reduction exist, then the Type-1 advantage is bounded by the sum in Section 4.3. If any reduction fails to construct, H1 is falsified for that mechanism and the corresponding term must be restated as an assumption. This is a proof obligation, not an experiment.
+
+H2 (Assurance monotonicity). Bindings performed at an assurance level below the assurance level of the bound credential exhibit a higher subsequent account-takeover rate than bindings performed at or above that level, conditional on credential risk score and account tenure. Because assurance level is assigned by risk, the comparison must use an instrument or a discontinuity in the assignment rule; an unadjusted comparison is confounded by design.
+
+H3 (Graph-plus-feature detection under label impairment). At a fixed decision-time false-positive budget, a detector combining graph-structural and event-feature signals identifies a greater proportion of coordinated binding attempts than an account-local velocity control, when both are evaluated with a label-delay and censoring adjustment. The comparison must use the same impaired-label evaluation protocol; a comparison on naively labeled data does not test the hypothesis.
+
+H4 (Issuance ordering). Under an unchanged issuer authentication policy, enforcing token issuance only after full-tuple attestation verification reduces unauthorized provisioning relative to an issue-then-verify sequence. The test must hold the authentication policy and the population fixed; a comparison against a system with a different authentication policy does not identify the ordering effect.
+
+H5 (Revocation latency and monetization delay). Expected loss from unauthorized binding is predicted by the race between T_{\text{detect}}+T_{\text{prop}} and T_{\text{monetize}}, and the predictive model outperforms a model that uses token validity alone. The test estimates both survival functions on a held-out period and compares predicted loss to observed loss.
+
+H6 (Label-impairment bias). Detector performance estimated without a delay-and-censoring model is optimistically biased relative to performance estimated with such a model on the same period, and the magnitude of the bias increases with the impairment multipliers identified in the regret-bound literature. A failure of the bias to increase with impairment would falsify the hypothesis that the impairment mechanism is operative in the evaluated setting.
+
+10. Limitations
+
+Factor independence. The factor-calibrated bound assumes independence of corruption across credentials. If a single SIM-swap event compromises multiple registered numbers or a single social-engineering campaign targets a cluster of accounts, the sum \sum \rho_c overstates the bound’s tightness. The bound should be interpreted as a conservative envelope under independence, not as a calibrated prediction under correlated corruption.
+
+Symbolic-to-computational gap. The ProVerif analysis of the closest issuer-managed framework is a symbolic verification. CABIM’s injective-agreement lemma, if checked symbolically, inherits the standard gap between symbolic and computational models. The concrete bound of Section 4.3 is a computational statement with named assumptions; the symbolic model, if constructed, is a separate and complementary artifact.
+
+Platform implementation. The game-hopping bound assumes the platform enforces the protocol. A correct specification with an implementation that omits full-tuple comparison or attestation consumption is insecure. The revocation-epoch mechanism is a specification-level requirement whose implementation must be separately audited.
+
+Authorized-user ambiguity. \text{Authorized}(c) is issuer-recognized authorization, not legal ownership. A person may be authorized to use a credential without being its owner. The model does not resolve that distinction.
+
+High-diversification adversary. If the adversary’s diversification budget is large enough that its observable distribution is indistinguishable from the honest population, no detector can separate the two without additional identity proofing. At that boundary the problem becomes an identity-proofing problem, not a risk-scoring problem.
+
+Identifiability without a holdout. The counterfactual fraud rate under a different policy is not identified from observational data. Every causal claim in H2–H4 requires a holdout, a shadow score, or a randomized threshold band. The framework states this as a condition on the empirical design, not as a defect of the model.
+
+Privacy and false association. Device fingerprinting and cross-account correlation create re-identification risk and false association for shared devices and networks. Retention limits, purpose limitation, rotating-salt hashing beyond a short operational window, and a fairness audit on infrastructure-sharing populations are necessary conditions for deployment; they are not solved by the detection formulation itself.
+
+11. Conclusion
+
+The binding boundary is a security event in its own right. Possession of a credential is not authorization, a valid token is not evidence of a legitimate binding, and a transaction-level approval does not validate the provisioning event that preceded it. This paper has given a conditional, game-based account of that boundary: a concrete Type-1 bound in which the dominant empirical term is calibrated rather than asymptotic; a separate Type-2 game for post-binding account compromise; a lifecycle model in which revocation terminality is a specification invariant and exposure is a race between detection-plus-propagation and adversary-chosen monetization; a detection formulation that treats the adversary’s diversification budget as a stated scenario rather than a solved equilibrium; and a Bayes decision rule indexed to the information available at decision time under label impairment. The hypotheses are stated so that they can fail. The next step is not another control but the construction of the symbolic model, the attempt at the injective-agreement lemma with the possibility of a refuting trace, and a pre-registered holdout design that estimates the factor-calibration rates and the label-impairment multipliers. Until those steps are taken, the framework is a falsifiable proposal with named assumptions, not a verified guarantee.
+
+Appendices
+
+Appendix A. Notation and Preliminaries
+
+Symbol Meaning
+u \in \mathcal{U} Platform account identifier
+c \in \mathcal{C} Payment credential
+d Device or binding context
+t Network token issued by token service provider N
+I,\,P Issuing institution; platform
+s Issuer session identifier
+n_P,\,n_I Platform and issuer nonces, drawn from \mathcal{N} with \(
+\alpha_I=\sigma_I(\cdot) Issuer attestation under key material of I
+\delta_c^{\mathrm{data}}\in\{0,1\} Data-corruption flag for c
+\delta_c^{\mathrm{factor}}\in\{0,1\} Factor-corruption flag for c
+\rho_c Empirical factor-corruption success rate for c over the relevant window
+\mathrm{Authorized}(c)\subseteq\mathcal{U} Issuer-recognized authorized accounts for c
+B(u,c,d,x,\tau)\in\{0,1\} Binding decision at time \tau
+\mathcal{F}_t Information set available to P at decision time t
+T_{\mathrm{detect}},\,T_{\mathrm{prop}},\,T_{\mathrm{monetize}} Detection, propagation, and adversary-chosen monetization durations
+\ell Expected loss per monetized token
+Q Lifecycle state space
+\lambda Cryptographic security parameter
+
+All oracles below are stateful. Nonces are sampled uniformly from \mathcal{N}.
+
+Appendix B. Formal Type-1 Binding Game
+
+Experiment \mathbf{Exp}^{\mathrm{bind}}_{\mathcal{A}}(\lambda,\rho).
+
+1. The challenger initializes honest issuer, platform, network, and token-service state, with \delta_c^{\mathrm{data}}=\delta_c^{\mathrm{factor}}=0 for all c\in\mathcal{C}.
+2. \mathcal{A} receives oracle access to:
+   · \mathrm{CreateAccount}(u);
+   · \mathrm{CorruptCredential}(c), which sets \delta_c^{\mathrm{data}}\leftarrow 1 at no cost;
+   · \mathrm{RequestBinding}(u,c,d);
+   · \mathrm{IssuerAuth}(c,m), which succeeds for an adversary-controlled attempt only if \delta_c^{\mathrm{factor}}=1, with method-level failures absorbed into \rho_c;
+   · \mathrm{CorruptFactor}(c), which sets \delta_c^{\mathrm{factor}}\leftarrow 1 with probability \rho_c;
+   · \mathrm{RevealToken}(t).
+3. \mathcal{A} may interleave queries arbitrarily.
+4. The experiment outputs 1 iff there exists an accepted binding B(u,c,d,x,\tau)=1 with \delta_c^{\mathrm{data}}=1, u\notin\mathrm{Authorized}(c), and \delta_c^{\mathrm{factor}}=0 throughout.
+
+The Type-1 advantage is
+
+\mathbf{Adv}^{\mathrm{bind}}_{\mathcal{A}}(\lambda,\rho)
+=\Pr\!\left[\mathbf{Exp}^{\mathrm{bind}}_{\mathcal{A}}(\lambda,\rho)=1\right].
+
+The winning condition is deliberately narrower than “the adversary obtains a token.” A token obtained through a corrupt factor is a Type-1 win only if the factor corruption is the causal route; a token obtained through a cryptographically forged attestation is a Type-1 win irrespective of factor state. The \delta_c^{\mathrm{factor}}=0 condition isolates the possession-insufficiency claim from the factor-corruption claim.
+
+Appendix C. Sequence of Games and Concrete Bound
+
+Game 0 is \mathbf{Exp}^{\mathrm{bind}}_{\mathcal{A}}.
+
+Game 1 (ideal attestation). Replace \sigma_I by an ideal unforgeable primitive. Any distinguishing event yields a reduction \mathcal{B}_1 against EUF-CMA:
+
+\bigl|\Pr[G_0]-\Pr[G_1]\bigr|
+\le \mathbf{Adv}^{\mathrm{euf\text{-}cma}}_{\mathcal{B}_1}(\lambda).
+
+Game 2 (fresh, single-use nonces). Replace every n_P by an ideal uniform value and enforce single-use consumption of both nonces. The distinguishing event is a collision or reuse among q_B binding queries:
+
+\bigl|\Pr[G_1]-\Pr[G_2]\bigr|
+\le \frac{q_B^2}{2^{|\mathcal{N}|}}.
+
+Game 3 (authenticated channel and ideal session table). Replace the P–I channel by an ideal authenticated channel and the issuer session table by an ideal injective map from accepted tuples (u,c,d,s,n_P,n_I) to issuer events. The distinguishing advantage is bounded by a reduction \mathcal{B}_3:
+
+\bigl|\Pr[G_2]-\Pr[G_3]\bigr|
+\le \mathbf{Adv}^{\mathrm{chan+table}}_{\mathcal{B}_3}(\lambda).
+
+The property in the reduction is session-table correctness: no two distinct accepted tuples map to the same issuer event. This is a correctness property of the issuer’s state machine, not the injective-agreement conclusion. If no reduction to the authenticated-channel and table primitives can be constructed, the term must be stated as an assumption.
+
+Game 4 (factor-only winning route). In G_3, the sole remaining winning strategy is factor corruption on at least one queried credential followed by use before the experiment ends. Let \mathcal{Q}_F be the set of distinct credentials on which \mathcal{A} queries \mathrm{CorruptFactor}. Under independence across credentials,
+
+\Pr[G_3]\le 1-\prod_{c\in\mathcal{Q}_F}(1-\rho_c),
+
+and for small \rho_c the right-hand side is approximately \sum_{c\in\mathcal{Q}_F}\rho_c.
+
+Combining,
+
+\mathbf{Adv}^{\mathrm{bind}}_{\mathcal{A}}(\lambda,\rho)
+\le \mathbf{Adv}^{\mathrm{euf\text{-}cma}}_{\mathcal{B}_1}(\lambda)
++ \frac{q_B^2}{2^{|\mathcal{N}|}}
++ \mathbf{Adv}^{\mathrm{chan+table}}_{\mathcal{B}_3}(\lambda)
++ \left(1-\prod_{c\in\mathcal{Q}_F}(1-\rho_c)\right).
+
+The first three terms are asymptotic in \lambda. The fourth is not: SIM-swap, message redirection, call-centre social engineering, and authenticator rebinding are not parameterised by a cryptographic security parameter. The bound is therefore a mixed asymptotic–empirical statement, and its diagnostic value lies in identifying which term dominates in a given deployment. If the factor term dominates, hardening \sigma_I does not address the binding risk; the relevant control is authentication-channel security. If the channel-and-table term dominates, the relevant control is session binding and attestation consumption.
+
+Appendix D. Type-2 Post-Binding Game
+
+Experiment \mathbf{Exp}^{\mathrm{postbind}}_{\mathcal{A}}(\lambda,\rho_2).
+
+1. The challenger runs a legitimate binding producing an accepted token t for account u.
+2. \mathcal{A} receives \mathrm{CompromisePlatformAccount}(u), granting control of u.
+3. After compromise, \mathcal{A} may initiate transactions through P.
+4. For each post-binding transaction, P outputs A_2\in\{\mathrm{allow},\mathrm{challenge},\mathrm{suspend}\}.
+5. The experiment outputs 1 iff A_2=\mathrm{allow} on a transaction that the legitimate holder did not authorize.
+
+The Type-2 advantage is
+
+\mathbf{Adv}^{\mathrm{postbind}}_{\mathcal{A}}(\lambda,\rho_2)
+=\Pr\!\left[A_2=\mathrm{allow}\mid\text{account compromised, transaction unauthorized by holder}\right],
+
+where \rho_2 is the empirical rate of post-binding compromise that evades existing account-takeover controls.
+
+The Type-2 game is not a corollary of the Type-1 bound. A Type-1 win produces an unauthorized binding; a Type-2 win produces unauthorized use of a previously authorized binding. The controls differ: Type-1 is addressed by attestation binding and issuance ordering; Type-2 is addressed by fresh account authentication and step-up credential proof on sensitive post-binding actions.
+
+Appendix E. Lifecycle State Machine and Revocation Terminality
+
+State space.
+
+Q=\{\mathrm{Pending},\mathrm{Verified},\mathrm{Active},
+\mathrm{Suspended}_{\mathrm{account}},
+\mathrm{Suspended}_{\mathrm{credential}},
+\mathrm{Suspended}_{\mathrm{device}},
+\mathrm{Revoked}\}.
+
+Permitted transitions (excerpt).
+
+· \mathrm{Active}\to\mathrm{Suspended}_{\mathrm{account}} on account compromise;
+· \mathrm{Active}\to\mathrm{Suspended}_{\mathrm{credential}} on credential compromise;
+· \mathrm{Active}\to\mathrm{Suspended}_{\mathrm{device}} on device loss;
+· re-entry from each suspended state requires the cause-specific recovery condition: account recovery and fresh platform authentication for \mathrm{Suspended}_{\mathrm{account}}; fresh issuer attestation for \mathrm{Suspended}_{\mathrm{credential}}; device re-enrollment for \mathrm{Suspended}_{\mathrm{device}};
+· \mathrm{Revoked} is absorbing.
+
+Revocation terminality (specification invariant). For every reachable state q, if q=\mathrm{Revoked}, then the only transition is the self-loop \mathrm{Revoked}\to\mathrm{Revoked}.
+
+This is stated as an inductive invariant over the specification, not as a theorem about implementations. Implementation-level enforcement requires a monotonic revocation-epoch counter checked on every token use, together with an argument that cached token state cannot bypass the epoch check. The specification proof and the implementation audit are distinct obligations; satisfying the former does not discharge the latter.
+
+The EMVCo Payment Tokenisation Specification provides real-time and continuous lifecycle management (issue, suspend, resume, delete, activate, expiry), with lifecycle events triggerable by different parties. CABIM’s state space refines that lifecycle by adding cause-specific suspension states and re-entry conditions. The refinement is not a claim that EMVCo lifecycle management is absent; it is a claim that a single \mathrm{Suspended} state does not encode the recovery condition, and that the recovery condition determines whether a suspended binding may safely return to \mathrm{Active}.
+
+Appendix F. Competing-Duration Exposure Model
+
+Let
+
+T_{\mathrm{rev}}=T_{\mathrm{detect}}+T_{\mathrm{prop}},
+
+with propagation counted once inside the revocation interval. Residual expected loss is
+
+\mathbb{E}[L]
+=\ell\cdot\Pr\!\left[T_{\mathrm{rev}}>T_{\mathrm{monetize}}\right]
+=\ell\cdot\mathbb{E}\!\left[S_{\mathrm{rev}}(T_{\mathrm{monetize}})\right],
+
+where S_{\mathrm{rev}}(t)=\Pr[T_{\mathrm{rev}}>t].
+
+This is a race between a revocation duration and an adversary-controlled monetization duration, not a competing-risk model in the survival-analysis sense of mutually exclusive event types. The distinction matters for estimation: T_{\mathrm{monetize}} is chosen by the adversary and may be deliberately right-shifted, so an empirical estimate of its distribution from observed fraud must account for the adversary’s selection. Immediate post-provisioning monitoring observes only the early portion of the T_{\mathrm{monetize}} distribution and therefore systematically underestimates the exposure from delayed monetization.
+
+Visa’s operational estimates provide scale for \ell and for the prior over T_{\mathrm{monetize}}: token provisioning fraud losses are estimated at $809 million globally in 2025, up from $450 million in 2022 (Visa MIS; based on Visa Product Brands, VisaNet Clearing and Settlement and Fraud Reporting as of 25 July 2025). These are moving targets, not stationary parameters. They calibrate the order of magnitude of \ell and the direction of change in the adversary’s provisioning capability; they do not fix the distributions required for a deployment-specific exposure calculation.
+
+Appendix G. Decision Rule and Feasibility
+
+Let p_t(e)=\Pr[H_1\mid X(e),\mathcal{F}_t] be the decision-time calibrated probability. The unconstrained Bayes rule rejects when
+
+p_t\cdot C_{\mathrm{FN}}>(1-p_t)\cdot C_{\mathrm{FP}},
+
+equivalently when p_t>p^* with
+
+p^*=\frac{C_{\mathrm{FP}}}{C_{\mathrm{FN}}+C_{\mathrm{FP}}}.
+
+The constrained program is
+
+\pi^*=\arg\min_{\pi}\mathbb{E}[C(\pi)]
+\quad\text{s.t.}\quad
+\Pr[\text{unauthorized binding}\mid\pi]\le\delta_b,\;
+\Pr[\text{false positive}\mid\pi]\le\delta_{\mathrm{FP}}.
+
+The constraint set must be non-empty. If no policy simultaneously satisfies both bounds, the problem is over-constrained and either a bound must be relaxed or a richer feature distribution acquired. The statement that “reject everything is optimal” is false when false-decline cost is included in C(\pi): rejecting everything incurs C_{\mathrm{FP}} on every legitimate attempt and is generally dominated. The correct feasibility condition is the existence of an operating point achieving both \delta_b and \delta_{\mathrm{FP}}, not the absence of a false-positive constraint.
+
+All calibration and performance claims are stated relative to \mathcal{F}_t. A policy that is Bayes-optimal under \mathcal{F}_t need not be optimal under eventual ground-truth labels. The framework does not claim global optimality; it claims decision-time optimality given the information available when the decision is made.
+
+Appendix H. Identification Strategies for the Six Hypotheses
+
+H1. Proof obligation. If any of the three reductions (EUF-CMA, nonce freshness, authenticated channel and session table) fails to construct, the corresponding term is restated as an assumption and H1 is falsified for that mechanism. H1 is not an experiment.
+
+H2 (assurance monotonicity). The current NIST provision permits a lower-assurance session to bind a higher-assurance authenticator: SP 800-63B-4 requires authentication at the lower of the maximum AAL currently available in the subscriber account and the maximum AAL at which the new authenticator will be used. Sakimura’s analysis identifies the resulting takeover path and proposes binding at an AAL equal to or higher than the new authenticator’s AAL, registration at the current session’s AAL, or repeated identity proofing. CABIM adopts the equal-or-higher rule as a proposed invariant, not as a description of current NIST requirements. Testing H2 requires an instrument or a discontinuity in the assurance-assignment rule, because assurance is assigned by risk and an unadjusted comparison of takeover rates by assurance level is confounded by design.
+
+H3 (graph-plus-feature detection). Both detectors must be evaluated under the same delay-and-censoring adjustment. A comparison on naively labeled data does not test the hypothesis, because the impairment multipliers identified in the regret-bound literature enter multiplicatively and affect both detectors asymmetrically. The comparison requires a held-out attack set and a fixed decision-time false-positive budget.
+
+H4 (issuance ordering). Authentication policy and population must be held fixed. A comparison against a system that also changed authentication policy does not identify the ordering effect. The appropriate design is a staged rollout with shadow scoring, in which the issue-then-verify and verify-then-issue sequences are applied to comparable populations under the same issuer policy.
+
+H5 (revocation latency). Estimate S_{\mathrm{rev}} and the distribution of T_{\mathrm{monetize}} on a held-out period, and compare predicted loss under the race model to observed loss and to a baseline that uses token validity alone. The estimate of T_{\mathrm{monetize}} must account for adversary selection; an estimate based only on observed fraud in the early post-provisioning window is biased downward.
+
+H6 (label-impairment bias). On the same period, compute detector performance with and without a delay-and-censoring model. The optimistic bias must increase with the impairment multipliers. The reference formalisation is Dhama’s minimax regret bound for delayed, censored, corrupted, and counterfactually missing feedback, which shows that these impairments enter multiplicatively in the denominator of the achievable learning rate and that improving issuer reporting quality or reducing censorship can reduce the regret floor more than increasing model complexity. H6 is falsified if the bias does not increase with impairment, or if a model estimated on naively treated labels matches the adjusted estimate within the pre-registered tolerance.
+
+The EBA position in Q&A 2021_6145 provides a jurisdiction-specific reference point for the binding event: unlocking a mobile phone with biometrics or a PIN is not a valid SCA element for adding a payment card to a digital wallet unless the screen-locking mechanism is under the issuer’s control or the unlocking has been tied to the payer through prior SCA. That position is EU law and does not directly govern U.S. platform payment rails. CABIM uses it as evidence that the binding event is recognised as an authentication event requiring its own evidentiary basis, not as a portable legal requirement. Similarly, the FIDO-in-3DS guidance published by EMVCo (28 October 2020) and the ProVerif-verified issuer-managed 3DS–FIDO framework (IEEE, 16 November 2026) provide the closest protocol-level references; the 2026 framework’s revocation mechanism and symbolic verification are integrated into the comparison, not claimed as CABIM results.
+
+Appendix I. ASCII Diagrams
+
+The diagrams below accompany Appendices B–H. They are rendered in fixed-width ASCII so that they survive plain-text transmission and diff-based version control. Each diagram is referenced from the appendix it illustrates.
+
+---
+
+I.1 Binding protocol message flow (Appendix B, Section 3.1)
+
+```
+ Cardholder          Platform P               Issuer I
+     |                   |                       |
+     | add credential    |                       |
+     |------------------>|                       |
+     |                   | Request(c,u,d,n_P)    |
+     |                   |---------------------->|
+     |                   |                       | s  := new session
+     |                   |                       | st := (c,u,d,s,n_P,n_I)
+     |   challenge n_I   |                       |
+     |<------------------------------------------|
+     |   authenticate m  |                       |
+     |------------------------------------------>|
+     |                   | alpha_I = sigma_I(c,u,d,s,n_P,n_I,tau,m,q)
+     |                   |<----------------------|
+     |                   |                       |
+     |                   | VERIFY                |
+     |                   |  [1] sigma_I valid    |
+     |                   |  [2] n_P, n_I fresh   |
+     |                   |  [3] every field ==   |
+     |                   |      request tuple    |
+     |                   |  [4] not consumed     |
+     |                   |                       |
+     |                   | ACCEPT:               |
+     |                   |  t := TokenSvc(...)   |
+     |                   |  B(u,c,d,x,tau) := 1  |
+```
+
+The four verification conditions are the obligations that make the tuple equality of Appendix C meaningful. Omitting [3] produces the session-confusion failure in I.2. Omitting [4] permits replay within the freshness window. Omitting [2] permits stale attestation reuse. Omitting [1] defeats the reduction to EUF-CMA.
+
+---
+
+I.2 Session confusion: the failure that injective agreement excludes (Appendix C, Game 3)
+
+```
+ Intended binding:   (c, u1, d1)
+ Issuer attestation: sigma_I(c, u1, d1, s, n_P, n_I)
+
+ Presented binding:  (c, u2, d2)   with the same sigma_I
+
+ Check performed          Field        Result
+ ------------------------ ------------ ---------------------------
+ sigma_I verifies         -            PASS  (valid issuer signature)
+ credential matches       c            PASS  (same credential)
+ nonces fresh             n_P, n_I     PASS  (within window)
+ attestation unconsumed   -            PASS  (first presentation)
+ account matches          u2 vs u1     NOT CHECKED   <-- break
+ device matches           d2 vs d1     NOT CHECKED   <-- break
+
+ Consequence:
+   one issuer event  --->  two accepted bindings
+   non-injective agreement holds (some event exists)
+   injective agreement fails (the event is not unique)
+```
+
+Session-table correctness in Game 3 is precisely the property that forbids this: no two distinct accepted tuples map to the same issuer event. The reduction \mathcal{B}_3 is a reduction to that property plus authenticated-channel security, not a reduction to the conclusion.
+
+---
+
+I.3 Lifecycle: forward path, suspension causes, and terminality (Appendix E)
+
+Forward path:
+
+```
+          +-----------+
+  start-->|  Pending  |
+          +-----------+
+                |
+                | issuer attestation accepted
+                v
+          +-----------+
+          | Verified  |
+          +-----------+
+                |
+                | token t issued
+                v
+          +-----------+
+          |  Active   |
+          +-----------+
+```
+
+Suspension causes and cause-specific re-entry:
+
+```
+  Active --(account compromise)----> Sus_Acct --(recovery + fresh P auth)--> Active
+  Active --(credential compromise)--> Sus_Cred --(fresh issuer attestation)--> Active
+  Active --(device loss)------------> Sus_Dev  --(device re-enrollment)-------> Active
+
+  Distinct re-entry conditions are the reason a single Suspended state
+  is insufficient: account recovery does not re-establish credential
+  control, and credential re-authentication does not re-establish
+  device integrity.
+```
+
+Terminality with implementation check:
+
+```
+  any state --(irreversible)--> +-----------+
+                                |  Revoked  |
+                                +-----------+
+                                      |
+                                      +--> self-loop only  (spec invariant)
+
+  implementation obligation:
+    every token use  --->  read epoch counter E
+                           reject if E < E_revoked(c,u)
+                           cached state cannot bypass the read
+
+  spec proof  !=  implementation audit
+```
+
+---
+
+I.4 Game-hop ladder and where each term enters (Appendix C)
+
+```
+  G0   real binding game
+   |
+   |  hop distance <= Adv^{euf-cma}_{B1}(lambda)          [signature]
+   v
+  G1   ideal unforgeable attestation
+   |
+   |  hop distance <= q_B^2 / 2^{|N|}                     [freshness]
+   v
+  G2   ideal fresh nonces, single-use consumption
+   |
+   |  hop distance <= Adv^{chan+table}_{B3}(lambda)       [session binding]
+   v
+  G3   ideal authenticated channel + injective session table
+   |
+   |  remaining route: factor corruption only
+   v
+  G4   win requires factor corruption on some c in Q_F
+       Pr[G3] <= 1 - prod_{c in Q_F} (1 - rho_c)          [empirical]
+
+  -------------------------------------------------------------------
+  Adv^bind_A(lambda,rho)
+      <= Adv^{euf-cma}_{B1} + q_B^2/2^{|N|}
+         + Adv^{chan+table}_{B3} + (1 - prod (1 - rho_c))
+  -------------------------------------------------------------------
+
+  Terms 1-3 are asymptotic in lambda.
+  Term 4 is not: SIM swap, SS7 redirection, call-centre social
+  engineering and authenticator rebinding are not parameterised by lambda.
+```
+
+The ladder exposes which term is diagnostic. If term 4 dominates, hardening \sigma_I does not reduce binding risk; the relevant control is authentication-channel security.
+
+---
+
+I.5 Adversary oracle interface and cost structure (Appendix B)
+
+```
+                    +-----------------------------+
+                    |      Adversary A (Type 1)   |
+                    +-----------------------------+
+                       |     |      |      |     |
+        +--------------+     |      |      |     +--------------+
+        |                    |      |      |                    |
+        v                    v      |      v                    v
+  CreateAccount     CorruptCredential|  RequestBinding      RevealToken
+   (free)            (free: sets     |   (observed)          (post-issue)
+                      data flag)     |       |
+                                     |       v
+                                     |  IssuerAuth(c,m)
+                              CorruptFactor(c)   (succeeds only if
+                              (prob rho_c)        factor flag = 1)
+
+  Win condition:
+    B(u,c,d,x,tau) = 1  AND  data flag = 1
+                        AND  u not in Authorized(c)
+                        AND  factor flag = 0 throughout
+
+  Cost table
+  ---------------------------------------------
+  data corruption       0            (free)
+  factor corruption     rho_c        (empirical, per credential)
+  binding queries       q_B          (counts in nonce term)
+  nonce space           2^{|N|}      (counts in nonce term)
+  ---------------------------------------------
+```
+
+The Type-2 game is a separate experiment (Appendix D) and is not reachable through these oracles.
+
+---
+
+I.6 Type-1 and Type-2 failure timelines are distinct (Appendices B and D)
+
+```
+ TYPE 1  unauthorized binding
+ binding event        detection             effective revocation
+      |                  |                         |
+      x---- E_bind ----->|---- T_prop ------------>|
+      ^                  ^                         ^
+   A wins here       P notices            all token locations
+
+ TYPE 2  post-binding compromise
+ legitimate binding       account compromise        misuse attempt
+      |                        |                         |
+      x------ legitimate ----->x---- A_2 decision ------>|
+      |                        ^                         ^
+   binding is             A gains control            A_2 = allow is
+   authorized             of account u               the Type-2 win
+```
+
+A Type-1 failure produces an unauthorized binding. A Type-2 failure produces unauthorized use of a previously authorized binding. The controls differ: Type-1 by attestation binding and issuance ordering; Type-2 by fresh account authentication and step-up credential proof.
+
+---
+
+I.7 Exposure race and three regimes (Appendix F)
+
+```
+ Regime A  revocation wins
+ time ---->
+  detect|prop
+    |    |
+    v    v
+ ---x----x--------------------[ monetize ]------>   loss = 0
+        T_rev                 T_monetize
+
+ Regime B  monetization wins narrowly
+ ---x----x-------[ monetize ]------------------->   loss = ell
+
+ Regime C  delayed monetization defeats fast detection
+ ---x----x----------------------------[ monetize ]-> loss = ell
+    ^
+    detection fast, propagation short, loss occurs anyway
+    because the adversary right-shifts T_monetize
+
+  Revocation duration :  T_rev = T_detect + T_prop   (prop counted once)
+  Win condition       :  T_rev > T_monetize
+  Expected loss       :  E[L] = ell * E[ S_rev(T_monetize) ]
+  Estimator warning   :  observed fraud in the early window
+                         truncates T_monetize from below
+```
+
+Propagation delay is counted once, inside T_{\mathrm{rev}}. It is not added on top of T_{\mathrm{rev}}.
+
+---
+
+I.8 Decision pipeline with impaired-label feedback (Appendices G and H)
+
+```
+  binding event e
+        |
+        v
+  +------------------+
+  | feature extract  |   X(e)
+  +------------------+
+        |
+        v
+  +------------------+        +--------------------------+
+  | calibrated score |------->| decision rule pi         |
+  | p_t(e) =         |        | allow / challenge /      |
+  | Pr[H1 | X, F_t]  |        | review / suspend / reject|
+  +------------------+        +--------------------------+
+        ^                              |
+        |                              v
+        |                       action taken
+        |                              |
+        |                              v
+        |                     +------------------+
+        |                     | outcome observed |
+        |                     | after delay      |
+        |                     +------------------+
+        |                              |
+        |     +------------------------+------------------------+
+        |     |                        |                        |
+        |     v                        v                        v
+        | delayed                  censored              counterfactual
+        | labels                   labels                missing
+        | (weeks to months)        (never reported)      (declined,
+        |     |                        |                 no outcome)
+        +-----+------------------------+------------------------+
+                             |
+                             v
+                  +---------------------------+
+                  | label impairment layer    |
+                  | delay + censoring +       |
+                  | corruption adjustment     |
+                  +---------------------------+
+
+  Calibration target is p_t = Pr[H1 | X, F_t],
+  not Pr[H1 | X, final labels].
+```
+
+Feasibility of the constrained program in Appendix G requires a non-empty constraint set. When no operating point satisfies both \delta_b and \delta_{\mathrm{FP}}, the problem is over-constrained; the response is to relax a bound or acquire a richer feature distribution, not to reject everything.
+
+---
+
+I.9 Non-implication structure of the five properties (Section 1, Conclusion)
+
+```
+  +-------------+     +---------------+     +-------------------+     +-----------+
+  | possession  |     | authorization |     | binding integrity |     | token     |
+  | of c        |     | issuer-recog. |     | unique full tuple |     | validity  |
+  +-------------+     +---------------+     +-------------------+     +-----------+
+        |                     |                       |                     |
+        +----- no implication in either direction along this chain --------+
+
+  +--------------------+------------------------------------------------------+
+  | property pair      | separating instance                                  |
+  +--------------------+------------------------------------------------------+
+  | possession -> auth | stolen PAN and CVV without the issuer factor          |
+  | auth -> integrity  | issuer approval for (c,u1,d1) reused for (c,u2,d2)   |
+  | integrity -> tok.  | valid binding later revoked; token still cached       |
+  | tok. valid -> leg. | cryptographically valid token from unauthorized bind   |
+  +--------------------+------------------------------------------------------+
+```
+
+This diagram is the formal statement of the separation asserted in the main text. Each arrow that does not exist corresponds to a class of failure that the corresponding property does not detect.
+
+---
+
+I.10 Hypothesis-to-identification map (Appendix H)
+
+```
+  H1  conditional possession insufficiency
+      |
+      +--> proof obligation
+           reductions B1 (EUF-CMA), B2 (nonce freshness),
+           B3 (authenticated channel + session table)
+           failure of any reduction -> term becomes assumption,
+           H1 falsified for that mechanism
+
+  H2  assurance monotonicity
+      |
+      +--> causal comparison
+           instrument or discontinuity in AAL assignment
+           unadjusted comparison is confounded by risk-based assignment
+
+  H3  graph-plus-feature detection
+      |
+      +--> detector comparison
+           same delay + censoring adjustment, held-out attack set,
+           fixed decision-time false-positive budget
+
+  H4  issuance ordering
+      |
+      +--> staged rollout
+           shadow scoring, fixed authentication policy, fixed population
+
+  H5  revocation latency
+      |
+      +--> survival estimation
+           estimate S_rev and distribution of T_monetize,
+           adversary-aware right-censoring
+
+  H6  label-impairment bias
+      |
+      +--> paired estimation
+           naive vs adjusted performance on the same period,
+           bias magnitude must increase with impairment multipliers
+```
+
+H1 is the only hypothesis that is a proof obligation rather than an experiment. The remaining five are empirical and each carries a named identification condition without which the test does not identify the stated effect.
+
